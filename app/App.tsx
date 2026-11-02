@@ -1015,7 +1015,26 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id }); }
     catch { cancelling.set(false); }
   }
+  // the task is its own conversation: what the owner and the team said about it, and a box to keep talking
+  const talk = () => props.hub.events().filter((e) => e.ref === props.id && !(isHub(e.from) && e.kind === "system"));
+  const text = signal("");
+  const sending = signal(false);
+  const note = signal("");
+  async function say() {
+    const v = text().trim();
+    if (!v || sending()) return;
+    sending.set(true);
+    note.set("");
+    try {
+      await props.hub.send(v, props.id);
+      text.set("");
+    } catch (e) {
+      note.set(String((e as Error)?.message ?? e));
+    }
+    sending.set(false);
+  }
   return (
+    <View style={{ flex: 1 }}>
     <Scroll style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
@@ -1055,6 +1074,27 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             {section("请求")}
             <View selectable><Rich text={t()!.request ?? ""} /></View>
           </If>
+          <If when={talk().length}>
+            {section("对话")}
+            <View testID="task-talk" style={{ gap: 14 }}>
+              <Each of={talk()} key={(e) => e.id}>
+                {(e) => (
+                  <View style={{ gap: 3 }}>
+                    <Text style={{ fontSize: 13, color: colors.faint }}>
+                      <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? "你" : displayName(e().from)}</Text>
+                      {`  ${timeOf(e().ts)}`}
+                    </Text>
+                    <View selectable><Rich text={e().text} /></View>
+                    <If when={e().attachments?.length}>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                        <Each of={e().attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
+                      </View>
+                    </If>
+                  </View>
+                )}
+              </Each>
+            </View>
+          </If>
           <If when={t()!.runs?.length}>
             {section("结果")}
             <View style={{ gap: 12 }}>
@@ -1087,6 +1127,28 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         </If>
       </View>
     </Scroll>
+    <If when={t()}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 10, paddingBottom: 16 }}>
+        <If when={note()}>
+          <Text style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>
+        </If>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 14, paddingRight: 6, paddingVertical: 6, borderRadius: radius.card, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}>
+          <Input
+            testID="task-composer"
+            multiline
+            value={text()}
+            onChange={({ value }) => text.set(value)}
+            submitBehavior={touch ? "newline" : "submit"}
+            onSubmit={() => void say()}
+            placeholder={`在 ${props.id} 里继续说…`}
+            class="placeholder:text-faint"
+            style={{ flex: 1, minHeight: 36, maxHeight: 160, paddingVertical: 8, fontSize: 15, lineHeight: 21, color: colors.text, borderWidth: 0, backgroundColor: "transparent" }}
+          />
+          <Btn testID="task-send" label={sending() ? "发送中…" : "发送"} kind="primary" disabled={!text().trim() || sending()} onPress={() => void say()} />
+        </View>
+      </View>
+    </If>
+    </View>
   );
 }
 

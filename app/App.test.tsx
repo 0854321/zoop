@@ -189,6 +189,26 @@ describe("channel", () => {
     await app.waitFor("任务 T-0005");
   });
 
+  test("a task page is its conversation: what was said about it, and a box that adds to it", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const said = [
+      { id: "e10", ts: ts(10), from: "owner", kind: "owner", ref: "T-0005", text: "登录页在手机上也看一下" },
+      { id: "e11", ts: ts(11), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "手机上也正常，截图附上" },
+      { id: "e12", ts: ts(12), from: "hub", kind: "system", ref: "T-0005", text: "收到，已补充到 T-0005" },
+    ];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts, said), width: 1200, height: 800, platform: "macos" });
+    await app.press("id:task-chip-T-0005 >> nth=0");
+    await app.waitFor("id:task-talk");
+    expect(app.shows("text:登录页在手机上也看一下")).toBe(true);
+    expect(app.shows("text:手机上也正常，截图附上")).toBe(true);
+    await app.type("id:task-composer", "再看下 iPad");
+    await app.press("id:task-send");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "再看下 iPad", reply_to: "T-0005" });
+    await app.waitUntil(() => app.value("id:task-composer") === "");
+    await app.waitFor("text:再看下 iPad");
+  });
+
   test("a decision's PR reference is a chip, host-lettered ids are chips, option buttons shorten PR links", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([], [prDecision]), width: 1200, height: 800, platform: "macos" });
     await app.waitFor("id:gh-chip-nsh-747");
