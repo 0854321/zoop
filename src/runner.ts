@@ -95,8 +95,9 @@ export function cliCommand(cli: string, cfg: Cfg, gateOverride = false): string[
     return cmd;
   }
   if (cli === "codex") {
-    const cmd = ["codex", "exec", "--skip-git-repo-check", "--approve-for-me",
-      "-c", "sandbox_workspace_write.network_access=true"];
+    // non-interactive: workspace-write sandbox with network, never ask for approval
+    const cmd = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
+      "-c", 'approval_policy="never"', "-c", "sandbox_workspace_write.network_access=true"];
     if (c.model) cmd.push("-m", c.model);
     return [...cmd, "-"];
   }

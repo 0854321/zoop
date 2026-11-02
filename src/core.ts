@@ -144,8 +144,19 @@ export function nextId(prefix: string, dir: string): string {
       if (m) max = Math.max(max, +m[1]);
     }
   };
-  walk(dir);
-  return `${prefix}-${idTag}${String(max + 1).padStart(4, "0")}`;
+  if (existsSync(dir)) walk(dir);
+  // the local mirror can lag other hosts: never hand out an id whose file already exists in any state folder
+  const taken = (id: string) => existsSync(dir) && readdirSync(dir, { withFileTypes: true })
+    .some((e) => e.isDirectory() ? existsSync(join(dir, e.name, `${id}.md`)) : e.name === `${id}.md`);
+  let n = max + 1;
+  while (taken(`${prefix}-${idTag}${String(n).padStart(4, "0")}`)) n++;
+  return `${prefix}-${idTag}${String(n).padStart(4, "0")}`;
+}
+
+/** Id tag for a host: "" on the primary, else [host].id_tag or the host name's first letter, upper-cased. */
+export function idTagFor(cfg: Cfg, host: string): string {
+  if ((cfg.fleet?.primary ?? host) === host) return "";
+  return String(cfg.host?.id_tag ?? (host.replace(/[^a-z]/gi, "").charAt(0) || "W")).toUpperCase();
 }
 
 // ------------------------------------------------------------------ tasks

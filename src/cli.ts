@@ -21,8 +21,8 @@ import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
 import { drainInbound, handleOwnerMessage, setAppendToTask, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
-import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals } from "./autonomy";
-import { allowedClis, setApprovalGate, setIdTag } from "./core";
+import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
+import { allowedClis, idTagFor, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
@@ -63,14 +63,15 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
       journal(host, `📚 learn: ${d.turns} owner turns from ${d.sessions} sessions → ${id}`);
       continue;
     }
-    // An earlier copy still waiting (unapproved, queued or running) covers this run: one per routine, never a pile.
-    const pending = ["proposed", "inbox", "active", "waiting", "blocked"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
-      .find((f) => readDoc(f).meta.source === `routine:${r.name}`);
-    if (pending) { state[r.name] = new Date().toISOString(); continue; }
+    const queued = routineQueued(r.name); // a copy queued or running → this run is redundant
+    if (queued) { state[r.name] = new Date().toISOString(); journal(host, `⏰ routine \`${r.name}\` skipped: ${queued} still queued/running`); continue; }
     if (r.agent === "architect") computeMetrics(r.name === "evolve-deep" ? 30 : 7);
-    const id = newTask(`${r.name} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, r.prompt, {
+    const prompt = r.readonly ? `${r.prompt}\n\nRead-only routine: observe and report only. Do not change code, PRs, issues or settings; propose any change as a follow-up.` : r.prompt;
+    const id = newTask(`${r.name} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, prompt, {
       agent: r.agent, cli: r.cli, requires: r.requires, prefer: r.prefer, weight: r.weight, repo: r.repo, priority: r.priority, source: `routine:${r.name}`,
     });
+    const old = supersedeProposed(r.name, id); // a newer run replaces older unapproved copies
+    if (old.length) journal(host, `⏰ routine \`${r.name}\`: ${id} supersedes ${old.join(", ")}`);
     state[r.name] = new Date().toISOString();
     journal(host, `⏰ routine \`${r.name}\` → ${id} (${r.agent})`);
   }
@@ -533,8 +534,7 @@ async function main() {
   const [cmd, ...rest] = Bun.argv.slice(2);
   const cfg = loadConfig();
   setApprovalGate((src) => needsApproval(loadConfig(), src));
-  { const h = hostName(cfg);
-    if ((cfg.fleet?.primary ?? h) !== h) setIdTag(String(cfg.host?.id_tag ?? (h.replace(/[^a-z]/gi, "").charAt(0) || "W")).toUpperCase()); }
+  setIdTag(idTagFor(cfg, hostName(cfg))); // every id minted on a non-primary host carries its tag (T-M0001)
   const host = hostName(cfg);
   switch (cmd) {
     case "init": {

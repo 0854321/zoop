@@ -47,6 +47,8 @@ model = "claude-opus-5-5"
 level = "onboarding"                  # onboarding → assisted → autonomous. Only the owner changes this
                                       # (the architect proposes graduation from metrics: shadow-judge accuracy, approval rate).
 batch_minutes = 15                    # onboarding: self-generated tasks are batched into one approval message (P-xxxx)
+renotify_hours = 3                    # an unanswered batch is rebuilt (stale/new items) at most this often
+# auto_routines = ["uptime-watch"]    # extra read-only routines that skip approval (same as readonly = true)
 
 [idle]
 enabled = true
@@ -115,6 +117,7 @@ Dedupe against tasks/ and journal/, then emit follow-ups routed to the right age
 
 [[routine]]
 name = "uptime-watch"
+readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "10m"
 agent = "ops-watcher"
 priority = "high"
@@ -131,6 +134,7 @@ whose current head SHA is not in reviews/ (ledger), oldest first, PRs by others 
 
 [[routine]]
 name = "own-prs-ci"
+readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "30m"
 agent = "rust-maintainer"
 difficulty = "hard"
@@ -142,6 +146,7 @@ Only if a conflict needs a product/design choice the code can't settle → needs
 
 [[routine]]
 name = "nightly-health"
+readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "daily 02:30"
 agent = "rust-maintainer"
 requires = "os:linux"
@@ -150,6 +155,7 @@ prompt = "In each Core repo of memory/projects.md: git fetch, run cargo check/te
 
 [[routine]]
 name = "macos-check"
+readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "daily 10:00"
 agent = "rust-maintainer"
 prefer = "os:macos"
@@ -169,6 +175,7 @@ prompt = "Draft this week's report in the report format from memory/projects.md,
 
 [[routine]]
 name = "focus-check"
+readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "weekly MON 09:30"
 agent = "chief-of-staff"
 prompt = "Weekly focus check. Read memory/focus.md, last week's journal/reports and GitHub activity. Return needs_decision with a numbered list: current focus items to KEEP / likely-finished items to DROP / newly observed items to ADD (each with evidence). After the owner answers, rewrite memory/focus.md (dated) accordingly."
