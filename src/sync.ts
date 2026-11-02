@@ -193,10 +193,38 @@ const dec = new TextDecoder("utf-8", { fatal: true });
 const text = (b: Uint8Array | null) => { if (!b) return null; try { return dec.decode(b); } catch { return null; } };
 
 /** Both sides only appended to the common base → remote + our appended tail. Journals of the same day start
- *  with the same header even without a base. Anything else: null (remote wins). */
+ *  with the same header even without a base. Append-only paths that diverged otherwise merge by line union;
+ *  anything else: null (remote wins, local edit reported lost). Never emits conflict markers. */
+/** Append-only paths: lines are only ever added, so any two versions merge by union (never conflict markers). */
+export const appendOnly = (rel: string) =>
+  rel.startsWith("journal/") || rel.startsWith("logs/") || rel === "memory/lessons.md" || rel === "memory/judge-feedback.md";
+
+const MARKER = /^(<{7}|={7}|>{7})( |$)/;
+export const hasConflictMarkers = (s: string) => s.split("\n").some((l) => MARKER.test(l));
+
+/** Line union: remote in order, then local lines remote lacks (multiset-aware, so repeated lines survive). */
+export function unionLines(local: string, remote: string): string {
+  const have = new Map<string, number>();
+  const rl = remote.split("\n").filter((l) => !MARKER.test(l));
+  if (rl[rl.length - 1] === "") rl.pop();
+  for (const l of rl) have.set(l, (have.get(l) ?? 0) + 1);
+  const out = [...rl];
+  for (const l of local.split("\n").filter((l) => !MARKER.test(l))) {
+    const n = have.get(l) ?? 0;
+    if (n > 0) have.set(l, n - 1); else if (l !== "") out.push(l);
+  }
+  return out.join("\n") + "\n";
+}
+
 export function mergeAppend(rel: string, base: Uint8Array | null, local: Uint8Array, remote: Uint8Array): Uint8Array | null {
   const l = text(local), r = text(remote);
   if (l == null || r == null) return null;
+  const fast = mergeTail(rel, base, l, r);
+  if (fast != null) return new TextEncoder().encode(fast);
+  return appendOnly(rel) ? new TextEncoder().encode(unionLines(l, r)) : null;
+}
+
+function mergeTail(rel: string, base: Uint8Array | null, l: string, r: string): string | null {
   let b = text(base);
   if (b == null) {
     if (!rel.startsWith("journal/")) return null;
@@ -207,7 +235,7 @@ export function mergeAppend(rel: string, base: Uint8Array | null, local: Uint8Ar
   }
   if (!b || !l.startsWith(b) || !r.startsWith(b)) return null;
   const tail = l.slice(b.length);
-  return new TextEncoder().encode(r + (r.endsWith("\n") || !r ? "" : "\n") + tail);
+  return r + (r.endsWith("\n") || !r ? "" : "\n") + tail;
 }
 
 type Remote = { path: string; version: number; hash: string | null; deleted: boolean; content: string | null };

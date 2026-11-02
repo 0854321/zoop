@@ -49,8 +49,31 @@ ${meta.question}
 Recommendation: ${meta.recommendation}
 ${body}
 
+Always fill "answer" with the option/answer you would pick yourself, even when the verdict is "hold" (it is recorded to measure your accuracy; the owner still decides).
 Reply with only a \`\`\`json block: {"verdict": "...", "answer": "...", "reason": "...", "cite": "D-xxxx or principle"}`;
   return ask(prompt, cfg, P("logs", "runs", `${id}-judge.log`));
+}
+
+/** Leading option letter/number of an answer ("B: merge…" → "B"; "1,3" → "1,3"); free text → whole text, lower-cased. */
+export function choice(s: string | undefined): string {
+  const t = (s ?? "").trim();
+  const m = t.match(/^([A-Za-z]|\d+(?:\s*[,，]\s*\d+)*)(?=$|[\s:：.)、,，])/);
+  return m ? m[1].replace(/\s/g, "").replace(/，/g, ",").toUpperCase() : t.toLowerCase();
+}
+
+/** Owner answered: score the judge's shadow answer and, when the owner overrode the agent's recommendation, keep a lesson. */
+function learn(meta: Record<string, string>, answer: string, by: string): Record<string, string | undefined> {
+  if (!/^owner/.test(by)) return {};
+  const extra: Record<string, string | undefined> = {};
+  if (meta.shadow_verdict && meta.shadow_answer) extra.shadow_agree = choice(meta.shadow_answer) === choice(answer) ? "yes" : "no";
+  if (meta.recommendation && meta.kind !== "proposals" && choice(meta.recommendation) !== choice(answer)) {
+    extra.overrode_recommendation = "yes";
+    const f = P("memory", "lessons.md");
+    if (!existsSync(f)) writeFileSync(f, "# Lessons learned (auto-appended by agents)\n\n");
+    appendFileSync(f, `- ${today()} ${meta.id} [${meta.agent}] Q「${meta.question}」: agent recommended「${meta.recommendation}」, owner chose **${answer}**` +
+      `${meta.shadow_answer ? ` (judge would have said「${meta.shadow_answer}」)` : ""}\n`);
+  }
+  return extra;
 }
 
 /** Close a decision and put its task back in the inbox with the answer appended. */
@@ -58,7 +81,7 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   const src = P("decisions", "open", `${id}.md`);
   if (!existsSync(src)) return false;
   const { meta, body } = readDoc(src);
-  writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer, answered_by: by, answered: now() },
+  writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer, answered_by: by, answered: now(), ...learn(meta, answer, by) },
     `${body}\n## Answer (${by})\n${answer}\n${note}`);
   unlinkSync(src);
   const t = P("tasks", "blocked", `${meta.task}.md`);
@@ -99,9 +122,14 @@ export function sendBack(id: string, reason: string) {
 
 export async function routeDecision(id: string, cfg: Cfg, host: string) {
   let v = await judge(id, cfg);
-  let { meta, body } = readDoc(P("decisions", "open", `${id}.md`));
+  const f = P("decisions", "open", `${id}.md`);
+  let { meta, body } = readDoc(f);
+  // Every judge run is recorded (hold included) so closeDecision can score it against the owner's answer.
+  if (meta.kind !== "menu" && cfg.judge?.enabled !== false) {
+    meta = { ...meta, shadow_verdict: v?.verdict ?? "error", shadow_answer: v?.answer ?? (v?.verdict === "sent_back" ? `SENT BACK: ${v.reason}` : "") };
+    writeDoc(f, meta, body); // persisted before any close below reads it back
+  }
   if (v && !judgeMayDecide(cfg, meta.agent) && v.verdict !== "hold") { // shadow mode: record, but ask the owner
-    meta = { ...meta, shadow_verdict: v.verdict, shadow_answer: v.answer ?? v.reason };
     journal(host, `👤 shadow-judge on ${id}: would ${v.verdict} "${v.answer ?? v.reason}"`);
     v = { verdict: "hold", reason: `学习期，judge 认为：${v.verdict === "decided" ? v.answer : "应退回: " + v.reason}` };
   }
