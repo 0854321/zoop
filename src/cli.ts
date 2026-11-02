@@ -8,7 +8,7 @@ import {
 } from "./core";
 import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
-import { buildPrompt, parseResult, runAgent } from "./runner";
+import { ask, buildPrompt, parseResult, runAgent } from "./runner";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -62,6 +62,10 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
       journal(host, `📚 learn: ${d.turns} owner turns from ${d.sessions} sessions → ${id}`);
       continue;
     }
+    // An earlier copy still waiting (unapproved, queued or running) covers this run: one per routine, never a pile.
+    const pending = ["proposed", "inbox", "active", "waiting", "blocked"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
+      .find((f) => readDoc(f).meta.source === `routine:${r.name}`);
+    if (pending) { state[r.name] = new Date().toISOString(); continue; }
     if (r.agent === "architect") computeMetrics(r.name === "evolve-deep" ? 30 : 7);
     const id = newTask(`${r.name} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, r.prompt, {
       agent: r.agent, cli: r.cli, requires: r.requires, prefer: r.prefer, weight: r.weight, repo: r.repo, priority: r.priority, source: `routine:${r.name}`,
@@ -380,6 +384,26 @@ export async function tick(cfg: Cfg, background = false) {
   if (!background) await Promise.all(jobs);
 }
 
+/** The open task (queued, running or waiting on sub-tasks) an owner message continues, if any: one short judge call. */
+async function sameOpenTask(text: string, cfg: Cfg): Promise<string | null> {
+  const open = ["inbox", "active", "waiting"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
+    .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: meta.id, title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
+  if (!open.length) return null;
+  const r = await ask(`The owner sent a new chat message to their AI team. Decide whether it continues one of the team's open tasks
+(same goal, same repo/release/PR — e.g. "keep following up the gpui-kit release" while a task is releasing gpui-kit) or is new work.
+Only match when it is clearly the same work; a different repo, a different goal or an unrelated question is new work.
+
+Message:
+${text.slice(0, 1500)}
+
+Open tasks:
+${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n")}
+
+Reply with exactly one fenced json block: {"same": "<task id>" | null, "why": "<short reason>"}`, cfg, P("logs", "runs", `dedupe-${Date.now()}.log`));
+  const id = typeof r?.same === "string" ? r.same : null;
+  return id && open.some((t) => t.id === id) ? id : null;
+}
+
 async function daemon(cfg: Cfg) {
   const host = hostName(cfg);
   const every = (cfg.host?.tick_seconds ?? 60) * 1000;
@@ -390,9 +414,9 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] settings: ${summary.slice(0, 60)}`);
   }));
   if ((cfg.fleet?.primary ?? host) === host) startCloudBridge(cfg);
-  setAppendToTask((tid, text) => locked(async () => {
+  const appendFollowUp = (tid: string, text: string) => locked(async () => {
     await _pull();
-    for (const dir of ["inbox", "active"]) {
+    for (const dir of ["inbox", "active", "waiting"]) {
       const f = P("tasks", dir, `${tid}.md`);
       if (!existsSync(f)) continue;
       const { meta, body } = readDoc(f);
@@ -402,15 +426,21 @@ async function daemon(cfg: Cfg) {
       return true;
     }
     return false;
-  }));
-  if ((cfg.fleet?.primary ?? host) === host) startServer(cfg, (text) => locked(async () => {
+  });
+  setAppendToTask(appendFollowUp);
+  if ((cfg.fleet?.primary ?? host) === host) startServer(cfg, async (text) => {
+    // Same work as an open task? Add the message to it instead of opening a duplicate.
+    const same = await sameOpenTask(text, cfg).catch(() => null);
+    if (same && (await appendFollowUp(same, text))) return same;
+    return locked(async () => {
     await _pull();
     const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}\n\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
       { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner" } });
     journal(host, `💬 ${id} from owner chat: ${text.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
     return id;
-  }));
+    });
+  });
   await locked(async () => { // recover tasks this host was running when it died/restarted
     await _pull();
     for (const p of list(P("tasks", "active"), /^T-.*\.md$/)) {
