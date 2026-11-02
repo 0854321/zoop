@@ -85,9 +85,9 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   const { meta, body } = readDoc(path);
   const wanted = allowedClis(meta, cfg);
   const installed = (c: string) => !!Bun.which(c);
-  let acct = pickAccount(cfg, wanted.filter(installed)) ?? failoverAccount(cfg, null, wanted, installed);
+  const first = pickAccount(cfg, wanted.filter(installed)) ?? failoverAccount(cfg, null, wanted, installed);
   const agent = meta.agent || "lead";
-  if (!acct) { // no usable account right now → put it back, don't fail it
+  if (!first) { // no usable account right now → put it back, don't fail it
     await locked(async () => {
       writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined }, body);
       if (existsSync(path)) unlinkSync(path);
@@ -96,6 +96,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     return;
   }
   // the recovery note (meta.requeue_note) reaches the agent, but never becomes part of the owner's request text
+  let acct: NonNullable<typeof first> = first;
   const promptBody = meta.requeue_note ? `${body}\n\n> ${meta.requeue_note}\n` : body;
   let cli = acct.cli, out = "", res!: ReturnType<typeof parseResult>;
   for (let hop = 0; ; hop++) { // quota / login trouble: switch account or CLI on this host instead of waiting it out
@@ -118,7 +119,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     const failure = res.status === "failed" ? classify(out) : null;
     if (!failure) break;
     await reportFailure(acct, failure, out, cfg); // puts this account on cooldown / needs-login
-    const next = hop < 4 ? failoverAccount(cfg, acct, wanted, installed) : null;
+    const next: typeof first | null = hop < 4 ? failoverAccount(cfg, acct, wanted, installed) : null;
     if (next) {
       const was = `${acct.cli}/${acct.name}`;
       await locked(async () => {

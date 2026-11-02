@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 
 const sent: string[] = [];
-mock.module("../src/notify", () => ({ notify: async (t: string) => { sent.push(t); return []; } }));
+const realNotify = await import("../src/notify");
+mock.module("../src/notify", () => ({ ...realNotify, openDecisionIds: () => new Set<string>(), pollReplies: async () => [], notify: async (t: string) => { sent.push(t); return []; } }));
 const core = await import("../src/core");
 const A = await import("../src/autonomy");
 const { P, readDoc, writeDoc, nextId, setIdTag, idTagFor } = core;

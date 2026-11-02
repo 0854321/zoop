@@ -6,8 +6,10 @@ import { join } from "node:path";
 
 const W = mkdtempSync(join(tmpdir(), "hub-decisions-"));
 let judgeReply: any = null;
-mock.module("../src/runner", () => ({ ask: async () => judgeReply }));
-mock.module("../src/notify", () => ({ notify: async () => ["test"] }));
+const realRunner = await import("../src/runner");
+mock.module("../src/runner", () => ({ ...realRunner, ask: async () => judgeReply }));
+const realNotify = await import("../src/notify");
+mock.module("../src/notify", () => ({ ...realNotify, openDecisionIds: () => new Set<string>(), pollReplies: async () => [], notify: async () => ["test"] }));
 
 let core: typeof import("../src/core"), dec: typeof import("../src/decisions"), auto: typeof import("../src/autonomy");
 beforeAll(async () => {
