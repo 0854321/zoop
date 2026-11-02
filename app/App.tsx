@@ -559,7 +559,7 @@ function Media(props: { hub: Hub; path: string }) {
   const size = () => (ratio() >= 1 ? { width: THUMB, height: THUMB / ratio() } : { width: THUMB * ratio(), height: THUMB });
   return (
     <>
-      <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ alignSelf: "flex-start", cursor: "pointer" }}>
+      <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ cursor: "pointer" }}>
         <Image
           src={src}
           onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
@@ -727,7 +727,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
         <If when={e.attachments?.length}>
-          <View testID="owner-images" style={{ width: 320, maxWidth: "100%", gap: 6, opacity: props.out ? 0.65 : 1 }}>
+          <View testID="owner-images" style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6, opacity: props.out ? 0.65 : 1 }}>
             <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
           </View>
         </If>
@@ -794,7 +794,7 @@ function Message(props: {
     <View selectable style={{ gap: 10 }}>
       <Rich text={e.text} muted={e.kind === "system"} />
       <If when={e.attachments?.length}>
-        <View style={{ gap: 10 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
         </View>
       </If>
