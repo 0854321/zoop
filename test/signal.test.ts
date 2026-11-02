@@ -8,4 +8,4 @@ test("routine signal only fires on change", () => {
   expect(signalChanged(r, st)).toBe(false);
   expect(signalChanged({ ...r, signal: "echo b" }, st)).toBe(true);
   expect(signalChanged({ ...r, signal: "exit 3" }, st)).toBe(true); // failure → let the agent look
-});
+}, 30_000); // each call is a login shell (~1s, more under load); 4 of them overrun the 5s default

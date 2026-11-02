@@ -14,6 +14,9 @@ p=$(cat)
 if grep -q "You are the owner.s JUDGE" <<<"$p"; then echo '```json
 {"verdict":"hold","reason":"new taste call"}
 ```'; exit; fi
+if grep -q "You place tasks for an AI agent fleet" <<<"$p"; then
+  echo '```json'; grep -oE '^- T-[0-9]+' <<<"$p" | sed 's/^- //' | awk 'BEGIN{printf "{"} {printf "%s\"%s\": {\"requires\": \"\", \"cli\": \"claude\", \"difficulty\": \"normal\"}", (NR>1?",":""), $0} END{print "}"}'; echo '```'; exit
+fi
 if grep -q "Decision D-" <<<"$p"; then echo '```json
 {"status":"done","summary":"followed owner decision"}
 ```'
@@ -47,12 +50,13 @@ enabled = false
 F
 # judge uses 'claude' binary directly → shim PATH
 mkdir -p "$W/bin"; ln -s "$W/fake-agent" "$W/bin/claude"; export PATH="$W/bin:$PATH"
-sed -i 's/^\[\[routine\]\]/[[routine_disabled]]/' config.toml
+sed -i.bak 's/^\[\[routine\]\]/[[routine_disabled]]/' config.toml && rm config.toml.bak
 hub add "plain task" -a rust-maintainer >/dev/null
 hub add "ASKME task" -a release-manager >/dev/null
-hub add "mac only" -r os:macos >/dev/null
-hub tick
-hub tick
+hub add "windows only" -r os:windows >/dev/null
+# how many tasks one tick runs depends on the host load (a busy macOS runner runs one), so tick until a condition holds
+tick_until() { for _ in 1 2 3 4 5 6 7 8; do hub tick >/dev/null; eval "$1" && return; done; }
+tick_until "test -f tasks/done/T-0001.md && grep -qs held: decisions/open/D-0001.md"
 hub status
 test -f tasks/done/T-0001.md || { echo "FAIL: T-0001 should be done"; exit 1; }
 test -f tasks/blocked/T-0002.md && test -f decisions/open/D-0001.md
@@ -60,7 +64,7 @@ grep -q held: decisions/open/D-0001.md
 ls tasks/*/T-0004.md >/dev/null  # follow-up created
 grep -q parked tasks/inbox/T-0003.md
 hub decide D-0001 "A"
-hub tick
+tick_until "test -f tasks/done/T-0002.md"
 test -f tasks/done/T-0002.md && test -f decisions/closed/D-0001.md
 grep -q "owner likes options" agents/release-manager/memory.md
 test "$(bun -e "import {Database} from 'bun:sqlite'; console.log(new Database('$W/worker.sqlite').query('SELECT COUNT(DISTINCT ts) AS n FROM history').get().n)")" -gt 5
@@ -72,11 +76,11 @@ hub tick >/dev/null
 P=$(ls decisions/open | grep '^P-' | head -1 | sed 's/.md//'); test -n "$P"
 hub decide "$P" all
 test -f tasks/inbox/$RT.md
-hub tick >/dev/null
+tick_until "test -f tasks/done/$RT.md"
 test -f tasks/done/$RT.md
 # owner request → delegate → children run without approval → parent consolidates
 SPL=$(hub add "SPLIT big job" | tail -1)
-hub tick >/dev/null; hub tick >/dev/null; hub tick >/dev/null
+tick_until "grep -qs 'Results from delegated subtasks' tasks/done/$SPL.md"
 grep -q "Results from delegated subtasks" tasks/done/$SPL.md
 ! grep -l "parent: $SPL" tasks/proposed/*.md 2>/dev/null
 # a second host joins and mirrors the same data
