@@ -296,6 +296,29 @@ describe("channel", () => {
     await app.waitUntil(() => updates === 1);
   });
 
+  test("while an update runs, each machine shows its progress and the button waits", async () => {
+    const at = new Date(Date.now() - 60_000).toISOString();
+    const mk = (state: string, detail?: string) => ({ at, ts: new Date().toISOString(), state, detail });
+    const hosts = [
+      { ...status.hosts[0], update: mk("waiting", "等 1 个任务跑完后重启") },
+      { ...status.hosts[0], host: "mac-mini", update: mk("done", "abc1234") },
+      { ...status.hosts[0], host: "old-box", update: undefined },
+      { ...status.hosts[0], host: "win-box", update: mk("failed", "有本地改动或测试没通过，仍在运行旧代码") },
+    ];
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub([]), [`GET ${URL}/api/settings`]: { status: 500 }, [`GET ${URL}/api/status`]: { body: { ...status, hosts, update: { at } } } },
+    });
+    await app.press("id:settings");
+    await app.press("id:settings-tab-version");
+    await app.waitFor("等 1 个任务跑完后重启…");
+    expect(app.shows("已更新到 abc1234")).toBe(true);
+    expect(app.shows("等待响应…")).toBe(true);
+    expect(app.shows("更新失败：有本地改动或测试没通过，仍在运行旧代码")).toBe(true);
+    expect(app.shows("正在更新 · 1/4 完成 · 1 台有问题")).toBe(true);
+    expect(app.shows("正在更新…")).toBe(true);
+  });
+
   test("sends a task with the button, and the drawer opens on phones", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts) });

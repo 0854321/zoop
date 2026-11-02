@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
-import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc } from "./core";
+import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
 import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { readable, validPath } from "../cloud/src/files";
 
@@ -181,6 +181,8 @@ export function status() {
     })(),
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),
     hosts: hostViews(active, others.filter((t) => t.state === "done" || t.state === "failed")),
+    /** The owner's latest "update every machine" (each host reports its progress on it in `hosts[].update`). */
+    update: (() => { try { return { at: String(JSON.parse(readFileSync(UPDATE_REQUEST(), "utf8")).at ?? "") }; } catch { return undefined; } })(),
   };
 }
 

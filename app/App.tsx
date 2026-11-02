@@ -100,6 +100,9 @@ import {
   BUILTIN_COMMANDS,
   slashQuery,
   needsLabel,
+  updateLine,
+  updateSummary,
+  type UpdateLine,
   isQueued,
 } from "./hub";
 
@@ -2075,21 +2078,49 @@ function CommandEditor(props: { settings: Settings }) {
 
 function VersionRows(props: { hub: Hub }) {
   const hosts = () => props.hub.status()?.hosts ?? [];
+  // the lines age (waiting → not responding, finished → hidden): re-read the clock every few seconds
+  const clock = signal(Date.now());
+  const timer = setInterval(() => clock.set(Date.now()), 5000);
+  cleanup(() => clearInterval(timer));
+  const request = () => props.hub.status()?.update?.at;
+  const summary = () => updateSummary(props.hub.status(), clock());
+  const toneColor = (t: UpdateLine["tone"]) => (t === "ok" ? colors.up : t === "bad" ? colors.danger : colors.muted);
   return (
     <>
-      <Each of={hosts()}>
-        {(h, i) => (
-          <SetRow
-            first={i() === 0}
-            label={h().host}
-            value={h().rev?.slice(0, 7) ?? "未知"}
-            chevron={!!h().rev_url}
-            onPress={h().rev_url ? () => void openUrl(h().rev_url!).catch(() => {}) : undefined}
-            testID={`version-${h().host}`}
-          />
-        )}
+      <Each of={hosts()} key={(h) => h.host}>
+        {(h, i) => {
+          const line = () => updateLine(h(), request(), clock());
+          return (
+            <SetRow
+              first={i() === 0}
+              label={h().host}
+              value={h().rev?.slice(0, 7) ?? "未知"}
+              chevron={!!h().rev_url}
+              onPress={h().rev_url ? () => void openUrl(h().rev_url!).catch(() => {}) : undefined}
+              testID={`version-${h().host}`}
+              below={
+                <If when={line()}>
+                  <View testID={`update-${h().host}`} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <If when={line()!.busy}>
+                      <Spinner size={12} tint={colors.muted} />
+                    </If>
+                    <Text style={{ flexShrink: 1, fontSize: 13, lineHeight: 18, color: toneColor(line()!.tone) }}>{line()!.text}</Text>
+                  </View>
+                </If>
+              }
+            />
+          );
+        }}
       </Each>
-      <SetRow first={!hosts().length} label="更新所有机器" tone="accent" onPress={() => void updateAllMachines(props.hub)} testID="update-fleet" />
+      <SetRow
+        first={!hosts().length}
+        label={summary()?.busy ? "正在更新…" : "更新所有机器"}
+        detail={summary()?.text}
+        tone="accent"
+        disabled={!!summary()?.busy}
+        onPress={() => void updateAllMachines(props.hub)}
+        testID="update-fleet"
+      />
     </>
   );
 }
@@ -2103,6 +2134,8 @@ function SetRow(props: {
   tone?: "danger" | "accent";
   leading?: JSX.Element;
   trailing?: JSX.Element;
+  /** Under the label and detail (a progress line). */
+  below?: JSX.Element;
   inset?: number;
   disabled?: boolean;
   onPress?: () => void;
@@ -2137,6 +2170,7 @@ function SetRow(props: {
         <If when={props.detail}>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.muted }}>{props.detail}</Text>
         </If>
+        {props.below}
       </View>
       <If when={props.value}>
         <Text style={{ flexShrink: 1, fontSize: 16, color: colors.muted, numberOfLines: 1 }}>{props.value}</Text>

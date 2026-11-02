@@ -28,6 +28,8 @@ export type HostInfo = {
   /** The code the machine runs: its git commit, and that commit on GitHub. */
   rev?: string;
   rev_url?: string;
+  /** Its progress on the owner's latest "update every machine". */
+  update?: { at: string; ts: string; state: string; detail?: string; from?: string };
 };
 
 export type TaskInfo = {
@@ -46,6 +48,8 @@ export type Status = {
   recent?: TaskInfo[];
   decisions: { id: string; kind: string; question?: string; held: boolean }[];
   hosts: HostInfo[];
+  /** The owner's latest "update every machine" request. */
+  update?: { at: string };
 };
 
 /** An item id the owner answers: decisions, proposals (lists to approve) and logins. */
@@ -338,3 +342,44 @@ export function needsLabel(needs = ""): string {
 
 /** Waiting its turn: queued, waiting on sub-tasks, or waiting for a machine that can run it. */
 export const isQueued = (state?: string) => state === "inbox" || state === "waiting" || state === "nohost";
+
+/** A machine's line under 版本 while (and after) an update runs; `busy` while it is still on the way. */
+export type UpdateLine = { text: string; tone: "muted" | "ok" | "bad" | "busy"; busy: boolean };
+
+/** How long a machine may stay silent on an update request before it reads as not responding (old code never reports). */
+const UPDATE_SILENT_MS = 3 * 60_000;
+/** After this long, a finished update is history: the rows go back to showing only the commit. */
+const UPDATE_SHOWN_MS = 30 * 60_000;
+
+export function updateLine(h: HostInfo, request: string | undefined, now = Date.now()): UpdateLine | null {
+  if (!request) return null;
+  const age = now - Date.parse(request);
+  const u = h.update?.at === request ? h.update : undefined;
+  if (!u) {
+    if (age > UPDATE_SHOWN_MS) return null;
+    return age < UPDATE_SILENT_MS
+      ? { text: "等待响应…", tone: "busy", busy: true }
+      : { text: "没有响应：可能还在运行不会汇报进度的旧版本，需要在这台机器上手动更新一次", tone: "bad", busy: false };
+  }
+  const settled = ["done", "current", "failed"].includes(u.state);
+  if (settled && now - Date.parse(u.ts) > UPDATE_SHOWN_MS) return null;
+  switch (u.state) {
+    case "updating": return { text: "正在拉取并测试新代码…", tone: "busy", busy: true };
+    case "waiting": return { text: `${u.detail ?? "等运行中的任务跑完后重启"}…`, tone: "busy", busy: true };
+    case "restarting": return { text: "正在重启…", tone: "busy", busy: true };
+    case "deploying": return { text: "正在重新发布线上…", tone: "busy", busy: true };
+    case "done": return { text: `已更新到 ${u.detail ?? h.rev?.slice(0, 7) ?? "最新"}`, tone: "ok", busy: false };
+    case "current": return { text: u.detail ? `已是最新 · ${u.detail}` : "已是最新", tone: "ok", busy: false };
+    case "failed": return { text: `更新失败：${u.detail ?? "原因未知"}`, tone: "bad", busy: false };
+    default: return { text: u.state, tone: "muted", busy: false };
+  }
+}
+
+/** The fleet's update as one line: "正在更新 · 1/3 完成", or null when nothing is on the way. */
+export function updateSummary(s: Status | null | undefined, now = Date.now()): { text: string; busy: boolean } | null {
+  const lines = (s?.hosts ?? []).map((h) => updateLine(h, s?.update?.at, now)).filter((l): l is UpdateLine => !!l);
+  if (!lines.length) return null;
+  const done = lines.filter((l) => l.tone === "ok").length, bad = lines.filter((l) => l.tone === "bad").length;
+  const busy = lines.some((l) => l.busy);
+  return { text: `${busy ? "正在更新" : "更新结束"} · ${done}/${lines.length} 完成${bad ? ` · ${bad} 台有问题` : ""}`, busy };
+}

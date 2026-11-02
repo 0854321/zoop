@@ -22,7 +22,7 @@ import { doctor, visual } from "./visual";
 import { drainInbound, handleOwnerMessage, recentChat, setAppendToTask, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
-import { CODE, UPDATE_REQUEST, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
+import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
@@ -310,7 +310,14 @@ async function drainAndExit(why: string, host: string) {
   try {
     mkdirSync(P("logs"), { recursive: true });
     writeFileSync(LAST_RESTART(), new Date().toISOString());
-    await locked(async () => { await _pull(); journal(host, `🔄 daemon ${why}: all running work finished, exiting`); await _commitPush(`[${host}] ${why}`); });
+    const u = updateState();
+    if (u?.state === "waiting") setUpdateState({ at: u.at, state: "restarting", from: u.from });
+    await locked(async () => {
+      await _pull();
+      if (u?.state === "waiting") heartbeat(loadConfig(), running, sample(loadConfig()));
+      journal(host, `🔄 daemon ${why}: all running work finished, exiting`);
+      await _commitPush(`[${host}] ${why}`);
+    });
   } catch {}
   process.exit(0);
 }
@@ -325,19 +332,33 @@ async function ownerUpdate(c: Cfg, host: string) {
   try { done = readFileSync(UPDATE_DONE(), "utf8").trim(); } catch {}
   if (!at || at <= done) return;
   writeFileSync(UPDATE_DONE(), at);
-  const before = runningRev().rev?.slice(0, 7) ?? "?";
+  const from = runningRev().rev;
+  const before = from?.slice(0, 7) ?? "?";
+  // each step goes out in the heartbeat at once, so the owner watches it in Settings › 版本
+  const report = async (state: UpdateState["state"], detail?: string) => {
+    setUpdateState({ at, state, detail, from });
+    await locked(async () => { await _pull(); heartbeat(c, running, sample(c)); await _commitPush(`[${host}] update: ${state}`); }).catch(() => {});
+  };
+  await report("updating", "拉取并测试新代码");
   const updated = await selfUpdate({ force: true, deploy: true }).catch(() => false);
   if (updated) {
     journal(host, `⬆️ updated on the owner's request (was ${before}); restarting${running ? ` after ${running} running task(s)` : ""}`);
+    await report(running ? "waiting" : "restarting", running ? `等 ${running} 个任务跑完后重启` : undefined);
     void drainAndExit("self-update", host);
     return;
   }
   const now7 = (Bun.spawnSync(["git", "-C", CODE, "rev-parse", "--short", "HEAD"], { stdout: "pipe" }).stdout.toString().trim()) || before;
+  const stale = now7 !== before; // the code moved but this process could not take it (local edits, failing tests)
   if (isPrimary(c, host) && c.cloud?.url) {
+    await report("deploying", "重新发布线上");
     const cloud = await import("./cloud");
     const err = await cloud.cloudDeploy(c).then((u) => (u ? "" : cloud.lastDeployError || "unknown"), (e) => String(e));
     journal(host, `⬆️ already at ${now7}; ${err ? `redeploying the Worker failed: ${err.replace(/\s+/g, " ").slice(-300)}` : "redeployed the Worker and the web app"}`);
-  } else journal(host, now7 === before ? `⬆️ already at ${now7}` : `⬆️ not updated (still running ${before}; local edits or failing tests)`);
+    await report(err ? "failed" : "current", err ? `代码已是最新，重新发布线上失败：${err.replace(/\s+/g, " ").slice(0, 120)}` : "已重新发布线上");
+  } else {
+    journal(host, stale ? `⬆️ not updated (still running ${before}; local edits or failing tests)` : `⬆️ already at ${now7}`);
+    await report(stale ? "failed" : "current", stale ? "有本地改动或测试没通过，仍在运行旧代码" : undefined);
+  }
 }
 
 /** A good report doesn't forward raw errors. Retry, call the medic for tooling problems, and only after that
