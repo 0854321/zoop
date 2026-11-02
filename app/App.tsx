@@ -25,7 +25,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ViewStyle } from "nsh";
-import { Input, Scrollbar } from "nsh/base";
+import { Input, Scrollbar, TextView, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import {
   alpha,
@@ -64,7 +64,6 @@ import {
   filePath,
   imageType,
   rows,
-  spans,
   type Status,
   TAGS,
   timeOf,
@@ -433,38 +432,107 @@ function Mark(props: { size?: number }) {
 /** Opens a task's page from a T-0000 in any text (set by the channel). */
 let taskLink: (id: string) => void = () => {};
 
-function Rich(props: { text: string; muted?: boolean }) {
+/** A task's state from the hub's status (set by the channel), for the chips' dots. */
+let taskState: (id: string) => string | undefined = () => undefined;
+
+/** The app's syntax in messages (`extensions`, `pattern`): task ids and decision / proposal ids, shown by `renderCustom`. */
+const EXTENSIONS: MarkdownExtension[] = [
+  { name: "task", pattern: "\\bT-\\d{4}\\b" },
+  { name: "item", pattern: "\\b[DP]-\\d{4}\\b" },
+];
+const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)\/?$/;
+
+/** Links to a GitHub PR or issue become `github` custom nodes: patterns never match inside links, and GFM autolinks bare URLs. */
+function ghInlines(inlines: TextViewInline[]): TextViewInline[] {
+  return inlines.map((i): TextViewInline => {
+    if (i.type === "link") {
+      const m = i.url.match(GH);
+      return m ? { type: "custom", name: "github", text: i.url, attributes: { repo: m[2], n: m[4], kind: m[3] === "pull" ? "PR" : "Issue" } } : i;
+    }
+    return "content" in i && Array.isArray(i.content) ? ({ ...i, content: ghInlines(i.content) } as TextViewInline) : i;
+  });
+}
+function ghBlocks(blocks: TextViewBlock[]): TextViewBlock[] {
+  return blocks.map((b): TextViewBlock => {
+    const x = { ...b } as Record<string, unknown>;
+    if (Array.isArray(x.content)) x.content = ghInlines(x.content as TextViewInline[]);
+    if (Array.isArray(x.children)) x.children = ghBlocks(x.children as TextViewBlock[]);
+    if (Array.isArray(x.items)) x.items = (x.items as { children: TextViewBlock[] }[]).map((it) => ({ ...it, children: ghBlocks(it.children) }));
+    return x as TextViewBlock;
+  });
+}
+
+/** Hub text keeps its line breaks: single newlines become hard breaks, outside code fences. */
+function hubMarkdown(text: string): string {
+  return text
+    .split(/(^```[\s\S]*?^```)/m)
+    .map((part, i) => (i % 2 ? part : part.replace(/([^\n])\n(?!\n)/g, "$1\\\n")))
+    .join("");
+}
+
+/** Texts inside a pressable chip: a pointer, not the I-beam selectable texts force (per view on Linux). */
+const chipText = { cursor: "pointer", userSelect: "none" } as const;
+const chipFrame: ViewStyle = {
+  cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2,
+  borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05),
+};
+const chipHover: ViewStyle = { borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.09) };
+
+function Custom(props: { node: TextViewCustomNode; small: boolean }) {
+  const n = props.node;
+  const fs = props.small ? 12 : 13;
+  if (n.name === "task") {
+    const st = () => STATE_OF()[taskState(n.text!) ?? ""];
+    return (
+      <View role="link" testID={`task-chip-${n.text}`} accessibilityLabel={`任务 ${n.text}`} onPress={() => taskLink(n.text!)}
+        hoverStyle={chipHover} style={{ ...chipFrame, paddingHorizontal: 7, borderRadius: 999 }}>
+        <If when={st()}>
+          <View style={{ cursor: "pointer", width: 6, height: 6, borderRadius: 3, backgroundColor: st()?.[1] ?? colors.muted }} />
+        </If>
+        <Text style={{ ...chipText, fontFamily: MONO, fontSize: fs, color: colors.text }}>{n.text}</Text>
+      </View>
+    );
+  }
+  if (n.name === "github") {
+    const a = n.attributes ?? {};
+    return (
+      <View role="link" testID={`gh-chip-${a.repo}-${a.n}`} accessibilityLabel={`GitHub ${a.kind} ${a.repo}#${a.n}`} onPress={() => void openUrl(n.text!).catch(() => {})}
+        hoverStyle={chipHover} style={{ ...chipFrame, paddingHorizontal: 7, paddingVertical: 1, borderRadius: 6 }}>
+        <Icon name="github" size={16} tint={colors.text} />
+        <Text style={{ ...chipText, fontSize: 13, color: colors.muted }}>{a.kind}</Text>
+        <Text style={{ ...chipText, fontSize: 13.5, fontWeight: "600", color: colors.text }}>{`${a.repo}#${a.n}`}</Text>
+      </View>
+    );
+  }
   return (
-    <Text style={{ fontSize: props.muted ? size.small : size.text, lineHeight: props.muted ? 21 : size.line, color: props.muted ? colors.muted : colors.text }}>
-      <Each of={spans(props.text)} key="index">
-        {(s) =>
-          s().code ? (
-            <Text style={{ fontFamily: MONO, fontSize: props.muted ? 13 : 14.5, backgroundColor: alpha(colors.text, 0.07), color: colors.text }}>{` ${s().text} `}</Text>
-          ) : s().bold ? (
-            <Text style={{ fontWeight: "600" }}>{s().text}</Text>
-          ) : s().gh ? (
-            <View role="link" accessibilityLabel={`GitHub ${s().gh} ${s().text}`} onPress={() => void openUrl(s().href!).catch(() => {})}
-              hoverStyle={{ borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.09) }}
-              style={{ cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2, paddingHorizontal: 7, paddingVertical: 1,
-                borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05) }}>
-              <Icon name="github" size={16} tint={colors.text} />
-              <Text style={{ cursor: "pointer", userSelect: "none", fontSize: 13, color: colors.muted }}>{s().gh === "PR" ? "PR" : "Issue"}</Text>
-              <Text style={{ cursor: "pointer", userSelect: "none", fontSize: 13.5, fontWeight: "600", color: colors.text }}>{s().text}</Text>
-            </View>
-          ) : s().href ? (
-            <View role="link" onPress={() => void openUrl(s().href!).catch(() => {})} style={{ cursor: "pointer", verticalAlign: "middle" }}>
-              <Text style={{ cursor: "pointer", fontSize: props.muted ? size.small : size.text, color: colors.info, textDecorationLine: "underline" }}>{s().text}</Text>
-            </View>
-          ) : s().task ? (
-            <View role="link" onPress={() => taskLink(s().task!)} style={{ cursor: "pointer", verticalAlign: "middle" }}>
-              <Text style={{ cursor: "pointer", fontSize: props.muted ? size.small : size.text, color: colors.info }}>{s().text}</Text>
-            </View>
-          ) : (
-            <Text>{s().text}</Text>
-          )
-        }
-      </Each>
-    </Text>
+    <View style={{ verticalAlign: "middle", marginHorizontal: 2, paddingHorizontal: 6, borderRadius: 5, backgroundColor: alpha(colors.text, 0.06) }}>
+      <Text style={{ fontFamily: MONO, fontSize: fs, color: colors.muted }}>{n.text}</Text>
+    </View>
+  );
+}
+
+/** Message text: the hub's Markdown through `TextView` (selectable across paragraphs), links opened by the system, the app's chips inline. */
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean }) {
+  const small = !!(props.muted || props.quiet);
+  const fontSize = props.quiet ? 14 : props.muted ? size.small : size.text;
+  const lineHeight = small ? 21 : size.line;
+  const doc = () => {
+    const d = TextView.parse(hubMarkdown(props.text), { math: false, html: false }, EXTENSIONS);
+    return { ...d, blocks: ghBlocks(d.blocks) };
+  };
+  return (
+    <TextView
+      document={doc()}
+      selectable
+      onLinkPress={({ url }) => { if (/^(https?|mailto):/i.test(url)) void openUrl(url).catch(() => {}); }}
+      renderCustom={(node) => <Custom node={node} small={small} />}
+      styles={{
+        root: { gap: 8, fontSize, lineHeight, color: small ? colors.muted : colors.text },
+        code: { fontFamily: MONO, fontSize: small ? 13 : 14.5, color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
+        emphasis: { fontStyle: "normal", fontWeight: "600" },
+        link: { color: colors.info },
+      }}
+    />
   );
 }
 
@@ -618,7 +686,7 @@ function Message(props: {
     return (
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: 50 }} onLayout={({ bounds }) => props.onLayout?.(bounds.origin.y)}>
         <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
-        <Text style={{ flex: 1, fontSize: 14, color: colors.muted }}>{e.text}</Text>
+        <View selectable style={{ flex: 1, minWidth: 0 }}><Rich text={e.text} quiet /></View>
       </View>
     );
   return (
@@ -1520,6 +1588,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const taskId = signal<string | null>(null);
   const openTask = (id: string) => { taskId.set(id); page.set("task"); drawer.set(false); };
   taskLink = openTask;
+  taskState = (id) => { const s = props.hub.status(); return [...(s?.active ?? []), ...(s?.recent ?? [])].find((t) => t.id === id)?.state ?? (s?.active.some((t) => t.id === id) ? "active" : undefined); };
   // Entering the channel (first load, back from a task or settings) shows the latest messages.
   effect(() => { if (page() === "channel") { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
