@@ -653,10 +653,10 @@ function Message(props: {
 }
 
 /** A task's state: its label, color and mark. */
-const STATE: Record<string, [string, string, string]> = {
+const STATE_OF = (): Record<string, [string, string, string]> => ({
   active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.muted, "○"], waiting: ["等子任务", colors.muted, "○"],
   blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.up, "✓"],
-};
+});
 
 /** "3 分钟" since an ISO time (to now, or to `end`). */
 function since(iso?: string, end?: string): string {
