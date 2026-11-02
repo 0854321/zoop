@@ -679,7 +679,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Badge label={STATE[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
+              <Badge label={STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
             </View>
             <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>
@@ -858,7 +858,7 @@ function Sidebar(props: {
             <Each of={(s()?.recent ?? []).slice(0, 6)} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={a().id}>
-                  <Text style={{ width: 14, fontSize: 13, color: STATE[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE[a().state ?? ""]?.[2] ?? "·"}</Text>
+                  <Text style={{ width: 14, fontSize: 13, color: STATE_OF()[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE_OF()[a().state ?? ""]?.[2] ?? "·"}</Text>
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
                 </SideRow>
