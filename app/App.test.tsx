@@ -21,7 +21,14 @@ const status = {
   tasks: { proposed: 1, inbox: 2, active: 1, blocked: 0, failed: 0, done: 9 },
   active: [{ id: "T-0007", title: "截图检查 gallery", agent: "dev", host: "linux-box" }],
   decisions: [{ id: "D-0001", kind: "decision", question: "要不要升级依赖？", held: true }],
-  hosts: [{ host: "linux-box", caps: ["os:linux"], busy: 1, stats: { loadRatio: 0.42, diskFreeGB: 120 } }],
+  recent: [{ id: "T-0005", title: "修复登录页", agent: "dev", host: "linux-box", state: "done", finished: ts(30), updated: ts(30) }],
+  hosts: [{
+    host: "linux-box", caps: ["os:linux", "arch:x64", "cli:claude"], seen: ts(59), busy: 1,
+    stats: { loadRatio: 0.42, cores: 8, memFreePct: 40, diskFreeGB: 120, diskFreePct: 60 },
+    os: "linux", arch: "x64", clis: ["claude"], accounts: [{ cli: "claude", name: "default", state: "ok" }],
+    running: [{ id: "T-0007", title: "截图检查 gallery", agent: "dev", started: ts(50) }],
+    recent: [{ id: "T-0005", title: "修复登录页", state: "done", finished: ts(30) }],
+  }],
 };
 
 function hub(posts: { text: string; reply_to?: string }[]) {
@@ -183,6 +190,18 @@ describe("channel", () => {
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "先等一周", reply_to: "D-0001" });
     expect(app.value("id:composer")).toBe("");
+  });
+
+  test("a machine in the sidebar opens its page, and its tasks open theirs", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("团队频道");
+    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
+    await app.waitFor("机器 linux-box");
+    await app.waitFor("运行中");
+    await app.waitFor("已用 60%");
+    await app.waitFor("修复登录页");
+    await app.press("label:T-0005 修复登录页");
+    await app.waitFor("任务 T-0005");
   });
 
   test("sends a task with the button, and the drawer opens on phones", async () => {
