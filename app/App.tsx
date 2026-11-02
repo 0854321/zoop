@@ -97,10 +97,10 @@ const MONO = "monospace";
 
 /** Sizes: the gallery's proportions, a step larger (the owner reads this all day). */
 const size = {
-  text: 16,
-  line: 25,
-  small: 14,
-  tiny: 12.5,
+  text: 17,
+  line: 26,
+  small: 15,
+  tiny: 13,
   control: touch ? 44 : 38,
   row: touch ? 44 : 34,
   bar: touch ? 56 : 52,
