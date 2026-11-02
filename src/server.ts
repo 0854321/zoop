@@ -112,7 +112,7 @@ function taskView(path: string, state: string, log: string[]) {
       const text = raw.slice(lead.length).replace(new RegExp(`^${m.id}\\b[:：]?\\s*`), "").trim();
       return { day: x[1], time: x[2], host: x[3], kind, text };
     });
-  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, started: m.started, created: m.created,
+  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, started: m.started, created: m.created, cli: m.cli_used, model: m.model,
     finished: m.finished, updated: m.finished ?? m.started ?? m.created, attempt: m.attempt, decision: m.decision, request, runs, steps };
 }
 

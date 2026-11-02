@@ -29,7 +29,7 @@ export type HostInfo = {
 
 export type TaskInfo = {
   id: string; title: string; agent: string; host?: string; state?: string;
-  started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string;
+  started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string; cli?: string; model?: string;
   request?: string;
   runs?: { ts: string; host: string; cli: string; status: string; summary: string }[];
   steps?: { day?: string; time?: string; host?: string; kind?: string; text: string }[];

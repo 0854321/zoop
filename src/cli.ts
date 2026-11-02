@@ -89,7 +89,13 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     return;
   }
   const cli = acct.cli;
-  await locked(async () => { journal(host, `▶ ${meta.id} ${agentName(agent)}/${cli}: ${meta.title}`); await _commitPush(`[${host}] start ${meta.id}`); });
+  const model = cfg.clis?.[cli]?.model ?? (cli === "claude" ? "claude-opus-5-5" : "default");
+  meta.cli_used = cli; meta.model = model; meta.account = acct.name;
+  await locked(async () => {
+    if (existsSync(path)) writeDoc(path, meta, body); // the app shows which model runs it
+    journal(host, `▶ ${meta.id} ${agentName(agent)}/${cli}: ${meta.title}`);
+    await _commitPush(`[${host}] start ${meta.id}`);
+  });
 
   const log = P("logs", "runs", `${meta.id}-${Date.now()}-${cli}.log`);
   const gh = await githubStarved(cfg);

@@ -689,6 +689,14 @@ const STEP_OF = (): Record<string, [IconName, string]> => ({
   delegated: ["layers", colors.info], judge: ["sliders", colors.muted], edit: ["document", colors.muted],
 });
 
+/** "11-02 16:34", or "16:34" today. */
+function clock(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const today = new Date().toDateString() === d.toDateString();
+  return `${today ? "" : `${p(d.getMonth() + 1)}-${p(d.getDate())} `}${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** "3 分钟" since an ISO time (to now, or to `end`). */
 function since(iso?: string, end?: string): string {
   if (!iso) return "";
@@ -715,7 +723,9 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             </View>
             <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>
             <Text style={{ fontSize: 14, color: colors.muted }}>
-              {[displayName(t()!.agent), t()!.host, t()!.state === "active" ? `已运行 ${since(t()!.started)}` : t()!.finished ? `${since(t()!.finished)}前结束` : "",
+              {[displayName(t()!.agent), t()!.host, t()!.model ?? t()!.cli,
+                t()!.started ? `${clock(t()!.started!)} 开始` : "",
+                t()!.state === "active" ? `已运行 ${since(t()!.started)}` : t()!.finished ? `用时 ${since(t()!.started, t()!.finished)}` : "",
                 Number(t()!.attempt ?? 1) > 1 ? `第 ${t()!.attempt} 次` : ""].filter(Boolean).join(" · ")}
             </Text>
           </View>
