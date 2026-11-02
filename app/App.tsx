@@ -1077,9 +1077,9 @@ function Sidebar(props: {
             <SideEmpty text="空闲" />
           </If>
 
-          <If when={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting").length}>
-            <SideHeading title="排队" count={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting").length} />
-            <Each of={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting")} key={(a) => a.id}>
+          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting").length}>
+            <SideHeading title="排队" count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting").length} />
+            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting")} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
@@ -1089,9 +1089,9 @@ function Sidebar(props: {
               )}
             </Each>
           </If>
-          <If when={(s()?.recent ?? []).filter((t) => t.state !== "inbox" && t.state !== "waiting").slice(0, 6).length}>
+          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state !== "inbox" && t.state !== "waiting").slice(0, 6).length}>
             <SideHeading title="最近" />
-            <Each of={(s()?.recent ?? []).filter((t) => t.state !== "inbox" && t.state !== "waiting").slice(0, 6)} key={(a) => a.id}>
+            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state !== "inbox" && t.state !== "waiting").slice(0, 6)} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />

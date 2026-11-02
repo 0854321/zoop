@@ -146,7 +146,7 @@ export function status() {
   return {
     tasks: Object.fromEntries(["proposed", "inbox", "active", "waiting", "blocked", "failed", "done"].map((f) => [f, count(f)])),
     active,
-    recent: others.slice(0, 12),
+    recent: others.filter((t) => !active.some((a) => a.id === t.id)).slice(0, 12), // a task copied in two folders mid-sync shows once, as running
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),
     hosts: hostViews(active, others.filter((t) => t.state === "done" || t.state === "failed")),
   };
