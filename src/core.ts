@@ -168,15 +168,29 @@ export type TaskOpts = {
 /** Capabilities of this machine: os:<linux|macos|windows>, host:<name>, plus config [host].caps (e.g. gpu, docker, home). */
 export function hostCaps(cfg: Cfg): string[] {
   const os = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
-  const clis = ["claude", "codex", "gh", "cargo"].filter((c) => Bun.which(c)).map((c) => `cli:${c}`);
+  const clis = ["claude", "codex", "gh", "cargo", "bun", "node"].filter((c) => Bun.which(c)).map((c) => `cli:${c}`);
   return [`os:${os}`, `host:${hostName(cfg)}`, `arch:${process.arch}`, ...clis, ...(cfg.host?.caps ?? [])];
 }
 
-/** A task matches if every comma-separated requirement is in the host's caps. */
+/** One requirement; "a|b" means either cap will do (e.g. cli:bun|cli:node). */
+export const capOk = (req: string, caps: string[]) => req.split("|").some((r) => caps.includes(r.trim()));
+
+/** Toolchain a repo needs, read from its manifest files. Empty when the repo dir is not on this machine. */
+export function repoRequires(repo?: string): string[] {
+  if (!repo) return [];
+  const dir = resolve(repo.replace(/^~/, homedir()));
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  if (existsSync(join(dir, "Cargo.toml"))) out.push("cli:cargo");
+  if (existsSync(join(dir, "package.json"))) out.push("cli:bun|cli:node");
+  return out;
+}
+
+/** A task matches if every comma-separated requirement is in the host's caps (plus what its local repo needs). */
 export function matches(meta: Record<string, string>, caps: string[]): boolean {
-  const reqs = [meta.requires, meta.host && meta.host !== "any" ? `host:${meta.host}` : ""]
+  const reqs = [meta.requires, meta.host && meta.host !== "any" ? `host:${meta.host}` : "", ...repoRequires(meta.repo)]
     .join(",").split(",").map((s) => s.trim()).filter(Boolean);
-  return reqs.every((r) => caps.includes(r));
+  return reqs.every((r) => capOk(r, caps));
 }
 
 /** Hook set by the CLI so core stays free of policy imports. */
@@ -189,7 +203,8 @@ export function newTask(title: string, body = "", o: TaskOpts = {}): string {
   const folder = o.extra?.origin !== "owner" && approvalGate(o.source ?? "owner") ? "proposed" : "inbox";
   writeDoc(P("tasks", folder, `${id}.md`), {
     id, title, agent: o.agent ?? "lead", cli: o.cli ?? "auto", host: o.host ?? "any",
-    requires: o.requires ?? "", prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
+    // stored at creation so hosts without the repo checked out still know what it needs
+    requires: [...new Set([...(o.requires ?? "").split(","), ...repoRequires(o.repo)].map((x) => x.trim()).filter(Boolean))].join(","), prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
     created: now(), ...(o.extra ?? {}),
   }, body || title);
   return id;

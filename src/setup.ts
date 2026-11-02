@@ -115,7 +115,9 @@ export async function migrateData() {
 
 // ------------------------------------------------------------------ self-update
 /** Fast-forward framework code if origin has new commits that pass tests. Returns true if updated. */
-export async function selfUpdate(): Promise<boolean> {
+export async function selfUpdate(opts: { busy?: number; force?: boolean } = {}): Promise<boolean> {
+  // never swap code (and then restart) under running work: defer until this host is idle
+  if ((opts.busy ?? 0) > 0 && !opts.force) return false;
   const g = (...a: string[]) => $`git ${a}`.cwd(CODE).quiet().nothrow();
   if (!existsSync(join(CODE, ".git"))) return false;
   if ((await g("status", "--porcelain", "--untracked-files=no")).stdout.toString().trim()) return false; // local edits → skip
@@ -177,9 +179,11 @@ Wants=network-online.target
 ExecStart=${bun} ${cli} daemon
 Restart=always
 RestartSec=10
-# stopping lets running agents finish (the daemon drains), so a restart never throws work away
+# stopping lets running agents finish (the daemon drains), so a restart never throws work away.
+# The stop timeout must outlast the longest agent run (clis.timeout_minutes, default 60), or systemd
+# SIGKILLs the agents mid-run and the restarted daemon redoes them.
 KillMode=mixed
-TimeoutStopSec=45min
+TimeoutStopSec=90min
 Environment=PATH=${path}
 Environment=HUB_DATA=${DATA}
 Nice=5

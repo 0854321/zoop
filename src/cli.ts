@@ -22,8 +22,8 @@ import { doctor, visual } from "./visual";
 import { drainInbound, handleOwnerMessage, setAppendToTask, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
-import { allowedClis, idTagFor, setApprovalGate, setIdTag } from "./core";
-import { accountEnv, accountsStatus, classify, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
+import { allowedClis, capOk, idTagFor, setApprovalGate, setIdTag } from "./core";
+import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
 const STATE = P("logs", "routine-state.json");
@@ -84,7 +84,8 @@ const pendingRoute: string[] = []; // decisions opened by workers, routed by the
 async function processTask(path: string, cfg: Cfg, host: string) {
   const { meta, body } = readDoc(path);
   const wanted = allowedClis(meta, cfg);
-  const acct = pickAccount(cfg, wanted.filter((c: string) => Bun.which(c)));
+  const installed = (c: string) => !!Bun.which(c);
+  let acct = pickAccount(cfg, wanted.filter(installed)) ?? failoverAccount(cfg, null, wanted, installed);
   const agent = meta.agent || "lead";
   if (!acct) { // no usable account right now → put it back, don't fail it
     await locked(async () => {
@@ -94,30 +95,45 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     });
     return;
   }
-  const cli = acct.cli;
-  const model = cfg.clis?.[cli]?.model ?? (cli === "claude" ? "claude-opus-5-5" : "default");
-  meta.cli_used = cli; meta.model = model; meta.account = acct.name;
-  await locked(async () => {
-    if (existsSync(path)) writeDoc(path, meta, body); // the app shows which model runs it
-    journal(host, `▶ ${meta.id} ${agentName(agent)}/${cli}: ${meta.title}`);
-    await _commitPush(`[${host}] start ${meta.id}`);
-  });
-
-  const log = P("logs", "runs", `${meta.id}-${Date.now()}-${cli}.log`);
-  const gh = await githubStarved(cfg);
-  const b = budget(sample(cfg), running, meta.weight === "heavy");
-  b.note += gh.note ? `\n${gh.note}` : "";
-  const out = await runAgent(cli, buildPrompt(meta, body, cfg, b.note), meta.repo || P(), cfg, log, !!meta.gate_override,
-    { ...b.env, ...accountEnv(acct) });
-  const res = parseResult(out);
-  const failure = res.status === "failed" ? classify(out) : null;
-  if (failure) { // quota / auth problem is not the task's fault → rotate account, requeue
-    await reportFailure(acct, failure, out, cfg);
+  // the recovery note (meta.requeue_note) reaches the agent, but never becomes part of the owner's request text
+  const promptBody = meta.requeue_note ? `${body}\n\n> ${meta.requeue_note}\n` : body;
+  let cli = acct.cli, out = "", res!: ReturnType<typeof parseResult>;
+  for (let hop = 0; ; hop++) { // quota / login trouble: switch account or CLI on this host instead of waiting it out
+    cli = acct.cli;
+    const model = cfg.clis?.[cli]?.model ?? (cli === "claude" ? "claude-opus-5-5" : "default");
+    meta.cli_used = cli; meta.model = model; meta.account = acct.name;
     await locked(async () => {
+      if (existsSync(path)) writeDoc(path, meta, body); // the app shows which model runs it
+      journal(host, `▶ ${meta.id} ${agentName(agent)}/${cli}: ${meta.title}`);
+      await _commitPush(`[${host}] start ${meta.id}`);
+    });
+
+    const log = P("logs", "runs", `${meta.id}-${Date.now()}-${cli}.log`);
+    const gh = await githubStarved(cfg);
+    const b = budget(sample(cfg), running, meta.weight === "heavy");
+    b.note += gh.note ? `\n${gh.note}` : "";
+    out = await runAgent(cli, buildPrompt(meta, promptBody, cfg, b.note), meta.repo || P(), cfg, log, !!meta.gate_override,
+      { ...b.env, ...accountEnv(acct) });
+    res = parseResult(out);
+    const failure = res.status === "failed" ? classify(out) : null;
+    if (!failure) break;
+    await reportFailure(acct, failure, out, cfg); // puts this account on cooldown / needs-login
+    const next = hop < 4 ? failoverAccount(cfg, acct, wanted, installed) : null;
+    if (next) {
+      const was = `${acct.cli}/${acct.name}`;
+      await locked(async () => {
+        await _pull();
+        journal(host, `🔀 ${meta.id} ${was} ${failure === "quota" ? "额度用完" : "需要登录"}，立即改用 ${next.cli}/${next.name} 在本机重跑`);
+        await _commitPush(`[${host}] ${meta.id} switch to ${next.cli}`);
+      });
+      acct = next;
+      continue;
+    }
+    await locked(async () => { // nothing usable on this host → requeue
       await _pull();
       writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, retried_after: failure }, body);
       if (existsSync(path)) unlinkSync(path);
-      journal(host, `↻ ${meta.id} requeued (${cli}/${acct.name}: ${failure})`);
+      journal(host, `↻ ${meta.id} requeued (${cli}/${acct!.name}: ${failure})`);
       await _commitPush(`[${host}] requeue ${meta.id} (${failure})`);
     });
     return;
@@ -137,7 +153,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     children.push(id);
     journal(host, `  ↳ ${id} → ${f.agent ?? agent}: ${f.title}`);
   }
-  const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined };
+  const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined, requeue_note: undefined };
   const runNote = `\n\n## Run ${now()} · ${host} · ${cli}\n**${res.status}** — ${res.summary}\n`;
   // the owner added to the request while it ran: run again with the additions instead of reporting a stale result
   const latest = existsSync(path) ? readDoc(path).body : body;
@@ -166,7 +182,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     // the owner asked for this (and it is not an internal sub-step) → bring back the result
     if (res.status === "done" && ownerWork && !meta.parent)
       void notify(meta.source === "owner@chat" ? res.summary : `${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
-    if (res.status !== "done") void handleFailure(meta, body, res.summary, out, cfg, host);
+    if (res.status !== "done") void track(handleFailure(meta, body, res.summary, out, cfg, host));
   }
   await _commitPush(`[${host}] ${res.status} ${meta.id}: ${meta.title}`);
   });
@@ -217,8 +233,8 @@ function reapStale(cfg: Cfg, host: string, ownOnly = false) {
     // own tasks not run by this process were orphaned by a crash/restart (we're alive, so no one else reaps them)
     if (meta.claimed_by === host ? runningIds.has(meta.id) : ownOnly || alive.has(meta.claimed_by)) continue;
     if (Date.now() - Date.parse(meta.started) < graceMs) continue;
-    writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, requeued: now() },
-      `${body}\n\n> Requeued: host ${meta.claimed_by} went offline mid-task. Check for partial work (branch agent/${meta.id}-*).\n`);
+    writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, requeued: now(),
+      requeue_note: `Requeued: host ${meta.claimed_by} went offline mid-task. Check for partial work (branch agent/${meta.id}-*).` }, body);
     require("node:fs").unlinkSync(p);
     journal(host, `♻️ requeued ${meta.id} (host ${meta.claimed_by} offline)`);
   }
@@ -231,7 +247,7 @@ function noteUnservable(cfg: Cfg, host: string) {
     const { meta, body } = readDoc(p);
     const reqs = (meta.requires ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     if (!reqs.length || meta.parked) continue;
-    if (!hosts.some((h) => reqs.every((r) => h.caps.includes(r)))) {
+    if (!hosts.some((h) => reqs.every((r) => capOk(r, h.caps)))) {
       writeDoc(p, { ...meta, parked: now() }, body);
       journal(host, `🅿️ ${meta.id} parked until a host with ${reqs.join("+")} comes online`);
     }
@@ -239,7 +255,7 @@ function noteUnservable(cfg: Cfg, host: string) {
   for (const p of list(P("tasks", "inbox"), /^T-.*\.md$/)) { // unpark when capable host returns
     const { meta, body } = readDoc(p);
     const reqs = (meta.requires ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-    if (meta.parked && hosts.some((h) => reqs.every((r) => h.caps.includes(r)))) writeDoc(p, { ...meta, parked: undefined }, body);
+    if (meta.parked && hosts.some((h) => reqs.every((r) => capOk(r, h.caps)))) writeDoc(p, { ...meta, parked: undefined }, body);
   }
 }
 
@@ -247,12 +263,26 @@ let running = 0;
 /** Set when the daemon is asked to stop or restart: running agents finish first instead of being killed and redone. */
 let draining = false;
 const RESTART_FLAG = () => P("..", "restart-requested");
+/** Follow-up work a finished task still owes (retry bookkeeping etc.): drain waits for it too. */
+const inflight = new Set<Promise<unknown>>();
+const track = <T,>(p: Promise<T>) => { inflight.add(p); void p.finally(() => inflight.delete(p)).catch(() => {}); return p; };
+const LAST_RESTART = () => P("logs", "last-restart");
+/** At most one voluntary restart (self-update, `hub restart`) per hour unless forced; signals are never throttled. */
+export function restartAllowed(force = false, file = LAST_RESTART(), t = Date.now(), minGapMs = 60 * 60_000): boolean {
+  if (force) return true;
+  try { return t - Date.parse(readFileSync(file, "utf8").trim()) >= minGapMs; } catch { return true; }
+}
 async function drainAndExit(why: string, host: string) {
   if (draining) return;
   draining = true;
   if (running) console.log(`${why}: waiting for ${running} running task(s) to finish`);
-  while (running > 0) await Bun.sleep(3000);
-  try { await commitPush(`[${host}] ${why}`); } catch {}
+  // `running` covers each task from claim until its agent process exited and its result was committed
+  while (running > 0 || inflight.size > 0) { await Bun.sleep(3000); await Promise.allSettled([...inflight]); }
+  try {
+    mkdirSync(P("logs"), { recursive: true });
+    writeFileSync(LAST_RESTART(), new Date().toISOString());
+    await locked(async () => { await _pull(); journal(host, `🔄 daemon ${why}: all running work finished, exiting`); await _commitPush(`[${host}] ${why}`); });
+  } catch {}
   process.exit(0);
 }
 
@@ -449,8 +479,9 @@ async function daemon(cfg: Cfg) {
     for (const p of list(P("tasks", "active"), /^T-.*\.md$/)) {
       const { meta, body } = readDoc(p);
       if (meta.claimed_by !== host) continue;
-      writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, requeued: now() },
-        `${body}\n\n> Requeued after daemon restart on ${host}; check for partial work.\n`);
+      // the note goes in meta (shown to the agent, not to the owner as part of the request)
+      writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, requeued: now(),
+        requeue_note: `Requeued after daemon restart on ${host}; check for partial work.` }, body);
       require("node:fs").unlinkSync(p);
       journal(host, `♻️ requeued ${meta.id} after restart`);
     }
@@ -458,21 +489,26 @@ async function daemon(cfg: Cfg) {
   });
   await locked(async () => { await _pull(); journal(host, `🟢 daemon started (${hostCaps(cfg).join(", ")})`); await _commitPush(`[${host}] up`); });
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => void drainAndExit("stop", host));
+  // a stray rejection (a voided notify/medic) used to kill the process → systemd restart → running work requeued
+  process.on("unhandledRejection", (e) => console.error("unhandled rejection", e));
+  process.on("uncaughtException", (e) => console.error("uncaught exception", e));
   let lastUpdate = 0, failures = 0;
   for (;;) {
     const c = loadConfig();
-    if (existsSync(RESTART_FLAG())) { unlinkSync(RESTART_FLAG()); void drainAndExit("restart", host); }
+    if (existsSync(RESTART_FLAG())) { // `hub restart` (throttled) / `hub restart --force`
+      const force = readFileSync(RESTART_FLAG(), "utf8").includes("force");
+      if (restartAllowed(force)) { unlinkSync(RESTART_FLAG()); void drainAndExit("restart", host); }
+    }
     try { await tick(c, true); failures = 0; } catch (e) {
       console.error("tick failed", e);
       if (++failures >= 3) void medic(`noop daemon: ${failures} consecutive tick failures on ${host}.\n${(e as Error)?.stack ?? e}`, c, { auto: true, kind: "daemon" });
     }
-    if (Date.now() - lastUpdate > (c.update?.check_minutes ?? 30) * 60_000) {
+    // self-update only when idle and not restarted within the hour; otherwise check again next tick
+    if (!draining && running === 0 && restartAllowed() && Date.now() - lastUpdate > (c.update?.check_minutes ?? 30) * 60_000) {
       lastUpdate = Date.now();
-      if (await selfUpdate().catch(() => false)) {
+      if (await selfUpdate({ busy: running }).catch(() => false)) {
         journal(host, "⬆️ framework self-updated; restarting when workers finish");
-        while (running > 0) await Bun.sleep(5000);
-        await commitPush(`[${host}] self-update`);
-        process.exit(0); // service manager restarts us on the new code
+        void drainAndExit("self-update", host); // service manager restarts us on the new code
       }
     }
     await Bun.sleep(every);
@@ -552,8 +588,10 @@ async function main() {
       return;
     }
     case "restart": { // restart once running tasks finish (the service manager starts the new code)
-      writeFileSync(P("..", "restart-requested"), new Date().toISOString());
-      return void console.log("noop restarts as soon as its running tasks finish");
+      const force = rest.includes("--force");
+      writeFileSync(P("..", "restart-requested"), `${new Date().toISOString()}${force ? " force" : ""}`);
+      return void console.log(force ? "noop restarts as soon as its running tasks finish"
+        : "noop restarts once its running tasks finish (at most once per hour; --force to skip the limit)");
     }
     case "update": return void console.log((await selfUpdate()) ? "updated" : "up to date");
     case "daemon": return daemon(cfg);
