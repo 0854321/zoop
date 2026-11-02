@@ -15,6 +15,7 @@ import {
   safeArea,
   Scroll,
   type ScrollRef,
+  type ViewRef,
   setColorScheme,
   signal,
   Storage,
@@ -445,8 +446,9 @@ let taskState: (id: string) => string | undefined = () => undefined;
 
 /** The app's syntax in messages (`extensions`, `pattern`): task ids and decision / proposal ids, shown by `renderCustom`. */
 const EXTENSIONS: MarkdownExtension[] = [
-  { name: "task", pattern: "\\bT-\\d{4}\\b" },
-  { name: "item", pattern: "\\b[DP]-\\d{4}\\b" },
+  // ids minted on a non-primary host carry its letter (T-M0001, D-H0002)
+  { name: "task", pattern: "\\bT-[A-Z]?\\d{4}\\b" },
+  { name: "item", pattern: "\\b[DP]-[A-Z]?\\d{4}\\b" },
 ];
 const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)\/?$/;
 
@@ -629,7 +631,8 @@ function Avatar(props: { from: string }) {
 function optionText(e: HubEvent, c: string): string {
   if (c === "all" || c === "none") return choiceLabel(c);
   const full = (e.options ?? []).find((o) => new RegExp(`^\\s*${c}\\s*([:：.、)]|\\s)`).test(o));
-  return full ? full.trim() : choiceLabel(c);
+  // a button can't hold a link: a GitHub PR / issue URL reads as "nsh#747"
+  return full ? full.trim().replace(/https:\/\/github\.com\/[\w.-]+\/([\w.-]+)\/(?:pull|issues)\/(\d+)\/?/g, "$1#$2") : choiceLabel(c);
 }
 
 type Proposal = { n: string; title: string; agent: string; note: string };
@@ -785,7 +788,7 @@ function Message(props: {
   target: () => string | null;
   onAnswer: (ref: string, choice: string) => void;
   onReply: (ref: string) => void;
-  onLayout?: (y: number) => void;
+  cardRef?: (r: ViewRef) => void;
 }) {
   const e = props.event;
   const ask = isAsk(e);
@@ -805,13 +808,13 @@ function Message(props: {
   const rec = recommended(e);
   if (isHub(e.from) && !ask && e.kind === "system" && !e.attachments?.length)
     return (
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: 50 }} onLayout={({ bounds }) => props.onLayout?.(bounds.origin.y)}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: 50 }} ref={(r) => props.cardRef?.(r)}>
         <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
         <View selectable style={{ flex: 1, minWidth: 0 }}><Rich text={e.text} quiet /></View>
       </View>
     );
   return (
-    <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} onLayout={({ bounds }) => props.onLayout?.(bounds.origin.y)}>
+    <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} ref={(r) => props.cardRef?.(r)}>
       <Avatar from={e.from} />
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
@@ -1161,7 +1164,8 @@ function Sidebar(props: {
   onHome: () => void;
 }) {
   const s = () => props.hub.status();
-  const waits = computed(() => waiting(s()));
+  // the hub closes a decision on its next tick: one the channel already shows answered leaves the list now
+  const waits = computed(() => { const done = answeredIds(props.hub.events()); return waiting(s()).filter((d) => !done.has(d.id)); });
   const queue = () => {
     const q = s()?.tasks;
     return [
@@ -2251,8 +2255,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const c = chosen();
     return p.find((e) => e.ref === c)?.ref ?? p[p.length - 1]?.ref ?? null;
   });
-  const cardY = new Map<string, number>();
+  const cards = new Map<string, ViewRef>();
   let scroller: ScrollRef | undefined;
+  let scrollY = 0;
   let composer: InputRef | undefined;
 
   const toEnd = (animated = false) => setTimeout(() => scroller?.scrollTo({ y: 1e7, animated }), 40);
@@ -2380,10 +2385,15 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     nav.popToRoot();
     chosen.set(ref);
     hostCall("clearNotifications", { ref });
-    const y = cardY.get(ref);
-    if (y !== undefined) {
-      atEnd.set(false);
-      scroller?.scrollTo({ y: Math.max(0, y - 120), animated: true });
+    const card = cards.get(ref);
+    if (card && scroller) {
+      // measured now, not a frame cached at layout: what loaded above it since (images, older history) moved it
+      const sc = scroller;
+      void Promise.all([card.measure(), sc.measure()]).then(([c, v]) => {
+        if (!c || !v) return;
+        atEnd.set(false);
+        sc.scrollTo({ y: Math.max(0, scrollY + c.pagePosition.y - v.pagePosition.y - 24), animated: true });
+      });
     } else if (pending().some((e) => e.ref === ref)) reply(ref);
   }
 
@@ -2541,6 +2551,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               keyboardShouldPersistTaps="handled"
               onScroll={(ev) => {
                 const end = ev.contentSize.height - ev.offset.y - ev.size.height < 80;
+                scrollY = ev.offset.y;
                 if (end !== untracked(atEnd)) atEnd.set(end);
                 if (end) unseen.set(0);
               }}
@@ -2627,7 +2638,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         target={target}
                         onAnswer={answer}
                         onReply={reply}
-                        onLayout={isAsk(row.event) ? (y) => cardY.set(row.event.ref!, y) : undefined}
+                        cardRef={isAsk(row.event) ? (r) => cards.set(row.event.ref!, r) : undefined}
                       />
                     );
                   }}

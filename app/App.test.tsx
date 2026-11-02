@@ -32,9 +32,15 @@ const status = {
   }],
 };
 
-function hub(posts: { text: string; reply_to?: string }[]) {
+const prDecision = {
+  id: "e7", ts: ts(7), from: "hub", kind: "decision", ref: "D-H0003",
+  text: "合并 [nsh#747](https://github.com/acme/nsh/pull/747) 吗？按 D-H0002 的反馈改好了",
+  options: ["A: squash 合并 https://github.com/acme/nsh/pull/747 — 进入发布", "B: 继续修改"],
+};
+
+function hub(posts: { text: string; reply_to?: string }[], extra: unknown[] = []) {
   return {
-    [`GET ${URL}/api/feed`]: { body: { events } },
+    [`GET ${URL}/api/feed`]: { body: { events: [...events, ...extra] } },
     [`GET ${URL}/api/feed?*`]: { body: { events: [] } },
     [`GET ${URL}/api/status`]: { body: status },
     [`POST ${URL}/api/messages`]: (r: { body?: string | null }) => {
@@ -181,6 +187,14 @@ describe("channel", () => {
     await app.waitFor("任务 T-0005");
   });
 
+  test("a decision's PR reference is a chip, host-lettered ids are chips, option buttons shorten PR links", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([], [prDecision]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("id:gh-chip-nsh-747");
+    expect(app.shows("text:/D-H0002/")).toBe(true);
+    expect(app.shows("text:/A: squash 合并 nsh#747 — 进入发布/")).toBe(true);
+    expect(app.shows("text:/github\\.com\\/acme\\/nsh/")).toBe(false);
+  });
+
   test("answers a decision with one tap", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
@@ -188,6 +202,9 @@ describe("channel", () => {
     await app.press("id:opt-D-0001-B");
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "D-0001 B" });
+    // the sidebar drops it at once, before the hub's status catches up
+    expect(app.shows("text:要不要升级依赖？")).toBe(true);
+    await app.waitUntil(() => !app.shows("text:要不要升级依赖？"));
   });
 
   test("其他指示 replies to the item from the composer", async () => {
