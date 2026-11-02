@@ -160,7 +160,7 @@ describe("channel", () => {
     await app.waitFor("截图检查 gallery");
     expect(app.shows("待你决定")).toBe(true);
     expect(app.shows("text:/linux-box/")).toBe(true);
-    expect(app.shows("排队")).toBe(true);
+    expect(app.shows("text:/排队 2/")).toBe(true);
   });
 
   test("answers a decision with one tap", async () => {

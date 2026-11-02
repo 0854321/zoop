@@ -729,12 +729,10 @@ function Sidebar(props: {
             {(h) => (
               <SideRow title={`负载 ${loadOf(h())}% · 磁盘 ${h().stats?.diskFreeGB ?? "?"}GB · ${h().busy ?? 0} 个运行中`}>
                 <Dot tone="on" />
-                <Text style={rowText}>
-                  {h().host} <Text style={{ fontSize: 12.5, color: colors.faint }}>{osOf(h())}</Text>
-                </Text>
-                <View style={{ width: 44, height: 4, borderRadius: 2, overflow: "hidden", backgroundColor: colors.track }}>
-                  <View style={{ height: "100%", width: `${loadOf(h())}%`, backgroundColor: colors.muted }} />
-                </View>
+                <Text style={rowText}>{h().host}</Text>
+                <If when={(h().busy ?? 0) > 0}>
+                  <Text style={{ fontSize: 13, color: colors.muted, fontVariant: ["tabular-nums"] }}>{`${h().busy} 运行中`}</Text>
+                </If>
               </SideRow>
             )}
           </Each>
@@ -742,15 +740,11 @@ function Sidebar(props: {
             <SideEmpty text="没有在线机器" />
           </If>
 
-          <SideHeading title="队列" />
-          <Each of={queue()} key="index">
-            {(q) => (
-              <SideRow>
-                <Text style={{ ...rowText, color: colors.muted }}>{q()[0]}</Text>
-                <Text style={{ fontSize: 13.5, color: colors.text, fontVariant: ["tabular-nums"] }}>{String(q()[1] ?? 0)}</Text>
-              </SideRow>
-            )}
-          </Each>
+          <If when={queue().some((q) => q[1] && q[0] !== "完成" && q[0] !== "待批准")}>
+            <Text style={{ fontSize: 13, color: colors.faint, paddingHorizontal: 20, paddingTop: 18, fontVariant: ["tabular-nums"] }}>
+              {queue().filter((q) => q[1] && q[0] !== "完成" && q[0] !== "待批准").map((q) => `${q[0]} ${q[1]}`).join(" · ")}
+            </Text>
+          </If>
         </View>
       </Scroll>
       <View
@@ -1488,10 +1482,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             </View>
           </If>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <If when={wide()}>
-              <Text style={{ fontSize: 15, color: colors.muted }}>noop</Text>
-              <Icon name="chevron" size={13} tint={colors.faint} />
-            </If>
             <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : "团队频道"}</Text>
             <If when={pending().length && page() === "channel"}>
               <Badge label={`${pending().length} 项待决定`} tone="warn" />

@@ -21,7 +21,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
 {
   "status": "done" | "needs_decision" | "failed" | "delegated",   // delegated = you split the work into followups and want to be woken up to consolidate when they finish
   "summary": "1-3 sentences: what you did / found (links to PRs, commits, files)",
-  "question": "needs_decision only: one precise question for the owner",
+  "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？",
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],
