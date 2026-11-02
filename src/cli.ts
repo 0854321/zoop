@@ -483,7 +483,19 @@ export async function tick(cfg: Cfg, background = false) {
 
 /** AI placement for new tasks: which host capabilities a task needs (e.g. os:macos for iOS screenshots), which CLI
  *  fits it (Claude for hard engineering, Codex for routine work), and how hard it is. One call for the whole batch. */
-async function planInbox(cfg: Cfg, host: string) {
+let planning: Promise<void> | null = null;
+/** One planner run at a time (a chat task plans at once, the tick plans the rest): a second caller waits for the first. */
+function planInbox(cfg: Cfg, host: string): Promise<void> {
+  planning ??= planNow(cfg, host).finally(() => { planning = null; });
+  return planning;
+}
+
+/** The daemon's sleep between ticks; `wakeDaemon` ends it early (a chat task just planned: claim it now, not next minute). */
+let wakeUp: (() => void) | null = null;
+const wakeDaemon = () => wakeUp?.();
+const nap = (ms: number) => Promise.race([Bun.sleep(ms), new Promise<void>((r) => { wakeUp = r; })]).finally(() => { wakeUp = null; });
+
+async function planNow(cfg: Cfg, host: string) {
   const todo = list(P("tasks", "inbox"), /^T-.*\.md$/).map((p) => ({ p, ...readDoc(p) })).filter((t) => !t.meta.planned).slice(0, 12);
   if (!todo.length) return;
   const hosts = onlineHosts(cfg).map((h) => `- ${h.host}: ${h.caps.join(",")}`).join("\n");
@@ -625,6 +637,8 @@ async function daemon(cfg: Cfg) {
       { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner", ...(prevFile && prev ? { follows: prev } : {}) } });
     journal(host, `💬 ${id} from owner chat${prevFile ? ` (follows ${prev})` : ""}: ${text.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
+    // plan it now and wake the loop, so an idle machine starts it within seconds instead of after the next tick or two
+    queueMicrotask(() => void planInbox(cfg, host).then(wakeDaemon).catch(() => {}));
     return { id, ...(prevFile ? { follows: prev! } : {}) };
     });
   });
@@ -666,7 +680,7 @@ async function daemon(cfg: Cfg) {
         void drainAndExit("self-update", host); // service manager restarts us on the new code
       }
     }
-    await Bun.sleep(every);
+    await nap(every);
   }
 }
 
