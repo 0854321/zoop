@@ -28,6 +28,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "attachments": ["/abs/path/screenshot.png", "/abs/path/recording.mp4"],   // optional: shown to the owner with the message
   "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work"}]
 }
+Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
 Only use needs_decision after doing all preparation that does not depend on the answer.`;
 
 export function buildPrompt(meta: Record<string, string>, body: string, cfg: Cfg, resourceNote = ""): string {

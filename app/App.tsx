@@ -545,6 +545,13 @@ function Message(props: {
   const done = () => !!e.ref && props.answered().has(e.ref);
   const targeted = () => ask && !done() && props.target() === e.ref;
   const rec = recommended(e);
+  if (isHub(e.from) && !ask && e.kind === "system" && !e.attachments?.length)
+    return (
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: 50 }} onLayout={({ bounds }) => props.onLayout?.(bounds.origin.y)}>
+        <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
+        <Text style={{ flex: 1, fontSize: 14, color: colors.muted }}>{e.text}</Text>
+      </View>
+    );
   return (
     <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} onLayout={({ bounds }) => props.onLayout?.(bounds.origin.y)}>
       <Avatar from={e.from} />
@@ -1761,11 +1768,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   </View>
                 </View>
               </View>
-              <If when={wide() && !touch}>
-                <Text style={{ textAlign: "center", fontSize: 12.5, color: colors.faint }}>
-                  也可以直接输入：<Text style={{ fontFamily: MONO }}>D-0001 A</Text> 回复决策 · <Text style={{ fontFamily: MONO }}>P-0001 1,3</Text> 批准清单
-                </Text>
-              </If>
             </View>
           </View>
         </If>
