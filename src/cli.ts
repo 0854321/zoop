@@ -18,7 +18,7 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, setAppendToTask, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals } from "./autonomy";
 import { allowedClis, setApprovalGate, setIdTag } from "./core";
@@ -127,7 +127,17 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   }
   const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined };
   const runNote = `\n\n## Run ${now()} · ${host} · ${cli}\n**${res.status}** — ${res.summary}\n`;
+  // the owner added to the request while it ran: run again with the additions instead of reporting a stale result
+  const latest = existsSync(path) ? readDoc(path).body : body;
+  const added = latest.length > body.length && latest.startsWith(body) ? latest.slice(body.length) : "";
   if (existsSync(path)) unlinkSync(path);
+  if (added.includes(FOLLOW_UP) && !delegated) {
+    writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined }, body + runNote + added +
+      "\nThe owner added the follow-up above while you were working: handle the whole request including it.\n");
+    journal(host, `↻ ${meta.id} rerun with the owner's follow-up`);
+    await _commitPush(`[${host}] ${meta.id} follow-up`);
+    return;
+  }
 
   if (delegated && children.length) { // wait for children, then wake up to consolidate
     writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, children: children.join(",") }, body + runNote);
@@ -149,6 +159,8 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   await _commitPush(`[${host}] ${res.status} ${meta.id}: ${meta.title}`);
   });
 }
+
+const FOLLOW_UP = "## Owner follow-up";
 
 async function handleReplies(cfg: Cfg, host: string) {
   const open = openDecisionIds();
@@ -360,6 +372,19 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] settings: ${summary.slice(0, 60)}`);
   }));
   if ((cfg.fleet?.primary ?? host) === host) startCloudBridge(cfg);
+  setAppendToTask((tid, text) => locked(async () => {
+    await _pull();
+    for (const dir of ["inbox", "active"]) {
+      const f = P("tasks", dir, `${tid}.md`);
+      if (!existsSync(f)) continue;
+      const { meta, body } = readDoc(f);
+      writeDoc(f, meta, `${body}\n\n${FOLLOW_UP} ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n`);
+      journal(host, `💬 ${tid} owner added: ${text.slice(0, 80)}`);
+      await _commitPush(`[${host}] chat follow-up ${tid}`);
+      return true;
+    }
+    return false;
+  }));
   if ((cfg.fleet?.primary ?? host) === host) startServer(cfg, (text) => locked(async () => {
     await _pull();
     const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}\n\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,

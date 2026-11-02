@@ -1301,7 +1301,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   function submit() {
     const v = draft().trim();
     if (!v) return;
-    const r = replyTo();
+    // A bare choice ("1", "B", "1,3", "全部") answers the decision the keyboard is on, never becomes a new task.
+    const r = replyTo() ?? (/^([1-9](\s*[,，]\s*[1-9])*|[A-Za-z]|全部|都不要)$/.test(v) ? target() : null);
     draft.set("");
     replyTo.set(null);
     inputHeight.set(28);

@@ -128,6 +128,10 @@ const ID = /^\s*([DLP]-[A-Z]?\d{4})\b[\s:：,，\-]*([\s\S]*)$/;
 
 /** Owner said something (local chat or via the cloud inbox): answer an open D-/P-/L- item, or hand it to lead. */
 let lastAnswer: { id: string; at: number } | null = null;
+let followUp: { tid: string; at: number } | null = null;
+const FOLLOW_MS = 3 * 60_000;
+let appendToTask: ((tid: string, text: string) => Promise<boolean>) | null = null;
+export const setAppendToTask = (fn: (tid: string, text: string) => Promise<boolean>) => { appendToTask = fn; };
 const AMEND_MS = 5 * 60_000;
 
 export async function handleOwnerMessage(text: string, reply_to?: string, noAmend = false) {
@@ -139,8 +143,13 @@ export async function handleOwnerMessage(text: string, reply_to?: string, noAmen
   } else if (!noAmend && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS) {
     // a plain message right after answering a decision is about that decision ("wait, I clicked the wrong one")
     inbound.push({ id: lastAnswer.id, answer: text.trim(), source: "chat-amend" });
+  } else if (followUp && Date.now() - followUp.at < FOLLOW_MS && (await appendToTask?.(followUp.tid, text))) {
+    // messages sent in a row are one request: add to the task just created instead of opening another
+    followUp.at = Date.now();
+    appendEvent({ from: "hub", kind: "system", text: `已补充到 ${followUp.tid}`, ref: followUp.tid });
   } else if (ownerTask) {
     const tid = await ownerTask(text);
+    followUp = { tid, at: Date.now() };
     appendEvent({ from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
   }
 }
