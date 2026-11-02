@@ -22,7 +22,7 @@ export function Segmented<T extends string>(props: {
   size?: "small" | "regular";
   fill?: boolean;
 }) {
-  const pointer = platform.desktop;
+  const pointer = (platform.idiom === "desktop" || platform.idiom === "mac");
   const spread = !pointer || !!props.fill;
   // The track's padding: the thumb sits inside it.
   const inset = 2;
@@ -40,14 +40,6 @@ export function Segmented<T extends string>(props: {
         boxShadow: finish.track.boxShadow,
         borderWidth: 1,
         borderColor: finish.track.borderColor,
-      }}
-      indicatorStyle={{
-        top: inset,
-        bottom: inset,
-        borderRadius: pointer ? 6 : 7,
-        borderCurve: "continuous",
-        borderWidth: 1,
-        ...finish.raised,
       }}
     >
       <Each of={props.options}>

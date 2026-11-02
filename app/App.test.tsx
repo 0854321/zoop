@@ -136,7 +136,7 @@ describe("login", () => {
       network: { [`GET ${URL}/api/feed`]: { status: 401 }, [`GET ${URL}/api/status`]: { status: 401 } },
     });
     await app.waitFor("登录已过期，请重新登录");
-    expect(app.storage()["hub.token"]).toBeUndefined();
+    expect(app.storage()["hub.token"]).toBe(undefined);
   });
 
   test("退出登录 calls logout and forgets the session", async () => {
@@ -149,7 +149,7 @@ describe("login", () => {
     await app.press("id:logout");
     await app.waitFor("登录 noop");
     expect(log.logouts).toBe(1);
-    expect(app.storage()["hub.token"]).toBeUndefined();
+    expect(app.storage()["hub.token"]).toBe(undefined);
   });
 });
 
@@ -314,7 +314,7 @@ describe("keyboard", () => {
     await app.waitFor("id:composer");
     await app.type("id:composer", "看一下日志");
     await app.submit("id:composer");
-    await app.waitUntil(() => posts.length === 1);
+    await app.waitUntil(() => posts.length === 1, { timeout: 8000 }); // sent after the 5 s undo window
     expect(posts[0]).toEqual({ text: "看一下日志" });
     expect(app.value("id:composer")).toBe("");
   });
