@@ -551,15 +551,33 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean }) {
 function Media(props: { hub: Hub; path: string }) {
   const src = mediaUrl(props.hub.cfg.url, props.hub.cfg.token, props.path);
   const ratio = signal(16 / 10);
-  const frame: ViewStyle = { width: "100%", borderRadius: radius.inset, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inset };
-  return isVideo(props.path) ? (
-    <Video src={src} controls paused style={{ ...frame, aspectRatio: 16 / 9 }} />
-  ) : (
-    <Image
-      src={src}
-      onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
-      style={{ ...frame, aspectRatio: ratio(), maxHeight: 560, objectFit: "contain" }}
-    />
+  const zoomed = signal(false);
+  const frame: ViewStyle = { borderRadius: radius.inset, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inset };
+  if (isVideo(props.path)) return <Video src={src} controls paused style={{ ...frame, width: "100%", maxWidth: 480, aspectRatio: 16 / 9 }} />;
+  // a thumbnail that keeps the timeline readable; press it to see the full image
+  const THUMB = 240;
+  const size = () => (ratio() >= 1 ? { width: THUMB, height: THUMB / ratio() } : { width: THUMB * ratio(), height: THUMB });
+  return (
+    <>
+      <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ alignSelf: "flex-start", cursor: "pointer" }}>
+        <Image
+          src={src}
+          onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
+          style={{ ...frame, ...size(), objectFit: "cover" }}
+        />
+      </View>
+      <Dialog
+        open={zoomed()}
+        animation="fade"
+        onOpenChange={({ open }) => !open && zoomed.set(false)}
+        backdropClass="bg-scrim"
+        style={{ flex: 1, padding: 24, pointerEvents: "box-none" }}
+      >
+        <View accessibilityLabel="关闭大图" onPress={() => zoomed.set(false)} style={{ flex: 1, alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
+          <Image src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        </View>
+      </Dialog>
+    </>
   );
 }
 
