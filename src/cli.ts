@@ -191,6 +191,9 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     // the owner asked for this (and it is not an internal sub-step) → bring back the result
     if (res.status === "done" && ownerWork && !meta.parent)
       void notify(meta.source === "owner@chat" ? res.summary : `${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
+    // every other finished task (routines, follow-ups, sub-steps) → a quiet result line in the team channel, no push
+    else if (res.status === "done")
+      void notify(`${meta.title}\n${res.summary}`, cfg, { kind: "system", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}`, quiet: true });
     if (res.status !== "done") void track(handleFailure(meta, body, res.summary, out, cfg, host));
   }
   await _commitPush(`[${host}] ${res.status} ${meta.id}: ${meta.title}`);

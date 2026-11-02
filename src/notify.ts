@@ -4,7 +4,8 @@ import { basename } from "node:path";
 import { type Cfg, P, hostName, list } from "./core";
 import { appendEvent, type Event, forwardEvent, storeMedia, uploadMedia } from "./server";
 
-export type NotifyOpts = { kind?: Event["kind"]; ref?: string; options?: string[]; attachments?: string[]; from?: string };
+export type NotifyOpts = { kind?: Event["kind"]; ref?: string; options?: string[]; attachments?: string[]; from?: string;
+  /** Team channel only: no ntfy / Slack / Discord (agents' routine results). */ quiet?: boolean };
 
 const isPrimary = (cfg: Cfg) => (cfg.fleet?.primary ?? hostName(cfg)) === hostName(cfg);
 
@@ -41,6 +42,7 @@ export async function notify(text: string, cfg: Cfg, o: NotifyOpts = {}): Promis
     const urls = (await Promise.all(files.map((f) => uploadMedia(f, cfg)))).filter(Boolean) as string[];
     if (await forwardEvent({ ...ev, attachments: urls }, cfg)) ids.push("hub");
   }
+  if (o.quiet) return ids;
   // 2) phone push via ntfy (self-hostable; tap opens the chat page)
   try {
     if (n.ntfy_url) await fetch(n.ntfy_url, { method: "POST", body: text.replace(/\*/g, "").slice(0, 3000),
