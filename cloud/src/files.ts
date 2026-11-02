@@ -89,6 +89,10 @@ function applyCas(sql: FilesSql, items: Prepared[], actor: string, msg: string):
 }
 
 export function pruneHistory(sql: FilesSql, now = Date.now()) {
+  // the prune scans the whole history (rows_read is billed per row): at most once an hour, not on every commit
+  const last = Number(sql.exec("SELECT v FROM files_meta WHERE k = 'pruned'").toArray()[0]?.v ?? 0);
+  if (now - last < 3600_000) return;
+  sql.exec("INSERT OR REPLACE INTO files_meta (k, v) VALUES ('pruned', ?)", now);
   const cutoff = new Date(now - HISTORY_DAYS * 86400_000).toISOString();
   sql.exec(`DELETE FROM history WHERE (ts < ? OR seq <= (SELECT MAX(seq) FROM history) - ?)
     AND seq NOT IN (SELECT MAX(seq) FROM history GROUP BY path)`, cutoff, HISTORY_ROWS);

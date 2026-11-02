@@ -93,6 +93,7 @@ export class Hub extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, json TEXT);
       CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT);
+      CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
       CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
       CREATE TABLE IF NOT EXISTS media (id TEXT, n INTEGER, type TEXT, data BLOB, PRIMARY KEY (id, n));
       CREATE TABLE IF NOT EXISTS auth_codes (email TEXT PRIMARY KEY, hash TEXT, expires INTEGER, attempts INTEGER);
@@ -328,7 +329,7 @@ export class Hub extends DurableObject<Env> {
 
     if (p === "/api/feed") {
       const since = url.searchParams.get("since") ?? "";
-      const rows = this.sql.exec("SELECT json FROM (SELECT seq, json FROM events WHERE ts > ? ORDER BY seq DESC LIMIT 300) ORDER BY seq", since).toArray();
+      const rows = this.sql.exec("SELECT json FROM (SELECT seq, json FROM events WHERE ts > ? ORDER BY ts DESC LIMIT 300) ORDER BY seq", since).toArray();
       return json({ events: rows.map((r) => JSON.parse(r.json as string)) });
     }
 
