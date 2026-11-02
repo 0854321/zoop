@@ -96,6 +96,8 @@ export function cliCommand(cli: string, cfg: Cfg, gateOverride = false): string[
   if (cli === "claude") {
     const cmd = ["claude", "-p", "--output-format", "text", "--permission-mode", c.permission_mode ?? "bypassPermissions"];
     cmd.push("--model", c.model ?? "claude-opus-5-5");
+    // the agent signature is the only attribution; drop Claude Code's own "Generated with" / co-author lines
+    cmd.push("--settings", JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }));
     const deny = claudeDisallowed(cfg, gateOverride);
     if (deny.length) cmd.push("--disallowedTools", ...deny);
     return cmd;
