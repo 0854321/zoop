@@ -62,3 +62,70 @@ test("owner images are downloaded and named by absolute path in the task text", 
   expect(withAttachments("plain", [])).toBe("plain");
   rmSync(root, { recursive: true, force: true });
 });
+
+test("repo language → host requirements (only when the repo is on disk)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { capOk, repoRequires } = await import("../src/core");
+  const rust = mkdtempSync(join(tmpdir(), "noop-rust-"));
+  writeFileSync(join(rust, "Cargo.toml"), "[package]\n");
+  const js = mkdtempSync(join(tmpdir(), "noop-js-"));
+  writeFileSync(join(js, "package.json"), "{}");
+  expect(repoRequires(rust)).toEqual(["cli:cargo"]);
+  expect(repoRequires("/nonexistent/repo/xyz")).toEqual([]);
+  const mac = ["os:macos", "host:mbp", "cli:claude", "cli:node"];
+  expect(matches({ repo: rust }, mac)).toBe(false); // the Mac without cargo must not claim a Rust task
+  expect(matches({ repo: rust }, [...mac, "cli:cargo"])).toBe(true);
+  expect(matches({ repo: js }, mac)).toBe(true); // node is enough for package.json
+  expect(matches({ repo: js }, ["os:linux"])).toBe(false);
+  expect(capOk("cli:bun|cli:node", ["cli:bun"])).toBe(true);
+  expect(matches({ repo: "/nonexistent/repo/xyz", requires: "cli:cargo" }, mac)).toBe(false); // stored at creation
+});
+
+test("quota/auth failover: same CLI's other account, then the other CLI, else nothing", async () => {
+  const { failoverAccount } = await import("../src/accounts");
+  const all = () => true;
+  const a = { cli: "claude", name: "zz-test-a", dir: "" };
+  const two = { accounts: [{ cli: "claude", name: "zz-test-a" }, { cli: "claude", name: "zz-test-b" }] } as any;
+  expect(failoverAccount(two, a, ["claude"], all)?.name).toBe("zz-test-b");
+  const solo = { accounts: [{ cli: "claude", name: "zz-test-a" }, { cli: "codex", name: "zz-test-c" }] } as any;
+  expect(failoverAccount(solo, a, ["claude"], all)?.cli).toBe("codex"); // claude-only (owner/hard) work still falls back
+  expect(failoverAccount(solo, a, ["claude"], (c) => c === "claude")).toBeNull(); // codex not installed → requeue
+  expect(failoverAccount(solo, { cli: "codex", name: "zz-test-c", dir: "" }, ["codex", "claude"], all)?.cli).toBe("claude");
+});
+
+test("restart throttle: at most one voluntary restart per hour unless forced", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { restartAllowed } = await import("../src/cli");
+  const f = join(mkdtempSync(join(tmpdir(), "noop-rs-")), "last-restart");
+  expect(restartAllowed(false, f)).toBe(true); // never restarted
+  const t = Date.parse("2026-11-02T17:00:00Z");
+  writeFileSync(f, "2026-11-02T16:30:00Z");
+  expect(restartAllowed(false, f, t)).toBe(false);
+  expect(restartAllowed(true, f, t)).toBe(true);
+  expect(restartAllowed(false, f, t + 31 * 60_000)).toBe(true);
+});
+
+test("selfUpdate defers while tasks run on this host", async () => {
+  const { selfUpdate } = await import("../src/setup");
+  expect(await selfUpdate({ busy: 2 })).toBe(false);
+});
+
+test("taskView shows the original ask, not daemon requeue notes", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { writeDoc } = await import("../src/core");
+  const { taskView } = await import("../src/server");
+  const dir = mkdtempSync(join(tmpdir(), "noop-tv-"));
+  const old = join(dir, "T-1.md"); // legacy body: note appended as a quote, no owner quote
+  writeDoc(old, { id: "T-1", title: "Fix build" }, "Fix the Rust build on CI.\n\n> Requeued after daemon restart on pc; check for partial work.\n");
+  expect(taskView(old, "inbox", []).request).toBe("Fix the Rust build on CI.");
+  const chat = join(dir, "T-2.md");
+  writeDoc(chat, { id: "T-2", title: "x", requeue_note: "Requeued after daemon restart on pc; check for partial work." },
+    "The owner (CEO) said in chat:\n\n> ship the release\n\nHandle it.\n\n> Attempt 1 failed: boom. Try a different approach.\n");
+  expect(taskView(chat, "inbox", []).request).toBe("ship the release");
+});
