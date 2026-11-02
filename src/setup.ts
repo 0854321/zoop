@@ -124,7 +124,11 @@ export async function selfUpdate(): Promise<boolean> {
   const up = (await g("rev-parse", "@{u}")).stdout.toString().trim();
   if (!up || head === up) return false;
   // upstream history may have been rewritten (e.g. scrubbed); with no local edits, follow it — tests below still guard the switch
-  if ((await g("merge-base", "--is-ancestor", "HEAD", "@{u}")).exitCode !== 0) await g("reset", "--hard", "-q", "@{u}");
+  if ((await g("merge-base", "--is-ancestor", "HEAD", "@{u}")).exitCode !== 0) {
+    // diverged: follow upstream only when it already has every local commit's change (a rewrite); unpushed work stays
+    if ((await g("cherry", "@{u}", "HEAD")).stdout.toString().split("\n").some((l) => l.startsWith("+"))) return false;
+    await g("reset", "--hard", "-q", "@{u}");
+  }
   else await g("merge", "--ff-only", "-q", "@{u}");
   const deps = await $`bun install --frozen-lockfile`.cwd(CODE).quiet().nothrow();
   const test = await $`bun test`.cwd(CODE).quiet().nothrow();

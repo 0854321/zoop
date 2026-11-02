@@ -205,6 +205,16 @@ export async function retryLogins(cfg: Cfg) {
   }
 }
 
+/** Structured account states for this machine (the app's machine page). */
+export function accountsInfo(cfg: Cfg): { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string }[] {
+  const s = load();
+  return ["claude", "codex"].filter((c) => Bun.which(c)).flatMap((c) => accounts(cfg, c)).map((a) => {
+    const st = s.accounts[key(a)] ?? {};
+    const cool = !!st.cooldown_until && Date.parse(st.cooldown_until) > Date.now();
+    return { cli: a.cli, name: a.name, state: st.needs_login ? "login" : cool ? "cooldown" : "ok", until: cool ? st.cooldown_until : undefined };
+  });
+}
+
 export function accountsStatus(cfg: Cfg): string[] {
   const s = load();
   return ["claude", "codex"].filter((c) => Bun.which(c)).flatMap((c) => accounts(cfg, c)).map((a) => {

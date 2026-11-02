@@ -658,6 +658,13 @@ const STATE_OF = (): Record<string, [string, string, string]> => ({
   blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.up, "✓"],
 });
 
+/** A progress step's icon and color. */
+const STEP_OF = (): Record<string, [IconName, string]> => ({
+  chat: ["chat", colors.muted], start: ["play", colors.info], done: ["check", colors.up], fail: ["close", colors.danger],
+  decision: ["pause", colors.warn], retry: ["replace", colors.muted], followup: ["plus", colors.muted],
+  delegated: ["layers", colors.info], judge: ["sliders", colors.muted], edit: ["document", colors.muted],
+});
+
 /** "3 分钟" since an ISO time (to now, or to `end`). */
 function since(iso?: string, end?: string): string {
   if (!iso) return "";
@@ -710,11 +717,118 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             <View selectable style={{ gap: 6 }}>
               <Each of={t()!.steps ?? []}>
                 {(st) => (
-                  <View style={{ flexDirection: "row", gap: 12 }}>
-                    <Text style={{ width: 44, fontSize: 13.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
-                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text.trim()}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+                    <Text style={{ width: 44, fontSize: 13.5, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
+                    <View style={{ width: 20, height: 21, alignItems: "center", justifyContent: "center" }}>
+                      <Icon name={STEP_OF()[st().kind ?? ""]?.[0] ?? "spark"} size={15} tint={STEP_OF()[st().kind ?? ""]?.[1] ?? colors.faint} weight={1.8} />
+                    </View>
+                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text}</Text>
                   </View>
                 )}
+              </Each>
+            </View>
+          </If>
+        </If>
+      </View>
+    </Scroll>
+  );
+}
+
+/** A short horizontal meter: how full something is, 0..100. */
+function Meter(props: { pct: number; tone?: "up" | "warn" | "danger" }) {
+  const fill = () => ({ up: colors.up, warn: colors.warn, danger: colors.danger })[props.tone ?? "up"];
+  return (
+    <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.raised, overflow: "hidden" }}>
+      <View style={{ width: `${Math.max(0, Math.min(100, props.pct))}%`, height: 6, borderRadius: 3, backgroundColor: fill() }} />
+    </View>
+  );
+}
+
+const ACCOUNT_STATE: Record<string, [string, "neutral" | "warn" | "danger"]> = { ok: ["可用", "neutral"], cooldown: ["冷却中", "warn"], login: ["需要登录", "danger"] };
+
+const ago = (iso?: string) => { const s = since(iso); return s === "刚刚" || !s ? s : `${s}前`; };
+
+function MachineDetail(props: { hub: Hub; host: string; wide: boolean; onTask: (id: string) => void }) {
+  const h = () => props.hub.status()?.hosts.find((x) => x.host === props.host);
+  const section = (title: string) => (
+    <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
+  );
+  const stat = (label: string, value: string, pct: number, tone: "up" | "warn" | "danger") => (
+    <View style={{ flex: 1, minWidth: 140, gap: 6, padding: 12, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line }}>
+      <Text style={{ fontSize: 13, color: colors.muted }}>{label}</Text>
+      <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] }}>{value}</Text>
+      <Meter pct={pct} tone={tone} />
+    </View>
+  );
+  const load = () => loadOf(h()!);
+  const memUsed = () => 100 - (h()!.stats?.memFreePct ?? 100);
+  const diskUsed = () => 100 - (h()!.stats?.diskFreePct ?? 100);
+  const toneOf = (pct: number): "up" | "warn" | "danger" => (pct >= 90 ? "danger" : pct >= 70 ? "warn" : "up");
+  const row = (id: string, title: string, right: string, mark?: JSX.Element) => (
+    <View
+      role="button"
+      accessibilityLabel={`${id} ${title}`}
+      onPress={() => props.onTask(id)}
+      hoverStyle={hovered()}
+      style={{ minHeight: size.row, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, marginHorizontal: -10, borderRadius: 7 }}
+    >
+      {mark}
+      <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{id}</Text>
+      <Text style={{ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{title}</Text>
+      <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{right}</Text>
+    </View>
+  );
+  return (
+    <Scroll style={{ flex: 1 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
+        <If when={h()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.host} 现在不在线。`}</Text>}>
+          <View style={{ gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Dot tone="on" />
+              <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{h()!.host}</Text>
+            </View>
+            <Text style={{ fontSize: 14, color: colors.muted }}>
+              {["在线", [h()!.os ?? osOf(h()!), h()!.arch].filter(Boolean).join(" "), h()!.seen ? `心跳 ${ago(h()!.seen)}` : "", `${h()!.busy ?? 0} 个运行中`].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+          {section("资源")}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {stat("负载", `${load()}%${h()!.stats?.cores ? ` · ${h()!.stats!.cores} 核` : ""}`, load(), toneOf(load()))}
+            {stat("内存", h()!.stats?.memFreePct != null ? `已用 ${memUsed()}%` : "未知", memUsed(), toneOf(memUsed()))}
+            {stat("磁盘", `剩余 ${h()!.stats?.diskFreeGB ?? "?"} GB`, diskUsed(), toneOf(diskUsed()))}
+          </View>
+          <If when={h()!.clis?.length || h()!.accounts?.length}>
+            {section("工具与账号")}
+            <View style={{ gap: 8 }}>
+              <If when={h()!.clis?.length}>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                  <Each of={h()!.clis ?? []}>{(c) => <Badge label={c()} />}</Each>
+                </View>
+              </If>
+              <Each of={h()!.accounts ?? []}>
+                {(a) => (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Text style={{ flex: 1, fontSize: 14.5, color: colors.text }}>{`${a().cli} · ${a().name}`}</Text>
+                    <Badge label={`${ACCOUNT_STATE[a().state]?.[0] ?? a().state}${a().until ? ` 至 ${a().until!.slice(11, 16)}` : ""}`} tone={ACCOUNT_STATE[a().state]?.[1] ?? "neutral"} />
+                  </View>
+                )}
+              </Each>
+            </View>
+          </If>
+          {section("运行中")}
+          <If when={h()!.running?.length} else={<Text style={{ fontSize: 14, color: colors.faint }}>空闲</Text>}>
+            <View>
+              <Each of={h()!.running ?? []} key={(t) => t.id}>
+                {(t) => row(t().id, t().title, `${displayName(t().agent)} · ${since(t().started)}`, <Dot tone="run" />)}
+              </Each>
+            </View>
+          </If>
+          {section("最近")}
+          <If when={h()!.recent?.length} else={<Text style={{ fontSize: 14, color: colors.faint }}>还没有完成的任务</Text>}>
+            <View>
+              <Each of={h()!.recent ?? []} key={(t) => t.id}>
+                {(t) => row(t().id, t().title, t().finished ? ago(t().finished) : "",
+                  <Text style={{ width: 14, fontSize: 13, color: STATE_OF()[t().state ?? ""]?.[1] ?? colors.faint }}>{STATE_OF()[t().state ?? ""]?.[2] ?? "·"}</Text>)}
               </Each>
             </View>
           </If>
@@ -778,6 +892,8 @@ function Sidebar(props: {
   onPick: (ref: string) => void;
   task: () => string | null;
   onTask: (id: string) => void;
+  machine: () => string | null;
+  onMachine: (host: string) => void;
   onSettings: () => void;
   onHelp: () => void;
   onClose?: () => void;
@@ -869,7 +985,7 @@ function Sidebar(props: {
           <SideHeading title="机器" count={s()?.hosts.length || undefined} />
           <Each of={s()?.hosts ?? []} key={(h) => h.host}>
             {(h) => (
-              <SideRow title={`负载 ${loadOf(h())}% · 磁盘 ${h().stats?.diskFreeGB ?? "?"}GB · ${h().busy ?? 0} 个运行中`}>
+              <SideRow onPress={() => props.onMachine(h().host)} selected={props.machine() === h().host} title={`负载 ${loadOf(h())}% · 磁盘 ${h().stats?.diskFreeGB ?? "?"}GB · ${h().busy ?? 0} 个运行中`}>
                 <Dot tone="on" />
                 <Text style={rowText()}>{h().host}</Text>
                 <If when={(h().busy ?? 0) > 0}>
@@ -1364,7 +1480,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const drawer = signal(false);
   const sidebarOpen = signal(true);
   const help = signal(false);
-  const page = signal<"channel" | "team" | "task">("channel");
+  const page = signal<"channel" | "team" | "task" | "host">("channel");
+  const hostId = signal<string | null>(null);
+  const openHost = (h: string) => { hostId.set(h); page.set("host"); drawer.set(false); };
   const taskId = signal<string | null>(null);
   const openTask = (id: string) => { taskId.set(id); page.set("task"); drawer.set(false); };
   taskLink = openTask;
@@ -1605,6 +1723,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onPick={pick}
       task={() => (page() === "task" ? taskId() : null)}
       onTask={openTask}
+      machine={() => (page() === "host" ? hostId() : null)}
+      onMachine={openHost}
       onSettings={openTeam}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
@@ -1655,7 +1775,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             </View>
           </If>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : page() === "task" ? `任务 ${taskId() ?? ""}` : "团队频道"}</Text>
+            <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : page() === "task" ? `任务 ${taskId() ?? ""}` : page() === "host" ? `机器 ${hostId() ?? ""}` : "团队频道"}</Text>
             <If when={pending().length && page() === "channel"}>
               <Badge label={`${pending().length} 项待决定`} tone="warn" />
             </If>
@@ -1677,6 +1797,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
         <If when={page() === "task" && taskId()}>
           <TaskDetail hub={hub} id={taskId()!} wide={wide()} />
+        </If>
+        <If when={page() === "host" && hostId()}>
+          <MachineDetail hub={hub} host={hostId()!} wide={wide()} onTask={openTask} />
         </If>
         <If when={page() === "team"}>
           <TeamSettings hub={hub} push={push} wide={wide()} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
