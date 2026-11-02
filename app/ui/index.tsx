@@ -531,10 +531,11 @@ export function Section(props: { title: string; note?: string; style?: ViewStyle
  * An on / off switch (`nsh/base`'s `Switch`, in the gallery's look): the
  * knob springs across, the track changes color natively.
  */
-export function Toggle(props: { value: boolean; onChange: (value: boolean) => void; label?: string }) {
+export function Toggle(props: { value: boolean; onChange: (value: boolean) => void; label?: string; testID?: string }) {
   const look = switchLook(() => props.value);
   return (
     <Switch
+      testID={props.testID}
       checked={props.value}
       onChange={({ checked }) => props.onChange(checked)}
       accessibilityLabel={props.label}

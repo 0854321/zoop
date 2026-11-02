@@ -78,7 +78,7 @@ describe("login", () => {
     expect(log.starts).toEqual([{ email: "ceo@example.com" }]);
     expect(app.shows("text:/重新发送（\\d+s）/")).toBe(true);
     await app.type("id:code", "123456"); // auto-submits on the 6th digit
-    await app.waitFor("团队频道");
+    await app.waitFor("id:composer");
     expect(log.verifies).toEqual([{ email: "ceo@example.com", code: "123456" }]);
     expect(app.storage()["hub.token"]).toBe("sess");
     expect(app.storage()["hub.url"]).toBe(URL);
@@ -98,7 +98,7 @@ describe("login", () => {
     await app.submit("id:email");
     await app.waitFor("id:code");
     await app.paste("id:code", { text: "123 456" });
-    await app.waitFor("团队频道");
+    await app.waitFor("id:composer");
   });
 
   test("a wrong code, rate limits and no email configured are explained", async () => {
@@ -218,9 +218,11 @@ describe("channel", () => {
   test("sends a task with the button, and the drawer opens on phones", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts) });
-    await app.waitFor("团队频道");
+    await app.waitFor("id:composer");
     await app.press("label:菜单");
-    await app.press("label:关闭菜单");
+    await app.waitFor("待你决定");
+    await app.press("label:收起菜单");
+    await app.waitUntil(() => !app.shows("待你决定"));
     await app.type("id:composer", "截图检查\n两个平台");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1);
@@ -346,6 +348,10 @@ describe("keyboard", () => {
     await app.waitFor("id:composer");
     await app.keyboard.press("mod+,");
     await app.waitFor("团队设置");
+    // Escape pops back to the channel, one page at a time.
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("团队设置"));
+    expect(app.shows("团队频道")).toBe(true);
   });
 });
 
@@ -447,6 +453,7 @@ describe("notifications", () => {
     const log = newLog();
     const app = await open("./App.tsx", { storage: STORAGE, host: { handlers: browser(device()) }, network: server(log) });
     await app.press("id:settings-top");
+    await app.press("id:settings-notify");
     await app.waitFor("id:push-enable");
     expect(app.texts()).toContain("未开启");
     await app.press("id:push-enable");
@@ -472,6 +479,7 @@ describe("notifications", () => {
   test("a refused permission is explained", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, host: { handlers: browser(device(), "denied") }, network: server(newLog()) });
     await app.press("id:settings-top");
+    await app.press("id:settings-notify");
     await app.press("id:push-enable");
     await app.waitFor("text:/通知被拦截了/");
   });
@@ -497,7 +505,7 @@ describe("notifications", () => {
     await app.waitUntil(() => log.subs.length === 1);
     expect(app.shows("id:notify-banner")).toBe(false);
     const again = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, host: { handlers: browser(device()) }, network: server(newLog()) });
-    await again.waitFor("团队频道");
+    await again.waitFor("id:composer");
     expect(again.shows("id:notify-banner")).toBe(false);
   });
 
@@ -523,8 +531,97 @@ describe("notifications", () => {
       network: { ...server(log), [`POST ${URL}/api/auth/logout`]: { body: { ok: true } } },
     });
     await app.press("id:settings-top");
+    app.onDialog((d) => (d.title === "退出登录？" ? "退出登录" : null));
     await app.press("id:logout");
     await app.waitFor("登录 noop");
+    expect(app.dialogs()[0].title).toBe("退出登录？");
     expect(log.unsubs).toEqual([{ endpoint: "https://push.test/e1" }]);
+  });
+});
+
+describe("phones", () => {
+  const view = () => ({
+    current: {},
+    effective: {
+      agents: [{ id: "reporter", clis: ["codex", "claude"], autonomy: "onboarding" }],
+      autonomy: "onboarding",
+      routines: [{ name: "triage-inbound", every: "30m", agent: "lead", enabled: true }],
+      max_parallel: 4,
+    },
+    options: { clis: [["claude"], ["codex", "claude"], ["claude", "codex"], ["codex"]], autonomy: ["onboarding", "assisted", "autonomous"] },
+  });
+  function settingsServer(puts: unknown[]) {
+    let v = view();
+    return {
+      ...hub([]),
+      [`GET ${URL}/api/settings`]: () => ({ body: v }),
+      [`PUT ${URL}/api/settings`]: (r: { body?: string | null }) => {
+        const p = JSON.parse(r.body!);
+        puts.push(p);
+        if (p.clis) v = { ...v, effective: { ...v.effective, agents: [{ ...v.effective.agents[0], clis: p.clis.agents.reporter }] } };
+        if (p.routines) v = { ...v, effective: { ...v.effective, routines: [{ ...v.effective.routines[0], ...p.routines["triage-inbound"] }] } };
+        return { body: v };
+      },
+    };
+  }
+
+  for (const platform of ["ios", "android"] as const) {
+    test(`${platform}: settings is a grouped list whose rows push pages; back returns to the channel`, async () => {
+      const puts: unknown[] = [];
+      const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform, network: settingsServer(puts) });
+      await app.waitFor("id:composer");
+      await app.press("id:settings-top");
+      await app.waitFor("id:phone-settings");
+      for (const t of ["通知", "成员", "例行任务", "并行", "账号与连接", "退出登录"]) expect(app.shows(`id:phone-settings >> text:${t}`)).toBe(true);
+      // A member pushes its page: models and autonomy as radio rows.
+      await app.press("id:member-reporter");
+      await app.waitFor("id:phone-member");
+      await app.press("id:cli-reporter-claude");
+      await app.waitUntil(() => puts.length === 1);
+      await app.press("id:autonomy-reporter-assisted");
+      await app.waitUntil(() => puts.length === 2);
+      await app.back();
+      await app.waitUntil(() => !app.shows("id:phone-member"));
+      // A routine: a real switch and the interval.
+      await app.press("id:routine-row-triage-inbound");
+      await app.waitFor("id:phone-routine");
+      await app.press("id:routine-triage-inbound");
+      await app.press("id:every-triage-inbound-1h");
+      await app.waitUntil(() => puts.length === 4);
+      expect(puts).toEqual([
+        { clis: { agents: { reporter: ["claude"] } } },
+        { autonomy: { agents: { reporter: "assisted" } } },
+        { routines: { "triage-inbound": { enabled: false } } },
+        { routines: { "triage-inbound": { every: "1h" } } },
+      ]);
+      await app.back();
+      await app.back();
+      await app.waitUntil(() => !app.shows("id:phone-settings"));
+      expect(app.shows("id:composer")).toBe(true);
+    });
+  }
+
+  test("the drawer is a sheet from the left; a machine opens its page and back returns to the channel", async () => {
+    const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios", network: hub([]) });
+    await app.waitFor("id:composer");
+    expect(app.shows("待你决定")).toBe(false);
+    await app.press("label:菜单");
+    await app.waitFor("待你决定");
+    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
+    await app.waitFor("已用 60%");
+    expect(app.shows("待你决定")).toBe(false);
+    await app.back();
+    await app.waitUntil(() => !app.shows("已用 60%"));
+    expect(app.shows("id:composer")).toBe(true);
+  });
+
+  test("a phone browser draws its own header with a back button", async () => {
+    const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "web", network: settingsServer([]) });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:phone-settings");
+    await app.press("label:返回频道");
+    await app.waitUntil(() => !app.shows("id:phone-settings"));
+    expect(app.shows("id:composer")).toBe(true);
   });
 });

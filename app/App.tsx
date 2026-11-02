@@ -25,11 +25,12 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ViewStyle } from "nsh";
-import { Input, Scrollbar, TextView, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, Dialog, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import {
   alpha,
   colors,
+  Toggle,
   focusRing,
   hovered,
   Icon,
@@ -90,6 +91,8 @@ type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
 const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked" };
 const touch = !platform.desktop;
+/** iOS and Android draw the pages' headers (title, back, swipe back); the desktops and the web show the app's. */
+const systemHeader = platform.os === "ios" || platform.os === "android";
 const MONO = "monospace";
 
 /** Sizes: the gallery's proportions, a step larger (the owner reads this all day). */
@@ -1180,42 +1183,6 @@ function Chip(props: { label: string; on: boolean; onPress: () => void; testID?:
   );
 }
 
-function Toggle(props: { on: boolean; onPress: () => void; label: string; testID?: string }) {
-  return (
-    <View
-      role="switch"
-      testID={props.testID}
-      accessibilityLabel={props.label}
-      accessibilityState={{ checked: props.on }}
-      onPress={props.onPress}
-      focusStyle={focusRing()}
-      style={{
-        width: 40,
-        height: 24,
-        borderRadius: 12,
-        padding: 3,
-        backgroundColor: props.on ? colors.accentFill : colors.track,
-        borderWidth: 1,
-        borderColor: props.on ? "transparent" : colors.border,
-        transitionProperty: "background-color",
-        transitionDuration: 180,
-      }}
-    >
-      <View
-        style={{
-          width: 16,
-          height: 16,
-          borderRadius: 8,
-          backgroundColor: props.on ? colors.onAccent : colors.knob,
-          transform: [{ translateX: props.on ? 16 : 0 }],
-          transitionProperty: "transform",
-          transitionDuration: 180,
-        }}
-      />
-    </View>
-  );
-}
-
 /** A settings section: the gallery's Card (a title above one flat surface). */
 function Group(props: { title: string; hint?: string; children: JSX.Element }) {
   return (
@@ -1306,24 +1273,8 @@ function Steps(props: { steps: string[] }) {
 
 function NotifySettings(props: { push: Push; view: SettingsView | null; save: (patch: Record<string, unknown>) => void; wide: boolean }) {
   const push = props.push;
-  const tz = (() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
-    } catch {
-      return "Asia/Shanghai";
-    }
-  })();
-  const prefs = () => notifyPrefsOf(props.view, tz);
-  const setPrefs = (change: Partial<NotifyPrefs>) => props.save(notifyPatch({ ...prefs(), ...change, tz }));
+  const { prefs, setPrefs, state } = notifyModel(push, () => props.view, props.save);
   const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
-  const state = () => {
-    const i = push.info();
-    if (!i) return "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
-    if (push.needsHomeScreen()) return "iPhone 需要先把 noop 添加到主屏幕";
-    if (!i.supported) return "这个浏览器不支持网页推送";
-    if (i.permission === "denied") return "通知被浏览器拦截了";
-    return i.subscribed ? "已开启" : "未开启";
-  };
   return (
     <Group title="通知" hint="需要你拍板的事推送到手机；通知上可以直接选择选项。">
       <View style={{ gap: 12, paddingHorizontal: 16, paddingVertical: 14 }}>
@@ -1366,8 +1317,8 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
                 <Toggle
                   testID={`notify-${k()[0]}`}
                   label={k()[1]}
-                  on={prefs().kinds[k()[0]]}
-                  onPress={() => setPrefs({ kinds: { ...prefs().kinds, [k()[0]]: !prefs().kinds[k()[0]] } })}
+                  value={prefs().kinds[k()[0]]}
+                  onChange={(on) => setPrefs({ kinds: { ...prefs().kinds, [k()[0]]: on } })}
                 />
               </View>
             )}
@@ -1396,18 +1347,21 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
   );
 }
 
-function TeamSettings(props: { hub: Hub; push: Push; wide: boolean; onConnection: () => void; onDisconnect: () => void }) {
+/** The team's settings, shared by the settings page and the pages it pushes on phones. */
+function createSettings(hub: Hub) {
   const view = signal<SettingsView | null>(null);
   const error = signal("");
   const saved = signal("");
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
   cleanup(() => clearTimeout(savedTimer));
-  props.hub.settings().then((v) => view.set(v), (e) => error.set(String(e?.message ?? e)));
-
+  const load = () => {
+    error.set("");
+    hub.settings().then((v) => view.set(v), (e) => error.set(String(e?.message ?? e)));
+  };
   async function save(patch: Record<string, unknown>) {
     error.set("");
     try {
-      view.set(await props.hub.settings(patch));
+      view.set(await hub.settings(patch));
       saved.set("已保存");
       clearTimeout(savedTimer);
       savedTimer = setTimeout(() => saved.set(""), 1600);
@@ -1415,6 +1369,14 @@ function TeamSettings(props: { hub: Hub; push: Push; wide: boolean; onConnection
       error.set(e instanceof Error ? e.message : String(e));
     }
   }
+  return { view, error, saved, load, save };
+}
+type Settings = ReturnType<typeof createSettings>;
+
+/** The wide (desktop, tablet, wide browser) settings page. */
+function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: boolean; onConnection: () => void; onDisconnect: () => void }) {
+  const { view, error, saved, save } = props.settings;
+  props.settings.load();
   const eff = () => view()?.effective;
   const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
   const chips: ViewStyle = { flexDirection: "row", flexWrap: "wrap", gap: 6 };
@@ -1480,8 +1442,8 @@ function TeamSettings(props: { hub: Hub; push: Push; wide: boolean; onConnection
                         <Toggle
                           testID={`routine-${r().name}`}
                           label={r().name}
-                          on={r().enabled}
-                          onPress={() => save(patches.routine(r().name, { enabled: !r().enabled }))}
+                          value={r().enabled}
+                          onChange={(on) => save(patches.routine(r().name, { enabled: on }))}
                         />
                         <Text style={{ flex: 1, fontSize: 15.5, color: r().enabled ? colors.text : colors.faint }}>{r().name}</Text>
                         <Text style={{ fontSize: 13, color: colors.faint }}>{r().agent}</Text>
@@ -1532,6 +1494,396 @@ function TeamSettings(props: { hub: Hub; push: Push; wide: boolean; onConnection
   );
 }
 
+// ---------------------------------------------------------------- settings on phones (iOS / Android Settings)
+
+/** What the notification settings show and change, for both layouts. */
+function notifyModel(push: Push, view: () => SettingsView | null, save: (patch: Record<string, unknown>) => void) {
+  const tz = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+    } catch {
+      return "Asia/Shanghai";
+    }
+  })();
+  const prefs = () => notifyPrefsOf(view(), tz);
+  const setPrefs = (change: Partial<NotifyPrefs>) => save(notifyPatch({ ...prefs(), ...change, tz }));
+  const state = () => {
+    const i = push.info();
+    if (!i) return "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
+    if (push.needsHomeScreen()) return "iPhone 需要先把 noop 添加到主屏幕";
+    if (!i.supported) return "这个浏览器不支持网页推送";
+    if (i.permission === "denied") return "通知被浏览器拦截了";
+    return i.subscribed ? "已开启" : "未开启";
+  };
+  /** The short form for a row's value. */
+  const short = () => {
+    const i = push.info();
+    if (!i || !i.supported || push.needsHomeScreen()) return "不可用";
+    if (i.permission === "denied") return "已拦截";
+    return i.subscribed ? "已开启" : "未开启";
+  };
+  return { prefs, setPrefs, state, short };
+}
+
+/** A grouped, inset section: a muted title above, rows on one rounded surface, a hint below. */
+function Section(props: { title?: string; hint?: string; testID?: string; children: JSX.Element }) {
+  return (
+    <View testID={props.testID} style={{ gap: 7 }}>
+      <If when={props.title}>
+        <Text style={{ paddingHorizontal: 32, fontSize: 13, color: colors.muted }}>{props.title}</Text>
+      </If>
+      <View style={{ marginHorizontal: 16, borderRadius: radius.card, borderCurve: "continuous", backgroundColor: colors.surface, overflow: "hidden" }}>{props.children}</View>
+      <If when={props.hint}>
+        <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.faint }}>{props.hint}</Text>
+      </If>
+    </View>
+  );
+}
+
+/** The hairline above every row of a section but its first, inset to the text. */
+function Hairline(props: { inset?: number }) {
+  return <View style={{ position: "absolute", top: 0, left: props.inset ?? 16, right: 0, height: 0.5, backgroundColor: colors.border }} />;
+}
+
+/** A row of a section, at least 48 pt tall: a label (and a line under it), then a value, a control or a chevron. */
+function SetRow(props: {
+  label: string;
+  detail?: string;
+  value?: string;
+  first?: boolean;
+  chevron?: boolean;
+  tone?: "danger" | "accent";
+  leading?: JSX.Element;
+  trailing?: JSX.Element;
+  inset?: number;
+  disabled?: boolean;
+  onPress?: () => void;
+  testID?: string;
+}) {
+  const press = () => (props.disabled ? undefined : props.onPress);
+  return (
+    <View
+      role={props.onPress ? "button" : undefined}
+      testID={props.testID}
+      accessibilityLabel={props.onPress ? [props.label, props.value].filter(Boolean).join("，") : undefined}
+      accessibilityState={props.onPress ? { disabled: !!props.disabled } : undefined}
+      onPress={press()}
+      class={props.onPress && !props.disabled ? "active:bg-raised" : undefined}
+      style={{ minHeight: 48, flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 16, paddingRight: 14, paddingVertical: 10 }}
+    >
+      <If when={!props.first}>
+        <Hairline inset={props.inset} />
+      </If>
+      {props.leading}
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text
+          style={{
+            fontSize: 16,
+            textAlign: props.tone === "danger" && !props.trailing && !props.chevron ? "center" : "left",
+            color: props.disabled ? colors.faint : props.tone === "danger" ? colors.danger : props.tone === "accent" ? colors.info : colors.text,
+            numberOfLines: 1,
+          }}
+        >
+          {props.label}
+        </Text>
+        <If when={props.detail}>
+          <Text style={{ fontSize: 13, lineHeight: 18, color: colors.muted }}>{props.detail}</Text>
+        </If>
+      </View>
+      <If when={props.value}>
+        <Text style={{ flexShrink: 1, fontSize: 16, color: colors.muted, numberOfLines: 1 }}>{props.value}</Text>
+      </If>
+      {props.trailing}
+      <If when={props.chevron}>
+        <Icon name="chevron" size={14} tint={colors.faint} />
+      </If>
+    </View>
+  );
+}
+
+type Choice = { id: string; label: string; detail?: string; testID: string };
+
+/** Pick one of a few: a radio set of rows, the chosen one checked. */
+function Choices(props: { label: string; choices: Choice[]; selected: string | null; onPick: (id: string) => void }) {
+  return (
+    <RadioGroup>
+      <Each of={props.choices} key={(c) => c.id}>
+        {(c, i) => (
+          <Radio
+            testID={c().testID}
+            checked={c().id === props.selected}
+            onChange={() => props.onPick(c().id)}
+            accessibilityLabel={c().label}
+            class="active:bg-raised"
+            style={{ minHeight: 48, flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 16, paddingRight: 16, paddingVertical: 10 }}
+          >
+            <If when={i() > 0}>
+              <Hairline />
+            </If>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ fontSize: 16, color: colors.text }}>{c().label}</Text>
+              <If when={c().detail}>
+                <Text style={{ fontSize: 13, color: colors.muted }}>{c().detail}</Text>
+              </If>
+            </View>
+            <View style={{ width: 20, alignItems: "center" }}>
+              <If when={c().id === props.selected}>
+                <Icon name="check" size={17} tint={colors.info} />
+              </If>
+            </View>
+          </Radio>
+        )}
+      </Each>
+    </RadioGroup>
+  );
+}
+
+/** A page of sections on the grouped background. */
+function Grouped(props: { testID?: string; children: JSX.Element }) {
+  return (
+    <Scroll testID={props.testID} style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ width: "100%", maxWidth: 640, alignSelf: "center", gap: 28, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>{props.children}</View>
+    </Scroll>
+  );
+}
+
+function SaveNote(props: { settings: Settings }) {
+  return (
+    <If when={props.settings.error() || props.settings.saved()}>
+      <Text testID="settings-note" style={{ paddingHorizontal: 32, fontSize: 13, color: props.settings.error() ? colors.danger : colors.up }}>
+        {props.settings.error() || props.settings.saved()}
+      </Text>
+    </If>
+  );
+}
+
+const routineValue = (r: { enabled: boolean; every: string }) => (r.enabled ? `每 ${r.every}` : "已关闭");
+
+/** 设置 on a phone: a list of sections; 通知, each member and each routine push pages of their own. */
+function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen: (r: Route) => void; onDisconnect: () => void }) {
+  const { view, error, save } = props.settings;
+  props.settings.load();
+  const notify = notifyModel(props.push, view, save);
+  const eff = () => view()?.effective;
+  async function logout() {
+    const r = await AlertDialog.show({
+      title: "退出登录？",
+      description: "这台设备会关闭通知，下次打开需要重新登录。",
+      actions: [
+        { id: "cancel", label: "取消", role: "cancel" },
+        { id: "logout", label: "退出登录", role: "destructive" },
+      ],
+    });
+    if (r.action === "logout") props.onDisconnect();
+  }
+  return (
+    <Grouped testID="phone-settings">
+      <Section title="通知" hint="需要你拍板的事推送到这台设备；通知上可以直接选择选项。">
+        <SetRow first label="通知" value={notify.short()} chevron onPress={() => props.onOpen({ name: "notify" })} testID="settings-notify" />
+      </Section>
+      <SaveNote settings={props.settings} />
+      <If when={eff()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>{error() ? "设置读取失败" : "读取中…"}</Text>}>
+        {(e) => (
+          <View style={{ gap: 28 }}>
+            <Section title="成员" hint="模型：先用哪个、失败或额度用尽时换哪个；自主程度：多大的事需要先问你。">
+              <Each of={e().agents} key={(a) => a.id}>
+                {(a, i) => (
+                  <SetRow
+                    first={i() === 0}
+                    inset={58}
+                    leading={<Avatar from={a().id} />}
+                    label={a().id}
+                    detail={`${cliLabel(a().clis)} · ${autonomyLabel(a().autonomy)}`}
+                    chevron
+                    onPress={() => props.onOpen({ name: "member", id: a().id })}
+                    testID={`member-${a().id}`}
+                  />
+                )}
+              </Each>
+            </Section>
+            <Section title="例行任务" hint="团队定时自己做的事。">
+              <Each of={e().routines} key={(r) => r.name}>
+                {(r, i) => (
+                  <SetRow
+                    first={i() === 0}
+                    label={r().name}
+                    detail={r().agent}
+                    value={routineValue(r())}
+                    chevron
+                    onPress={() => props.onOpen({ name: "routine", routine: r().name })}
+                    testID={`routine-row-${r().name}`}
+                  />
+                )}
+              </Each>
+            </Section>
+            <Section title="并行" hint="每台机器同时运行的任务数，1 到 32。">
+              <SetRow
+                first
+                label="同时运行"
+                trailing={
+                  <NumberInput
+                    testID="parallel"
+                    accessibilityLabel="每台机器同时运行的任务数"
+                    value={e().max_parallel ?? 2}
+                    min={1}
+                    max={32}
+                    onChange={({ value }) => {
+                      if (value != null && value >= 1 && value <= 32 && value !== untracked(eff)?.max_parallel) save(patches.maxParallel(value));
+                    }}
+                    style={{ flexDirection: "row", alignItems: "center", height: 36, borderRadius: radius.control, backgroundColor: colors.raised }}
+                    inputStyle={{ width: 40, textAlign: "center", fontSize: 17, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] }}
+                    decrementButtonClass="active:opacity-50 disabled:opacity-30"
+                    incrementButtonClass="active:opacity-50 disabled:opacity-30"
+                    decrementButtonStyle={{ width: 44, height: 36, alignItems: "center", justifyContent: "center" }}
+                    incrementButtonStyle={{ width: 44, height: 36, alignItems: "center", justifyContent: "center" }}
+                    decrementButton={<Icon name="minus" size={16} tint={colors.text} />}
+                    incrementButton={<Icon name="plus" size={16} tint={colors.text} />}
+                  />
+                }
+              />
+            </Section>
+          </View>
+        )}
+      </If>
+      <Section title="账号与连接" hint="登录状态保存在这台设备上，下次打开自动连接。">
+        <SetRow
+          first
+          leading={<Dot tone={props.hub.conn() === "live" ? "on" : props.hub.conn() === "unauthorized" ? "bad" : "wait"} />}
+          label={props.hub.cfg.url.replace(/^https?:\/\//, "")}
+        />
+        <SetRow label="退出登录" tone="danger" onPress={() => void logout()} testID="logout" inset={0} />
+      </Section>
+    </Grouped>
+  );
+}
+
+/** 通知 on a phone: this device, what is pushed, and the quiet hours. */
+function PhoneNotify(props: { push: Push; settings: Settings }) {
+  const push = props.push;
+  const { view, save } = props.settings;
+  const notify = notifyModel(push, view, save);
+  return (
+    <Grouped testID="phone-notify">
+      <Section title="本设备">
+        <SetRow first label={push.info()?.device ?? "本设备"} trailing={<Text testID="push-state" style={{ fontSize: 16, color: colors.muted }}>{notify.short()}</Text>} />
+        <If
+          when={push.info()?.subscribed}
+          else={<SetRow label="开启通知" tone="accent" disabled={!push.canAsk() || push.busy()} onPress={push.enable} testID="push-enable" />}
+        >
+          <SetRow label="发送测试通知" tone="accent" disabled={push.busy()} onPress={push.test} testID="push-test" />
+          <SetRow label="关闭本设备通知" tone="danger" onPress={push.disable} testID="push-disable" />
+        </If>
+      </Section>
+      <If when={push.note()}>
+        <Text testID="push-note" style={{ marginTop: -20, paddingHorizontal: 32, fontSize: 13, color: push.note()!.tone === "ok" ? colors.up : colors.danger }}>{push.note()!.text}</Text>
+      </If>
+      <If when={push.needsHomeScreen()}>
+        <Section title="在 iPhone 上开启通知">
+          <View style={{ padding: 16 }}>
+            <Steps steps={["在 Safari 里点底部的「分享」按钮", "选「添加到主屏幕」，再点「添加」", "从主屏幕打开 noop，登录后回到这里点「开启通知」"]} />
+          </View>
+        </Section>
+      </If>
+      <If when={push.info()?.permission === "denied" && !push.needsHomeScreen()}>
+        <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.muted }}>{`${notify.state()}：在浏览器的网站设置（或系统设置 → 通知）里允许 noop，然后刷新页面再开启。`}</Text>
+      </If>
+      <If when={view()}>
+        <Section title="推送哪些">
+          <Each of={NOTIFY_KINDS as unknown as [NotifyKind, string][]}>
+            {(k, i) => (
+              <SetRow
+                first={i() === 0}
+                label={k()[1]}
+                trailing={
+                  <Toggle
+                    testID={`notify-${k()[0]}`}
+                    label={k()[1]}
+                    value={notify.prefs().kinds[k()[0]]}
+                    onChange={(on) => notify.setPrefs({ kinds: { ...notify.prefs().kinds, [k()[0]]: on } })}
+                  />
+                }
+              />
+            )}
+          </Each>
+        </Section>
+        <Section title="免打扰时段" hint={`这段时间只记下，不推送（时区 ${notify.prefs().tz}）。`}>
+          <Choices
+            label="免打扰时段"
+            choices={QUIET_PRESETS.map((q) => ({ id: quietKey(q.value), label: q.label, testID: `quiet-${quietKey(q.value)}` }))}
+            selected={quietKey(notify.prefs().quiet_hours)}
+            onPick={(id) => notify.setPrefs({ quiet_hours: QUIET_PRESETS.find((q) => quietKey(q.value) === id)!.value })}
+          />
+        </Section>
+      </If>
+    </Grouped>
+  );
+}
+
+/** A member on a phone: its models and its autonomy. */
+function PhoneMember(props: { id: string; settings: Settings }) {
+  const { view, save } = props.settings;
+  const agent = () => view()?.effective.agents.find((a) => a.id === props.id);
+  return (
+    <Grouped testID="phone-member">
+      <If when={agent()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>没有这个成员</Text>}>
+        {(a) => (
+          <>
+            <Section title="模型" hint="先用哪个；失败或额度用尽时换下一个。">
+              <Choices
+                label="模型"
+                choices={view()!.options.clis.map((c) => ({ id: cliKey(c), label: cliLabel(c), testID: `cli-${props.id}-${cliKey(c)}` }))}
+                selected={cliKey(a().clis)}
+                onPick={(id) => save(patches.clis(props.id, view()!.options.clis.find((c) => cliKey(c) === id)!))}
+              />
+            </Section>
+            <Section title="自主程度" hint="多大的事需要先问你。">
+              <Choices
+                label="自主程度"
+                choices={view()!.options.autonomy.map((l) => ({ id: l, label: autonomyLabel(l), testID: `autonomy-${props.id}-${l}` }))}
+                selected={a().autonomy}
+                onPick={(l) => save(patches.autonomy(props.id, l))}
+              />
+            </Section>
+            <SaveNote settings={props.settings} />
+          </>
+        )}
+      </If>
+    </Grouped>
+  );
+}
+
+/** A routine on a phone: on or off, and how often. */
+function PhoneRoutine(props: { name: string; settings: Settings }) {
+  const { view, save } = props.settings;
+  const routine = () => view()?.effective.routines.find((r) => r.name === props.name);
+  return (
+    <Grouped testID="phone-routine">
+      <If when={routine()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>没有这个例行任务</Text>}>
+        {(r) => (
+          <>
+            <Section hint={`由 ${r().agent} 执行。`}>
+              <SetRow
+                first
+                label="启用"
+                trailing={<Toggle testID={`routine-${props.name}`} label="启用" value={r().enabled} onChange={(on) => save(patches.routine(props.name, { enabled: on }))} />}
+              />
+            </Section>
+            <Section title="运行间隔">
+              <Choices
+                label="运行间隔"
+                choices={intervalsWith(r().every).map((iv) => ({ id: iv, label: `每 ${iv}`, testID: `every-${props.name}-${iv}` }))}
+                selected={r().every}
+                onPick={(iv) => save(patches.routine(props.name, { every: iv }))}
+              />
+            </Section>
+            <SaveNote settings={props.settings} />
+          </>
+        )}
+      </If>
+    </Grouped>
+  );
+}
+
 // ---------------------------------------------------------------- keyboard help
 
 const SHORTCUTS: [string, string][] = [
@@ -1550,11 +1902,20 @@ const SHORTCUTS: [string, string][] = [
   ["?", "快捷键一览"],
 ];
 
-function HelpSheet(props: { onClose: () => void }) {
+/** The keyboard shortcuts, in a `Dialog`: Escape, the backdrop and the close button close it. */
+function HelpSheet(props: { open: boolean; onClose: () => void }) {
   return (
-    <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <View onPress={props.onClose} accessibilityLabel="关闭快捷键" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.35)" }} />
+    <Dialog
+      testID="help"
+      open={props.open}
+      animation="fade"
+      onOpenChange={({ open }) => !open && props.onClose()}
+      backdropClass="bg-scrim"
+      backdropTestID="help-backdrop"
+      style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16, pointerEvents: "box-none" }}
+    >
       <View
+        accessibilityLabel="键盘快捷键"
         style={{
           width: "100%",
           maxWidth: 520,
@@ -1562,7 +1923,6 @@ function HelpSheet(props: { onClose: () => void }) {
           borderWidth: 1,
           borderColor: colors.border,
           backgroundColor: colors.surface,
-          boxShadow: "0 24px 60px rgba(0,0,0,0.25)",
           overflow: "hidden",
         }}
       >
@@ -1584,11 +1944,22 @@ function HelpSheet(props: { onClose: () => void }) {
         </View>
         <Text style={{ fontSize: 13, color: colors.faint, paddingHorizontal: 20, paddingBottom: 16 }}>单键快捷键在输入框里不生效，先按 Esc 离开输入框。</Text>
       </View>
-    </View>
+    </Dialog>
   );
 }
 
 // ---------------------------------------------------------------- chat
+
+/** The pages of the stack: the channel, what the sidebar opens, and settings with the pages it pushes on phones. */
+type Route =
+  | { name: "channel" }
+  | { name: "team" }
+  | { name: "task"; id: string }
+  | { name: "host"; host: string }
+  | { name: "notify" }
+  | { name: "member"; id: string }
+  | { name: "routine"; routine: string };
+const CHANNEL: Route = { name: "channel" };
 
 function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => void; onDisconnect: () => void }) {
   const hub = props.hub;
@@ -1597,15 +1968,24 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const drawer = signal(false);
   const sidebarOpen = signal(true);
   const help = signal(false);
-  const page = signal<"channel" | "team" | "task" | "host">("channel");
-  const hostId = signal<string | null>(null);
-  const openHost = (h: string) => { hostId.set(h); page.set("host"); drawer.set(false); };
-  const taskId = signal<string | null>(null);
-  const openTask = (id: string) => { taskId.set(id); page.set("task"); drawer.set(false); };
+  const settings = createSettings(hub);
+  // The pages: the channel at the bottom, what the sidebar, a link or settings opened above it.
+  const nav = createNavStack<Route>([CHANNEL]);
+  const top = () => { const r = nav.routes(); return r[r.length - 1]; };
+  const onChannel = () => nav.routes().length === 1;
+  /** Shows a page over the channel, in place of the one shown (the sidebar's pages are siblings). */
+  const show = (...routes: Route[]) => { drawer.set(false); nav.setRoutes([CHANNEL, ...routes]); };
+  const openHost = (h: string) => show({ name: "host", host: h });
+  /** A task: from a machine's page it goes on top (back returns to the machine), else in place. */
+  const openTask = (id: string) => {
+    const t = untracked(top);
+    if (t.name === "host") { drawer.set(false); nav.push({ name: "task", id }); }
+    else show({ name: "task", id });
+  };
   taskLink = openTask;
   taskState = (id) => { const s = props.hub.status(); return [...(s?.active ?? []), ...(s?.recent ?? [])].find((t) => t.id === id)?.state ?? (s?.active.some((t) => t.id === id) ? "active" : undefined); };
   // Entering the channel (first load, back from a task or settings) shows the latest messages.
-  effect(() => { if (page() === "channel") { atEnd.set(true); unseen.set(0); toEnd(); } });
+  effect(() => { if (onChannel()) { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
   const replyTo = signal<string | null>(null);
   const focused = signal(false);
@@ -1669,7 +2049,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   const reply = (ref: string) => {
     replyTo.set(ref);
-    if (page() !== "channel") page.set("channel");
+    if (!untracked(onChannel)) nav.popToRoot();
     composer?.focus();
   };
 
@@ -1773,7 +2153,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   function pick(ref: string) {
     drawer.set(false);
-    page.set("channel");
+    nav.popToRoot();
     chosen.set(ref);
     hostCall("clearNotifications", { ref });
     const y = cardY.get(ref);
@@ -1851,13 +2231,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   function choose(n: number) {
     const ref = target();
     const e = pending().find((x) => x.ref === ref);
-    if (!e || page() !== "channel") return;
+    if (!e || !onChannel()) return;
     const c = choicesOf(e)[n];
     if (c) answer(e.ref!, c);
   }
   const openTeam = () => {
-    drawer.set(false);
-    page.set(page() === "team" ? "channel" : "team");
+    if (untracked(top).name === "team") { drawer.set(false); nav.popToRoot(); }
+    else show({ name: "team" });
   };
 
   // Shortcuts. Single keys never fire while typing (`notEditing`).
@@ -1885,7 +2265,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     else if (drawer()) drawer.set(false);
     else if (replyTo()) replyTo.set(null);
     else if (focused()) composer?.blur();
-    else if (page() === "team") page.set("channel");
+    else if (nav.routes().length > 1) nav.pop();
   }, { when: "always" });
 
   const connLabel = () => ({ connecting: "连接中…", live: "实时", offline: "已断开，重连中…", unauthorized: "登录已过期" })[hub.conn()];
@@ -1895,90 +2275,22 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       hub={hub}
       target={target}
       onPick={pick}
-      task={() => (page() === "task" ? taskId() : null)}
+      task={() => { const t = top(); return t.name === "task" ? t.id : null; }}
       onTask={openTask}
-      machine={() => (page() === "host" ? hostId() : null)}
+      machine={() => { const t = top(); return t.name === "host" ? t.host : null; }}
       onMachine={openHost}
       onSettings={openTeam}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
       onCollapse={inDrawer ? undefined : () => sidebarOpen.set(false)}
-      home={() => page() === "channel"}
-      onHome={() => { page.set("channel"); drawer.set(false); }}
+      home={onChannel}
+      onHome={() => { drawer.set(false); nav.popToRoot(); }}
     />
   );
-  const gutter = () => (wide() ? 32 : 16);
-
-  return (
-    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}>
-      <If when={wide() && sidebarOpen()}>
-        <View style={{ width: size.sidebar, borderRightWidth: 1, borderRightColor: colors.sidebarBorder }}>{sidebar(false)}</View>
-      </If>
-      <View style={{ flex: 1, minWidth: 0, backgroundColor: colors.background }}>
-        {/* The toolbar: the gallery's DemoPane bar, a breadcrumb and the tools. */}
-        <View
-          desktop={{ windowDrag: true }}
-          style={{
-            height: size.bar,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 6,
-            paddingLeft: (wide() && sidebarOpen() ? 0 : hasWindow ? titleBar().left : 0) + (wide() ? 24 : 8),
-            paddingRight: (hasWindow ? titleBar().right : 0) + (wide() ? 16 : 8),
-            borderBottomWidth: 1,
-            borderBottomColor: colors.line,
-          }}
-        >
-          <If when={!wide()}>
-            <ToolButton icon="menu" label="菜单" onPress={() => drawer.set(true)} />
-          </If>
-          <If when={wide() && !sidebarOpen()}>
-            <ToolButton icon="sidebar" label="显示侧栏" shortcut={keymap.label("mod+b")} onPress={() => sidebarOpen.set(true)} />
-          </If>
-          <If when={page() !== "channel"}>
-            <View
-              role="button"
-              accessibilityLabel="返回频道"
-              onPress={() => page.set("channel")}
-              hoverStyle={hovered()}
-              style={{ height: 36, flexDirection: "row", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 10, borderRadius: radius.control }}
-            >
-              <Icon name="back" size={18} tint={colors.accent} />
-              <Text style={{ fontSize: 15, fontWeight: "500", color: colors.accent }}>频道</Text>
-            </View>
-          </If>
-          <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : page() === "task" ? `任务 ${taskId() ?? ""}` : page() === "host" ? `机器 ${hostId() ?? ""}` : "团队频道"}</Text>
-            <If when={pending().length && page() === "channel"}>
-              <Badge label={`${pending().length} 项待决定`} tone="warn" />
-            </If>
-          </View>
-          <View
-            tooltip={<Tip label={hub.cfg.url} />}
-            accessibilityLabel={connLabel()}
-            style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11, borderRadius: 15, backgroundColor: hub.conn() === "unauthorized" ? tints.danger : colors.raised }}
-          >
-            <Dot tone={connTone()} />
-            <If when={wide()}>
-              <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
-            </If>
-          </View>
-          <If when={!wide()}>
-            <ToolButton icon="sliders" label="设置" onPress={openTeam} testID="settings-top" />
-          </If>
-        </View>
-
-        <If when={page() === "task" && taskId()}>
-          <TaskDetail hub={hub} id={taskId()!} wide={wide()} />
-        </If>
-        <If when={page() === "host" && hostId()}>
-          <MachineDetail hub={hub} host={hostId()!} wide={wide()} onTask={openTask} />
-        </If>
-        <If when={page() === "team"}>
-          <TeamSettings hub={hub} push={push} wide={wide()} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
-        </If>
-        <If when={page() === "channel"}>
+  /** The channel: the timeline and the composer. */
+  const channelPage = () => (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
           <View style={{ flex: 1 }}>
             <Scroll
               ref={(r) => (scroller = r)}
@@ -2010,7 +2322,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         onPress={() => {
                           dismissSuggest();
                           if (push.canAsk()) push.enable();
-                          else page.set("team");
+                          else if (wide()) show({ name: "team" });
+                          else show({ name: "team" }, { name: "notify" });
                         }}
                       />
                       <Btn label="以后再说" kind="ghost" testID="notify-banner-later" onPress={dismissSuggest} />
@@ -2284,31 +2597,146 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               </View>
             </View>
           </View>
+      </View>
+  );
+
+  const gutter = () => (wide() ? 32 : 16);
+  const titleOf = (r: Route): string => {
+    switch (r.name) {
+      case "channel": return "团队频道";
+      case "team": return wide() ? "团队设置" : "设置";
+      case "task": return `任务 ${r.id}`;
+      case "host": return `机器 ${r.host}`;
+      case "notify": return "通知";
+      case "member": return r.id;
+      case "routine": return r.routine;
+    }
+  };
+  /** The back button's label, the page below's short name. */
+  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : titleOf(r));
+  const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
+  const connPill = () => (
+    <View
+      tooltip={<Tip label={hub.cfg.url} />}
+      accessibilityLabel={connLabel()}
+      testID="conn"
+      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11, borderRadius: 15, backgroundColor: hub.conn() === "unauthorized" ? tints.danger : colors.raised }}
+    >
+      <Dot tone={connTone()} />
+      <If when={wide()}>
+        <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
+      </If>
+    </View>
+  );
+  /** The page's header on the desktops and the web (the gallery's DemoPane bar): iOS and Android show the system's. */
+  const Bar = (p: { route: Route }) => (
+    <View
+      desktop={{ windowDrag: true }}
+      style={{
+        height: size.bar,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        paddingLeft: (wide() && sidebarOpen() ? 0 : hasWindow ? titleBar().left : 0) + (wide() ? 24 : 8),
+        paddingRight: (hasWindow ? titleBar().right : 0) + (wide() ? 16 : 8),
+        borderBottomWidth: 1,
+        borderBottomColor: colors.line,
+        backgroundColor: colors.background,
+      }}
+    >
+      <If when={!wide() && p.route === CHANNEL}>
+        <ToolButton icon="menu" label="菜单" onPress={() => drawer.set(true)} />
+      </If>
+      <If when={wide() && !sidebarOpen()}>
+        <ToolButton icon="sidebar" label="显示侧栏" shortcut={keymap.label("mod+b")} onPress={() => sidebarOpen.set(true)} />
+      </If>
+      <If when={below(p.route)}>
+        {(b) => (
+          <View
+            role="button"
+            accessibilityLabel={`返回${backTitle(b())}`}
+            onPress={() => nav.pop()}
+            hoverStyle={hovered()}
+            style={{ height: touch ? 44 : 36, flexDirection: "row", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 10, borderRadius: radius.control }}
+          >
+            <Icon name="back" size={18} tint={colors.accent} />
+            <Text style={{ fontSize: 15, fontWeight: "500", color: colors.accent }}>{backTitle(b())}</Text>
+          </View>
+        )}
+      </If>
+      <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{titleOf(p.route)}</Text>
+        <If when={pending().length && p.route === CHANNEL}>
+          <Badge label={`${pending().length} 项待决定`} tone="warn" />
         </If>
       </View>
-
-      <If when={!wide() && drawer()}>
-        <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
-          <View
-            onPress={() => drawer.set(false)}
-            accessibilityLabel="关闭菜单"
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.4)" }}
-          />
-          <View
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: 0,
-              width: Math.min(size.sidebar + 16, windowSize().width * 0.86),
-              boxShadow: "0 0 40px rgba(0,0,0,0.25)",
-              backgroundColor: colors.sidebar,
-            }}
-          >
-            {sidebar(true)}
-          </View>
-        </View>
+      {connPill()}
+      <If when={!wide() && p.route === CHANNEL}>
+        <ToolButton icon="sliders" label="设置" onPress={openTeam} testID="settings-top" />
       </If>
+    </View>
+  );
+  const content = (r: Route) => {
+    switch (r.name) {
+      case "channel": return channelPage();
+      case "task": return <TaskDetail hub={hub} id={r.id} wide={wide()} />;
+      case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
+      case "team":
+        return (
+          <If
+            when={wide()}
+            else={<PhoneSettings hub={hub} push={push} settings={settings} onOpen={(x) => nav.push(x)} onDisconnect={props.onDisconnect} />}
+          >
+            <TeamSettings hub={hub} push={push} settings={settings} wide={wide()} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
+          </If>
+        );
+      case "notify": return <PhoneNotify push={push} settings={settings} />;
+      case "member": return <PhoneMember id={r.id} settings={settings} />;
+      case "routine": return <PhoneRoutine name={r.routine} settings={settings} />;
+    }
+  };
+
+  return (
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}>
+      <If when={wide() && sidebarOpen()}>
+        <View style={{ width: size.sidebar, borderRightWidth: 1, borderRightColor: colors.sidebarBorder }}>{sidebar(false)}</View>
+      </If>
+      <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
+        {(route) => (
+          <NavPage
+            testID={`page-${route.name}`}
+            title={titleOf(route)}
+            header={systemHeader ? undefined : <Bar route={route} />}
+            headerBackTitle={backTitle(route)}
+            headerLeft={systemHeader && route === CHANNEL && !wide() ? <ToolButton icon="menu" label="菜单" onPress={() => drawer.set(true)} /> : undefined}
+            headerRight={
+              systemHeader ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  {connPill()}
+                  <If when={route === CHANNEL}>
+                    <ToolButton icon="sliders" label="设置" onPress={openTeam} testID="settings-top" />
+                  </If>
+                </View>
+              ) : undefined
+            }
+            style={{ backgroundColor: colors.background }}
+          >
+            {content(route)}
+          </NavPage>
+        )}
+      </NavStack>
+
+      {/* Phones: the sidebar slides in from the left edge. */}
+      <Sheet
+        testID="drawer"
+        side="left"
+        open={drawer() && !wide()}
+        onOpenChange={({ open }) => { if (!open) drawer.set(false); }}
+        backdropClass="bg-scrim"
+        popupStyle={{ width: Math.min(size.sidebar + 16, windowSize().width * 0.86), paddingTop: touch ? safeArea().top : 0, backgroundColor: colors.sidebar }}
+      >
+        {sidebar(true)}
+      </Sheet>
 
       <If when={toast()}>
         {(t) => (
@@ -2345,9 +2773,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         )}
       </If>
 
-      <If when={help()}>
-        <HelpSheet onClose={() => help.set(false)} />
-      </If>
+      <HelpSheet open={help()} onClose={() => help.set(false)} />
     </View>
   );
 }
@@ -2648,7 +3074,7 @@ function App() {
     config.set(null);
   }
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: touch ? safeArea().top : 0 }}>
+    <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: touch && !(systemHeader && config()) ? safeArea().top : 0 }}>
       <If when={ready()}>
         <If
           when={config()}
