@@ -190,12 +190,33 @@ export function status() {
 const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs", "commands"]; // whitelisted top-level keys
 
 /** What an agent is for, from its profile's first line: "# Name (中文名) — what it does". */
+/** Chinese titles and one-liners for the built-in roles (a profile's own Chinese "(标题)" and text still win where present). */
+const ROLE_ZH: Record<string, { title: string; about: string }> = {
+  apprentice: { title: "学徒", about: "从你自己的 AI 会话里学习你怎么做事、怎么判断、偏好什么" },
+  architect: { title: "团队架构师", about: "持续调整这个团队的规则、提示词、记忆和角色，贴合你真实的工作" },
+  "chief-of-staff": { title: "幕僚长", about: "团队空闲时给你列出可以直接开干的下一步选项" },
+  dispatcher: { title: "分诊调度", about: "扫描所有进来的信号，拆成任务交给对应成员" },
+  lead: { title: "负责人", about: "任务的默认负责人，决定一件事需要走多少流程" },
+  "ops-watcher": { title: "线上值守", about: "盯线上告警和 CI 健康" },
+  "oss-triage": { title: "开源社区", about: "处理你的开源项目里的 issue" },
+  "release-manager": { title: "发布", about: "版本号、CHANGELOG、Homebrew 和软件包发布" },
+  reporter: { title: "日报 / 周报", about: "根据日志、提交和 GitHub 动态写日报、周报和 OKR 进展" },
+  reviewer: { title: "PR 审查", about: "仔细审查并实际验证你项目上的 PR，尤其是别人提的" },
+  "rust-maintainer": { title: "Rust / GPUI 维护", about: "维护 nsh、gpui-kit、gpui-fast 等 Rust 项目" },
+};
+const hasHan = (s?: string) => !!s && /\p{Script=Han}/u.test(s);
+
 export function agentRole(agent: string): { title?: string; about?: string } {
   const p = P("agents", agent, "profile.md");
   const head = existsSync(p) ? (readFileSync(p, "utf8").split("\n").find((l) => l.startsWith("# ")) ?? "") : "";
   const m = head.match(/^#\s+(.+?)\s*(?:\(([^)]+)\))?\s*(?:[—–-]+\s*(.+))?$/);
-  if (!m) return {};
-  return { title: (m[2] ?? m[1]).trim(), about: m[3]?.trim() };
+  const zh = ROLE_ZH[agent];
+  const title = m ? (m[2] ?? m[1]).trim() : undefined;
+  const about = m?.[3]?.trim();
+  return {
+    title: hasHan(title) ? title : (zh?.title ?? title),
+    about: hasHan(about) ? about : (zh?.about ?? about),
+  };
 }
 
 /** What each built-in routine does, for the settings page (a routine's own `desc` in config.toml wins). */
