@@ -277,9 +277,9 @@ function Kbd(props: { k: string; on?: string }) {
   return (
     <View
       style={{
-        minWidth: 20,
-        height: 20,
-        paddingHorizontal: 5,
+        minWidth: 22,
+        height: 22,
+        paddingHorizontal: 6,
         alignItems: "center",
         justifyContent: "center",
         borderRadius: 5,
@@ -288,7 +288,7 @@ function Kbd(props: { k: string; on?: string }) {
         backgroundColor: props.on ? "transparent" : colors.raised,
       }}
     >
-      <Text style={{ fontSize: 11.5, fontWeight: "500", color: props.on ?? colors.muted, fontVariant: ["tabular-nums"] }}>{props.k}</Text>
+      <Text style={{ fontSize: 12.5, fontWeight: "500", color: props.on ?? colors.muted, fontVariant: ["tabular-nums"] }}>{props.k}</Text>
     </View>
   );
 }
@@ -577,7 +577,7 @@ function Message(props: {
                 <Text style={{ fontSize: 13, color: colors.up }}>✓ 已回复</Text>
               </If>
               <If when={targeted() && !touch}>
-                <Text style={{ fontSize: 12.5, color: colors.faint }}>按数字键选择 · R 回复</Text>
+                <Text style={{ fontSize: 13, color: colors.muted }}>按数字键选择 · R 回复</Text>
               </If>
             </View>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
@@ -1658,7 +1658,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   }}
                 >
                   <Text style={{ flex: 1, fontSize: 14, color: hub.conn() === "unauthorized" ? colors.danger : colors.warn }}>
-                    {hub.conn() === "unauthorized" ? "登录已过期，请重新登录。" : "与 Hub 的连接断开了，正在自动重连…"}
+                    {hub.conn() === "unauthorized" ? "登录已过期，请重新登录。" : "与 noop 的连接断开了，正在自动重连…"}
                   </Text>
                   <If when={hub.conn() === "unauthorized"}>
                     <Btn label="重新登录" kind="danger" onPress={props.onConnection} />
