@@ -73,7 +73,7 @@ Git commits you create must carry the trailer:  Agent: ${agent}
 ${resourceNote}
 
 # Task ${meta.id}: ${meta.title}
-Working directory: ${meta.repo || ROOT}   Host capabilities: ${meta.host_caps ?? ""}
+Working directory: ${meta.repo || ROOT}   Scratch space (checkouts, worktrees, build targets): ~/.agent-hub/work — never inside the hub folder ${ROOT}, which syncs to the cloud   Host capabilities: ${meta.host_caps ?? ""}
 Priority: ${meta.priority}   Source: ${meta.source}
 
 ${body}
