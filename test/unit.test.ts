@@ -166,3 +166,15 @@ test("recentChat: the channel before an owner message, without the message itsel
   expect(lines.slice(-3).map((l) => l.slice(8))).toEqual(["Kai (T-0115): 已补写 gpui-kit v0.9.0 的更新日志", "owner: 不行，得留下贡献者名单", "hub (T-0116): 收到，接着 T-0115 处理（T-0116）"]);
   expect(recentChat("x", { limit: 1 }).length).toBe(1);
 });
+
+test("pickTask: a task no machine here can run (needs another OS) never holds back the ones behind it", async () => {
+  const { pickTask, writeDoc, P } = await import("../src/core");
+  const other = process.platform === "win32" ? "os:linux" : "os:windows";
+  const at = new Date(Date.now() - 3600_000).toISOString();
+  writeDoc(P("tasks", "inbox", "T-9001.md"), { id: "T-9001", title: "needs another OS", agent: "lead", requires: other, priority: "urgent", planned: at, created: at, parked: at }, "x");
+  writeDoc(P("tasks", "inbox", "T-9002.md"), { id: "T-9002", title: "runs anywhere", agent: "lead", priority: "normal", planned: at, created: at }, "y");
+  const cfg = { clis: { default: ["claude", "codex"] } } as any;
+  const picked = pickTask(cfg);
+  if (picked === null && !Bun.which("claude") && !Bun.which("codex")) return; // no AI CLI here: nothing is pickable
+  expect(picked).toContain("T-9002");
+});
