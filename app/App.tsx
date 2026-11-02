@@ -99,6 +99,8 @@ import {
   savedCommands,
   BUILTIN_COMMANDS,
   slashQuery,
+  needsLabel,
+  isQueued,
 } from "./hub";
 
 type Config = { url: string; token: string };
@@ -926,11 +928,11 @@ function Message(props: {
 }
 
 /** A task's state as the sidebar's dot: only what needs attention gets a color. */
-const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "queue", waiting: "wait", parked: "wait" };
+const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "queue", waiting: "wait", nohost: "wait", parked: "wait" };
 
 /** A task's state: its label, color and mark. */
 const STATE_OF = (): Record<string, [string, string, string]> => ({
-  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"], parked: ["等外部结果", colors.warn, "○"],
+  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"], nohost: ["等机器", colors.warn, "○"], parked: ["等外部结果", colors.warn, "○"],
   blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.faint, "✓"],
 });
 
@@ -964,7 +966,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   const section = (title: string) => (
     <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
   );
-  const cancellable = () => ["active", "inbox", "waiting", "blocked", "proposed"].includes(t()?.state ?? "");
+  const cancellable = () => ["active", "inbox", "nohost", "waiting", "blocked", "proposed"].includes(t()?.state ?? "");
   const cancelling = signal(false);
   async function cancel() {
     const running = t()?.state === "active";
@@ -987,7 +989,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Badge label={STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
+              <Badge label={t()!.state === "nohost" ? `等 ${needsLabel(t()!.needs)}` : STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
               <View style={{ flex: 1 }} />
               <If when={cancellable() && !cancelling()}>
@@ -1005,6 +1007,13 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                 Number(t()!.attempt ?? 1) > 1 ? `第 ${t()!.attempt} 次` : ""].filter(Boolean).join(" · ")}
             </Text>
           </View>
+          <If when={t()!.state === "nohost"}>
+            <View testID="task-nohost" style={{ marginTop: 16, paddingHorizontal: 14, paddingVertical: 11, borderRadius: radius.inset, backgroundColor: tints.warn }}>
+              <Text style={{ fontSize: 14, lineHeight: 21, color: colors.text }}>
+                {`现在没有在线的 ${needsLabel(t()!.needs)}，其他机器闲着也接不了它。有 ${needsLabel(t()!.needs)} 上线后会自动开始；用不上的话可以取消。`}
+              </Text>
+            </View>
+          </If>
           <If when={t()!.request}>
             {section("请求")}
             <View selectable><Rich text={t()!.request ?? ""} /></View>
@@ -1306,21 +1315,21 @@ function Sidebar(props: {
             <SideEmpty text="空闲" />
           </If>
 
-          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting").length}>
-            <SideHeading title="排队" count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting").length} />
-            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state === "inbox" || t.state === "waiting")} key={(a) => a.id}>
+          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length}>
+            <SideHeading title="排队" count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length} />
+            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state))} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : "排队中"}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : a().state === "nohost" ? `等 ${needsLabel((a() as { needs?: string }).needs)}` : "排队中"}</Text>
                 </SideRow>
               )}
             </Each>
           </If>
-          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state !== "inbox" && t.state !== "waiting").slice(0, 6).length}>
+          <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && !isQueued(t.state)).slice(0, 6).length}>
             <SideHeading title="最近" />
-            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && t.state !== "inbox" && t.state !== "waiting").slice(0, 6)} key={(a) => a.id}>
+            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && !isQueued(t.state)).slice(0, 6)} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />

@@ -263,6 +263,18 @@ describe("channel", () => {
     await app.waitFor("任务 T-0005");
   });
 
+  test("a task no online machine can run says which machine it waits for", async () => {
+    const nohost = { id: "T-0097", title: "在 Windows 上实测拖入文件", agent: "reviewer", state: "nohost", needs: "os:windows", created: ts(40), updated: ts(40) };
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [nohost, ...status.recent] } } },
+    });
+    await app.waitFor("等 Windows 机器");
+    await app.press("label:T-0097 · 等机器");
+    await app.waitFor("id:task-nohost");
+    expect(app.shows("id:cancel-task")).toBe(true);
+  });
+
   test("machines show the code they run, and settings updates them all after a confirm", async () => {
     let updates = 0;
     const app = await open("./App.tsx", {

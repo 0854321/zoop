@@ -138,7 +138,10 @@ export function taskView(path: string, state: string, log: string[]) {
       return { day: x[1], time: x[2], host: x[3], kind, text };
     });
   if (state === "waiting" && m.wake_at) state = "parked"; // waiting on something slow (CI, a release), not on sub-tasks
-  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, waiting_on: m.waiting_on, wake_at: m.wake_at, started: m.started, created: m.created, cli: m.cli_used, model: m.model,
+  // queued, but no online machine can run it (a task that needs Windows while none is up): it waits for one, not for a turn
+  const needs = state === "inbox" && m.parked && m.requires ? String(m.requires) : undefined;
+  if (needs) state = "nohost";
+  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, needs, waiting_on: m.waiting_on, wake_at: m.wake_at, started: m.started, created: m.created, cli: m.cli_used, model: m.model,
     finished: m.finished, updated: m.finished ?? m.started ?? m.created, attempt: m.attempt, decision: m.decision, request, runs, steps };
 }
 
@@ -173,7 +176,7 @@ export function status() {
     // every open task (queued, waiting on sub-tasks, blocked) and the newest finished ones; a task copied in two folders mid-sync shows once, as running
     recent: (() => {
       const rest = others.filter((t) => !active.some((a) => a.id === t.id));
-      const open = rest.filter((t) => ["inbox", "waiting", "blocked"].includes(t.state));
+      const open = rest.filter((t) => ["inbox", "nohost", "waiting", "blocked"].includes(t.state));
       return [...open, ...rest.filter((t) => !open.includes(t)).slice(0, 12)].sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
     })(),
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),

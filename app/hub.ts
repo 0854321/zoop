@@ -32,6 +32,8 @@ export type HostInfo = {
 
 export type TaskInfo = {
   id: string; title: string; agent: string; host?: string; state?: string;
+  /** state "nohost": what the task needs that no online machine has ("os:windows"). */
+  needs?: string;
   started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string; cli?: string; model?: string;
   request?: string;
   runs?: { ts: string; host: string; cli: string; status: string; summary: string }[];
@@ -324,3 +326,15 @@ export function groupRules(lists: Record<string, DataFile[]>): RuleGroup[] {
 
 /** The markdown body without its YAML front matter. */
 export const stripFrontMatter = (s: string) => s.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+
+/** A task's hard requirement as words: "os:windows" → "Windows 机器". */
+export function needsLabel(needs = ""): string {
+  const os: Record<string, string> = { windows: "Windows", linux: "Linux", macos: "Mac", darwin: "Mac", ios: "iOS", android: "Android" };
+  const parts = needs.split(",").map((x) => x.trim()).filter(Boolean);
+  const o = parts.find((x) => x.startsWith("os:"));
+  if (o && parts.length === 1) return `${os[o.slice(3)] ?? o.slice(3)} 机器`;
+  return `有 ${parts.join(" + ")} 的机器`;
+}
+
+/** Waiting its turn: queued, waiting on sub-tasks, or waiting for a machine that can run it. */
+export const isQueued = (state?: string) => state === "inbox" || state === "waiting" || state === "nohost";
