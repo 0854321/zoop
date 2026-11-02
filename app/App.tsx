@@ -2973,8 +2973,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               testID="toast"
               accessibilityLabel={`查看 ${t().ref}`}
               onPress={() => {
+                const ref = t().ref; // read before clearing: the toast's accessor is null after set(null)
                 toast.set(null);
-                pick(t().ref);
+                pick(ref);
               }}
               style={{
                 maxWidth: 520,
