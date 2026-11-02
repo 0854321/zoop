@@ -1,7 +1,7 @@
 {
   "id": "dev.noop.app",
-  "name": "noop",
-  "short_name": "noop",
+  "name": "Noop",
+  "short_name": "Noop",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,12 +9,12 @@
   "theme_color": "#f7f7f4",
   "icons": [
     {
-      "src": "icons/192.c74f72194e.png",
+      "src": "icons/192.d0843f3572.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "icons/512.ccef42a89b.png",
+      "src": "icons/512.1f5cbdc2e4.png",
       "sizes": "512x512",
       "type": "image/png"
     }

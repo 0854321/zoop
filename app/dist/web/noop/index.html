@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>noop</title>
+<title>Noop</title>
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" sizes="32x32" href="icons/32.ca30bc5e22.png">
-<link rel="apple-touch-icon" href="icons/180.9727d6c72d.png">
-<script>const fetches = new Map(["nsh.98d6a0d43e.wasm","app.4fc5562911.js"].map((url) => { const response = fetch(url); response.catch(() => {}); return [url, response]; }));</script>
+<link rel="icon" type="image/png" sizes="32x32" href="icons/32.c549a4ac67.png">
+<link rel="apple-touch-icon" href="icons/180.d6a4b0d53f.png">
+<script>const fetches = new Map(["nsh.09ef53f8ac.wasm","app.d2ad698615.js"].map((url) => { const response = fetch(url); response.catch(() => {}); return [url, response]; }));</script>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; }
   html, body { background: #ffffff; color: #1c1c1e; }
@@ -35,7 +35,7 @@
 <body>
 <div id="app"></div>
 <div id="status" role="status" aria-live="polite"><div class="spinner" aria-label="Loading"></div></div>
-<noscript><div id="nojs">noop needs JavaScript.</div></noscript>
+<noscript><div id="nojs">Noop needs JavaScript.</div></noscript>
 <script type="module">
   // Written by `nsh package --target web`: loads the runtime, the app's
   // entry fonts in
@@ -44,9 +44,9 @@
   // root. The page's host (`app.host`, nsh.json `web.host`) answers the
   // app's `nsh/host` calls: its `createHost(player)` runs once the player
   // exists, before the app starts, so no call comes earlier.
-  import { createPlayer } from "./nsh.153c9be021.js";
+  import { createPlayer } from "./nsh.6cc29d8489.js";
 
-  const app = {"id":"dev.noop.app","wasm":"nsh.98d6a0d43e.wasm","code":"app.4fc5562911.js","capabilities":"{\"network\":{\"hosts\":[\"*\"],\"http\":[]},\"process\":{\"execute\":[],\"exit\":false,\"env\":[]},\"fs\":{\"read\":[\"${homeDir}\"],\"write\":[]},\"statusBar\":false,\"clipboard\":false,\"picker\":true,\"host\":[\"page\",\"pushState\",\"pushEnable\",\"pushDisable\",\"setSession\",\"setBadge\",\"clearNotifications\",\"vibrate\"],\"openUrl\":{\"schemes\":[\"https\",\"mailto\"]}}","rust":false,"assets":{},"data":{"syntaxes":"nsh-syntaxes.ea0da56d04.bin"},"fonts":[],"chunkFonts":{},"chunks":{},"entryChunks":[],"host":"host.6597385a00.js"};
+  const app = {"id":"dev.noop.app","wasm":"nsh.09ef53f8ac.wasm","code":"app.d2ad698615.js","capabilities":"{\"network\":{\"hosts\":[\"*\"],\"http\":[]},\"process\":{\"execute\":[],\"exit\":false,\"env\":[]},\"fs\":{\"read\":[\"${homeDir}\"],\"write\":[]},\"statusBar\":false,\"clipboard\":false,\"picker\":true,\"speech\":true,\"host\":[\"page\",\"pushState\",\"pushEnable\",\"pushDisable\",\"setSession\",\"setBadge\",\"clearNotifications\",\"vibrate\",\"speechState\",\"speechStart\",\"speechStop\",\"speechAbort\"],\"openUrl\":{\"schemes\":[\"https\",\"mailto\"]}}","rust":false,"assets":{},"data":{"syntaxes":"nsh-syntaxes.ea0da56d04.bin"},"fonts":[],"chunkFonts":{},"chunks":{},"entryChunks":[],"host":"host.f51296e7a6.js"};
   const status = document.getElementById("status");
   const fonts = new Map();
   let player;
