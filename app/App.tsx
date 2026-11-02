@@ -2628,7 +2628,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       </If>
     </View>
   );
-  /** The page's header on the desktops and the web (the gallery's DemoPane bar): iOS and Android show the system's. */
+  /** The page header on desktops and the web; phones use the system header. */
   const Bar = (p: { route: Route }) => (
     <View
       desktop={{ windowDrag: true }}
@@ -2709,8 +2709,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             header={systemHeader ? undefined : <Bar route={route} />}
             headerBackTitle={backTitle(route)}
             headerLeft={systemHeader && route === CHANNEL && !wide() ? <ToolButton icon="menu" label="菜单" onPress={() => drawer.set(true)} /> : undefined}
+            ios={{ headerLeftSymbol: "sidebar.left", headerRightSymbol: "gearshape" }}
+            headerTitle={
+              // iOS: the bar's buttons are UIKit's own, so the connection sits by the title.
+              platform.os === "ios" && route === CHANNEL ? (
+                <View testID="conn" accessibilityLabel={connLabel()} style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                  <Dot tone={connTone()} />
+                  <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text }}>{titleOf(route)}</Text>
+                </View>
+              ) : undefined
+            }
             headerRight={
-              systemHeader ? (
+              platform.os === "ios" ? (
+                route === CHANNEL ? <ToolButton icon="sliders" label="设置" onPress={openTeam} testID="settings-top" /> : undefined
+              ) : systemHeader ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                   {connPill()}
                   <If when={route === CHANNEL}>
