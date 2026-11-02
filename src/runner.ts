@@ -16,7 +16,7 @@ export type Result = {
   recommendation?: string;
   lessons?: string[];
   attachments?: string[];
-  followups?: { title: string; body?: string; agent?: string; priority?: string; repo?: string }[];
+  followups?: { title: string; body?: string; agent?: string; priority?: string; repo?: string; requires?: string; host?: string }[];
 };
 
 const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one fenced \`\`\`json block:
@@ -30,7 +30,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],
   "attachments": ["/abs/path/screenshot.png", "/abs/path/recording.mp4"],   // optional: shown to the owner with the message
-  "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work"}]
+  "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work", "requires": "os:macos when it needs macOS/iOS/Xcode (os:windows for Windows); omit otherwise"}]
 }
 Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
 Only use needs_decision after doing all preparation that does not depend on the answer.

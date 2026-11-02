@@ -204,10 +204,19 @@ export function newTask(title: string, body = "", o: TaskOpts = {}): string {
   writeDoc(P("tasks", folder, `${id}.md`), {
     id, title, agent: o.agent ?? "lead", cli: o.cli ?? "auto", host: o.host ?? "any",
     // stored at creation so hosts without the repo checked out still know what it needs
-    requires: [...new Set([...(o.requires ?? "").split(","), ...repoRequires(o.repo)].map((x) => x.trim()).filter(Boolean))].join(","), prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
+    requires: [...new Set([...(o.requires ?? "").split(","), ...repoRequires(o.repo), ...(o.host && o.host !== "any" ? [] : platformRequires(title))].map((x) => x.trim()).filter(Boolean))].join(","), prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
     created: now(), ...(o.extra ?? {}),
   }, body || title);
   return id;
+}
+
+/** Work that can only run on one OS, read from the task title (a macOS screenshot cannot be taken on Linux). */
+export function platformRequires(title: string): string[] {
+  const act = /截图|录屏|构建|编译|测试|验证|运行|跑|screenshot|record|build|test|verify|run/i;
+  if (!act.test(title)) return [];
+  if (/\b(iOS|macOS|Xcode|Mac Catalyst|AppKit|UIKit)\b|iOS ?模拟器|苹果/i.test(title)) return ["os:macos"];
+  if (/\bWindows\b/i.test(title) && !/\b(iOS|macOS|Linux)\b/i.test(title)) return ["os:windows"];
+  return [];
 }
 
 export const which = (bin: string) => Bun.which(bin) !== null;
