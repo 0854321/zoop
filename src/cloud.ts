@@ -86,22 +86,26 @@ async function vapidKeys(): Promise<{ publicKey: string; privateJwk: Jwk }> {
   return k;
 }
 
+/** Why the last cloudDeploy returned false (for the journal: a daemon's console is out of the owner's sight). */
+export let lastDeployError = "";
+
 /** Deploy the Worker into the owner's Cloudflare account; set the token secret; record the URL (noop.toml + shared config). */
 export async function cloudDeploy(cfg: Cfg) {
+  lastDeployError = "";
+  const fail = (why: string) => { lastDeployError = why; console.log(why); return false as const; };
   const dir = join(CODE, "cloud");
   const wr = ["bunx", "wrangler"];
   const who = await $`${wr} whoami`.cwd(dir).quiet().nothrow();
   if (!/logged in/i.test(who.stdout.toString())) {
-    console.log("先登录你自己的 Cloudflare 账号（免费版即可）：\n  bunx wrangler login\n然后重新运行：hub cloud deploy");
-    return false;
+    return fail("先登录你自己的 Cloudflare 账号（免费版即可）：\n  bunx wrangler login\n然后重新运行：hub cloud deploy");
   }
-  if (!cfg.server?.token) { console.log("缺少 [server] token，先运行 hub init"); return false; }
+  if (!cfg.server?.token) return fail("缺少 [server] token，先运行 hub init");
   if (!existsSync(join(CODE, "app", "dist", "web", "noop", "index.html"))) console.log("提示：客户端网页还没构建，Worker 只提供接口");
   const name = cfg.cloud?.name ?? "noop";
   console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
   const dep = await $`${wr} deploy --name ${name}`.cwd(dir).quiet().nothrow();
   const out = dep.stdout.toString() + dep.stderr.toString();
-  if (dep.exitCode !== 0) { console.log(out.slice(-1500)); return false; }
+  if (dep.exitCode !== 0) return fail(out.slice(-1500));
   const url = out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
   const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token };
   const e = cfg.email ?? {};
@@ -117,8 +121,8 @@ export async function cloudDeploy(cfg: Cfg) {
   secrets.HUB_VAPID_PRIVATE = JSON.stringify(vapid.privateJwk);
   // `secret bulk` reads JSON from stdin — values never touch argv or the console.
   const sec = Bun.spawn([...wr, "secret", "bulk", "--name", name], { cwd: dir, stdin: new Blob([JSON.stringify(secrets)]), stdout: "pipe", stderr: "pipe" });
-  if ((await sec.exited) !== 0) { console.log("设置 Worker 密钥失败：\n" + (await new Response(sec.stderr).text()).slice(-800)); return false; }
-  if (!url) { console.log("部署成功，但没识别到地址；请把 workers.dev 地址写进 config.toml 的 [cloud] url"); return false; }
+  if ((await sec.exited) !== 0) return fail("设置 Worker 密钥失败：\n" + (await new Response(sec.stderr).text()).slice(-800));
+  if (!url) return fail("部署成功，但没识别到地址；请把 workers.dev 地址写进 config.toml 的 [cloud] url");
   // ---- record the URL (machine-local noop.toml first: the data sync itself goes through this Worker)
   writeHubToml({ cloud: { url, name } });
   await locked(async () => {

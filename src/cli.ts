@@ -334,9 +334,9 @@ async function ownerUpdate(c: Cfg, host: string) {
   }
   const now7 = (Bun.spawnSync(["git", "-C", CODE, "rev-parse", "--short", "HEAD"], { stdout: "pipe" }).stdout.toString().trim()) || before;
   if (isPrimary(c, host) && c.cloud?.url) {
-    const { cloudDeploy } = await import("./cloud");
-    const ok = await cloudDeploy(c).then((u) => !!u, (e) => { console.error(`cloud deploy: ${e}`); return false; });
-    journal(host, `⬆️ already at ${now7}; ${ok ? "redeployed the Worker and the web app" : "redeploying the Worker failed"}`);
+    const cloud = await import("./cloud");
+    const err = await cloud.cloudDeploy(c).then((u) => (u ? "" : cloud.lastDeployError || "unknown"), (e) => String(e));
+    journal(host, `⬆️ already at ${now7}; ${err ? `redeploying the Worker failed: ${err.replace(/\s+/g, " ").slice(-300)}` : "redeployed the Worker and the web app"}`);
   } else journal(host, now7 === before ? `⬆️ already at ${now7}` : `⬆️ not updated (still running ${before}; local edits or failing tests)`);
 }
 
