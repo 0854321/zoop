@@ -16,6 +16,7 @@ const events = [
   },
   { id: "e4", ts: ts(4), from: "owner", kind: "owner", text: "P-0002 1" },
   { id: "e5", ts: ts(5), from: "hub", kind: "system", text: "⚙️ 设置已更新：{\"routines\":{}}" },
+  { id: "e6", ts: ts(6), from: "dev@linux-box", kind: "notice", text: "T-0005 修好了，见 https://github.com/acme/app/pull/42" },
 ];
 const status = {
   tasks: { proposed: 1, inbox: 2, active: 1, blocked: 0, failed: 0, done: 9 },
@@ -161,13 +162,23 @@ describe("channel", () => {
     expect(app.shows("id:opt-D-0001-B")).toBe(true);
     expect(app.shows("全部")).toBe(true);
     expect(app.shows("都不要")).toBe(true);
-    expect(app.shows("↳ P-0002") || app.shows("P-0002 1")).toBe(true);
+    expect(app.shows("↳ P-0002") || app.shows("P-0002")).toBe(true);
     // sidebar
     expect(app.shows("text:/设置已更新/")).toBe(false);
     await app.waitFor("截图检查 gallery");
     expect(app.shows("待你决定")).toBe(true);
     expect(app.shows("text:/linux-box/")).toBe(true);
     expect(app.shows("text:/排队 2/")).toBe(true);
+  });
+
+  test("a task id is a chip that opens the task; a GitHub PR link is a chip that opens it", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("id:gh-chip-app-42");
+    expect(app.shows("text:app#42")).toBe(true);
+    await app.press("id:gh-chip-app-42");
+    expect(app.openedUrls()).toEqual(["https://github.com/acme/app/pull/42"]);
+    await app.press("id:task-chip-T-0005");
+    await app.waitFor("任务 T-0005");
   });
 
   test("answers a decision with one tap", async () => {
