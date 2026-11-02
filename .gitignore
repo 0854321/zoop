@@ -4,3 +4,4 @@ config.local.toml
 logs/
 node_modules/
 .wrangler/
+.claude/
