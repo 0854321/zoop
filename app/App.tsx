@@ -449,7 +449,7 @@ function Media(props: { hub: Hub; path: string }) {
 // ---------------------------------------------------------------- timeline
 
 /** A message the owner sent that the hub has not confirmed yet (optimistic send). */
-type Outgoing = { id: string; ts: string; text: string; ref: string | null; state: "sending" | "failed" };
+type Outgoing = { id: string; ts: string; text: string; ref: string | null; state: "held" | "sending" | "failed" };
 
 /** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
 const MARKS = ["★", "◆", "▲", "●", "✦", "☾", "✿", "♪"];
@@ -497,7 +497,7 @@ function optionText(e: HubEvent, c: string): string {
   return full ? full.trim() : choiceLabel(c);
 }
 
-function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => void }) {
+function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void }) {
   const e = props.event;
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
@@ -511,7 +511,7 @@ function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => v
             backgroundColor: tints.accent,
             borderWidth: 1,
             borderColor: alpha(colors.accent, 0.18),
-            opacity: props.out?.state === "sending" ? 0.65 : 1,
+            opacity: props.out ? 0.65 : 1,
             gap: 4,
           }}
         >
@@ -524,11 +524,19 @@ function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => v
           when={props.out}
           else={<Text style={{ fontSize: size.tiny, color: colors.faint }}>{timeOf(e.ts)}</Text>}
         >
+          <If when={props.out?.state === "held"}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={{ fontSize: size.tiny, color: colors.faint }}>即将发送</Text>
+              <Btn label="撤销" kind="ghost" kbd={touch ? undefined : keymap.label("mod+z")} onPress={() => props.onUndo?.()} testID="undo-send" />
+            </View>
+          </If>
+          <If when={props.out?.state !== "held"}>
           <If when={props.out?.state === "failed"} else={<Text style={{ fontSize: size.tiny, color: colors.faint }}>发送中…</Text>}>
             <View role="button" onPress={props.onRetry} accessibilityLabel="重试发送" style={{ flexDirection: "row", gap: 6 }}>
               <Text style={{ fontSize: size.tiny, color: colors.danger }}>发送失败</Text>
               <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.danger }}>重试</Text>
             </View>
+          </If>
           </If>
         </If>
       </View>
@@ -607,14 +615,13 @@ function Message(props: {
                   <Btn
                     testID={`opt-${e.ref}-${c()}`}
                     label={optionText(e, c())}
-                    kind={rec === c() && !done() ? "primary" : "secondary"}
+                    kind="secondary"
                     note={rec === c() ? "推荐" : undefined}
-                    kbd={targeted() && !touch && i() < 9 ? String(i() + 1) : undefined}
                     onPress={() => props.onAnswer(e.ref!, c())}
                   />
                 )}
               </Each>
-              <Btn label="其他指示…" kind="dashed" kbd={targeted() && !touch ? "R" : undefined} onPress={() => props.onReply(e.ref!)} />
+              <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
             </View>
           </View>
         ) : (
@@ -768,7 +775,7 @@ function Sidebar(props: {
       ["完成", q?.done],
     ] as const;
   };
-  const rowText = { flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 } as const;
+  const rowText = () => ({ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }) as const;
   return (
     <View style={{ flex: 1, backgroundColor: colors.sidebar }}>
       <View
@@ -788,7 +795,7 @@ function Sidebar(props: {
             {(d) => (
               <SideRow onPress={() => props.onPick(d().id)} title={d().id}>
                 <Dot tone="wait" />
-                <Text style={rowText}>{d().question || d().id}</Text>
+                <Text style={rowText()}>{d().question || d().id}</Text>
                 <Text style={{ fontFamily: MONO, fontSize: 12, color: colors.faint }}>{d().id}</Text>
               </SideRow>
             )}
@@ -802,7 +809,7 @@ function Sidebar(props: {
             {(a) => (
               <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${a().agent}${a().host ? ` @ ${a().host}` : ""}`}>
                 <Dot tone="run" />
-                <Text style={rowText}>{a().title}</Text>
+                <Text style={rowText()}>{a().title}</Text>
                 <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().started)}</Text>
               </SideRow>
             )}
@@ -817,7 +824,7 @@ function Sidebar(props: {
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={a().id}>
                   <Text style={{ width: 14, fontSize: 13, color: STATE[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE[a().state ?? ""]?.[2] ?? "·"}</Text>
-                  <Text style={{ ...rowText, color: colors.muted }}>{a().title}</Text>
+                  <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
                 </SideRow>
               )}
@@ -829,7 +836,7 @@ function Sidebar(props: {
             {(h) => (
               <SideRow title={`负载 ${loadOf(h())}% · 磁盘 ${h().stats?.diskFreeGB ?? "?"}GB · ${h().busy ?? 0} 个运行中`}>
                 <Dot tone="on" />
-                <Text style={rowText}>{h().host}</Text>
+                <Text style={rowText()}>{h().host}</Text>
                 <If when={(h().busy ?? 0) > 0}>
                   <Text style={{ fontSize: 13, color: colors.muted, fontVariant: ["tabular-nums"] }}>{`${h().busy} 运行中`}</Text>
                 </If>
@@ -1389,10 +1396,29 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     composer?.focus();
   };
 
-  async function send(text: string, ref: string | null, id = `local:${++seq}`) {
+  // A message waits a few seconds before it leaves, so a wrong tap or a typo can be taken back.
+  const UNDO_MS = 5000;
+  const holds = new Map<string, ReturnType<typeof setTimeout>>();
+  function send(text: string, ref: string | null, id = `local:${++seq}`) {
     const ts = new Date().toISOString();
-    outbox.update((o) => [...o.filter((x) => x.id !== id), { id, ts, text, ref, state: "sending" }]);
+    outbox.update((o) => [...o.filter((x) => x.id !== id), { id, ts, text, ref, state: "held" }]);
     jumpToEnd();
+    holds.set(id, setTimeout(() => { holds.delete(id); void deliver(id); }, UNDO_MS));
+  }
+  function undo(id?: string) {
+    const o = id ? outbox().find((x) => x.id === id) : [...outbox()].reverse().find((x) => x.state === "held");
+    if (!o || !holds.has(o.id)) return false;
+    clearTimeout(holds.get(o.id));
+    holds.delete(o.id);
+    outbox.update((list) => list.filter((x) => x.id !== o.id));
+    if (!/^[DLP]-[A-Z]?\d{4} \S+$/.test(o.text) || o.ref) { draft.set(o.text); replyTo.set(o.ref); composer?.focus(); }
+    return true;
+  }
+  async function deliver(id: string) {
+    const o = outbox().find((x) => x.id === id);
+    if (!o) return;
+    const { text, ref } = o;
+    outbox.update((l) => l.map((x) => (x.id === id ? { ...x, state: "sending" } : x)));
     try {
       await hub.send(text, ref);
       outbox.update((o) => o.filter((x) => x.id !== id));
@@ -1507,6 +1533,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // Shortcuts. Single keys never fire while typing (`notEditing`).
   keymap.bind("mod+enter", submit, { when: "always" });
   keymap.bind("mod+k", () => composer?.focus(), { when: "always" });
+  keymap.bind("mod+z", () => { if (!draft()) undo(); }, { when: "always" });
   keymap.bind("mod+,", openTeam, { when: "always" });
   keymap.bind("mod+b", () => sidebarOpen.set(!untracked(sidebarOpen)), { when: "always" });
   keymap.bind("mod+shift+l", toggleTheme, { when: "always" });
@@ -1700,7 +1727,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id); }} />;
+                      return <OwnerBubble event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id); }} onUndo={() => undo(row.event.id)} />;
                     }
                     return (
                       <Message
