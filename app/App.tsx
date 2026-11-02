@@ -1492,10 +1492,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           </View>
           <View
             tooltip={<Tip label={hub.cfg.url} />}
-            style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: 10, borderRadius: 15, backgroundColor: hub.conn() === "unauthorized" ? tints.danger : colors.raised }}
+            accessibilityLabel={connLabel()}
+            style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11, borderRadius: 15, backgroundColor: hub.conn() === "unauthorized" ? tints.danger : colors.raised }}
           >
             <Dot tone={connTone()} />
-            <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
+            <If when={wide()}>
+              <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
+            </If>
           </View>
           <If when={wide() && sidebarOpen()}>
             <ToolButton icon="sidebar" label="隐藏侧栏" shortcut={keymap.label("mod+b")} on onPress={() => sidebarOpen.set(false)} />

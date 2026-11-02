@@ -225,7 +225,7 @@ export const focusRing = (offset = 0): ViewStyle => ({
   borderColor: token("ring"),
   outlineStyle: "solid",
   outlineWidth: 3,
-  outlineColor: isDark() ? "rgba(170,210,90,0.10)" : "rgba(150,190,70,0.15)",
+  outlineColor: isDark() ? "rgba(245,245,245,0.12)" : "rgba(17,17,17,0.10)",
   outlineOffset: offset,
 });
 

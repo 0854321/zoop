@@ -5,8 +5,8 @@
       "radius": "10px",
       "radius-card": "12px",
       "radius-control": "7px",
-      "brand-fill": "#c6ef6a",
-      "on-brand": "#13160c"
+      "brand-fill": "#111111",
+      "on-brand": "#ffffff"
     },
     "light": {
       "background": "#f7f7f4",
@@ -27,7 +27,7 @@
       "border": "#cdcdc5",
       "input": "#c4c4bc",
       "ring": "rgba(17,17,17,0.35)",
-      "chart-1": "#8fc21f",
+      "chart-1": "#111111",
       "chart-2": "#3a3d43",
       "chart-3": "#7d828b",
       "chart-4": "#b4b8bf",
@@ -63,7 +63,8 @@
       "up-tint": "color-mix(in srgb, var(--up) 10%, transparent)",
       "down-tint": "color-mix(in srgb, var(--down) 10%, transparent)",
       "violet": "#6e56c4",
-      "brand-fill": "#111111"
+      "brand-fill": "#111111",
+      "on-brand": "#ffffff"
     },
     "dark": {
       "background": "#1c1d20",
@@ -105,7 +106,7 @@
       "accent-foreground": "var(--foreground)",
       "secondary": "var(--raised)",
       "secondary-foreground": "var(--foreground)",
-      "chart-1": "#c8f26d",
+      "chart-1": "#f5f5f5",
       "chart-2": "#e4e5e8",
       "chart-3": "#9ea2aa",
       "chart-4": "#686c74",
@@ -120,7 +121,8 @@
       "sidebar-primary-foreground": "var(--primary-foreground)",
       "sidebar-ring": "var(--ring)",
       "down": "var(--destructive)",
-      "brand-fill": "#f5f5f5"
+      "brand-fill": "#f5f5f5",
+      "on-brand": "#111111"
     }
   }
 }
