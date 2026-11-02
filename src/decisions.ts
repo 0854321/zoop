@@ -155,8 +155,8 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
     `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
   ].join("\n") : [
     // the card already shows the id, the agent and the options as buttons: say only what to decide and why
-    linkRefs(meta.question ?? "", meta.task),
-    v?.reason ? `\n${linkRefs(v.reason, meta.task)}` : "",
+    linkRefs(meta.question ?? "", meta.task, [v?.reason ?? "", ...opts].join("\n")),
+    v?.reason ? `\n${linkRefs(v.reason, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
   ].filter(Boolean).join("\n");
   const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
     attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });
@@ -184,11 +184,29 @@ export const recentJudgeIds = () =>
   new Set(list(P("decisions", "closed")).slice(-30).map((p) => readDoc(p).meta)
     .filter((m) => m.answered_by === "judge").map((m) => m.id));
 
-/** "#747" → a Markdown link to that PR/issue in the task's repository, so every reference is clickable. */
-export function linkRefs(text: string, taskId?: string): string {
-  const slug = repoSlug(taskId);
-  if (!slug) return text;
-  return text.replace(/(^|[^\w\/\[])#(\d+)\b/g, (_, pre, n) => `${pre}[#${n}](https://github.com/${slug}/pull/${n})`);
+/**
+ * "#747" / "nsh #747" → a Markdown link to that PR/issue, so every reference is clickable.
+ * The repository comes from GitHub links in the text or `context` (the decision's other text and options),
+ * matched by name, else from the task's checkout.
+ */
+export function linkRefs(text: string, taskId?: string, context = ""): string {
+  const seen = new Map<string, string>(); // repo name → owner/repo
+  for (const m of `${text}\n${context}`.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/\d+/g))
+    seen.set(m[2].toLowerCase(), `${m[1]}/${m[2]}`);
+  let fallback: string | null | undefined;
+  const slugOf = (name?: string) => (name && seen.get(name.toLowerCase()))
+    || (fallback === undefined ? (fallback = repoSlug(taskId) ?? (seen.size === 1 ? [...seen.values()][0] : null)) : fallback);
+  return text
+    // "owner/repo#12" names its repository outright
+    .replace(/(^|[^\w\/\[#])([\w.-]+\/[\w.-]+)#(\d+)\b/g, (_, pre: string, slug: string, n: string) => `${pre}[${slug}#${n}](https://github.com/${slug}/pull/${n})`)
+    .replace(/(^|[^\w\/\[#])(?:([\w.-]+)( ?))?#(\d+)\b/g, (all, pre: string, name: string | undefined, sp: string, n: string) => {
+      const named = !!name && seen.has(name.toLowerCase());
+      // "other-repo#3" for a repository not seen here: unknown, left as is ("PR#3" is not a repository)
+      if (name && !named && !sp && !/^(pr|issue)s?$/i.test(name)) return all;
+      const slug = slugOf(named ? name : undefined);
+      if (!slug) return all;
+      return `${pre}${name && !named ? name + sp : ""}[${named ? `${name}#${n}` : `#${n}`}](https://github.com/${slug}/pull/${n})`;
+    });
 }
 
 function repoSlug(taskId?: string): string | null {

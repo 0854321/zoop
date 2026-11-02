@@ -85,3 +85,13 @@ test("choice() normalises option answers", () => {
   expect(dec.choice("1, 3")).toBe("1,3");
   expect(dec.choice("Approve it")).toBe("approve it");
 });
+
+test("linkRefs links PR references using the repositories the decision mentions", () => {
+  const opts = "A: squash 合并 https://github.com/longbridge/nsh/pull/747 — 发布";
+  expect(dec.linkRefs("合并 nsh #747 吗？", undefined, opts)).toBe("合并 [nsh#747](https://github.com/longbridge/nsh/pull/747) 吗？");
+  expect(dec.linkRefs("见 PR #747", undefined, opts)).toBe("见 PR [#747](https://github.com/longbridge/nsh/pull/747)");
+  expect(dec.linkRefs("改 a/b#3", undefined, "")).toBe("改 [a/b#3](https://github.com/a/b/pull/3)");
+  // an unknown repository, an existing link and no repository at all stay as they are
+  expect(dec.linkRefs("见 other#3 与 [#9](u)", undefined, opts)).toBe("见 other#3 与 [#9](u)");
+  expect(dec.linkRefs("见 #5", undefined, "")).toBe("见 #5");
+});
