@@ -469,14 +469,17 @@ function ghBlocks(blocks: TextViewBlock[]): TextViewBlock[] {
 function hubMarkdown(text: string): string {
   return text
     .split(/(^```[\s\S]*?^```)/m)
-    .map((part, i) => (i % 2 ? part : part.replace(/([^\n])\n(?!\n)/g, "$1\\\n")))
+    .map((part, i) => (i % 2 ? part : part
+      .replace(/([^\n])\n(?!\n)/g, "$1\\\n")
+      // Bare URLs stop at CJK / full-width punctuation and spaces ("pull/1：让" links pull/1 only).
+      .replace(/(?<![(<\[`])\bhttps?:\/\/[^\s<>()\[\]`\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]+[^\s<>()\[\]`.,;:!?'"\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]/g, "<$&>")))
     .join("");
 }
 
 /** Texts inside a pressable chip: a pointer, not the I-beam selectable texts force (per view on Linux). */
 const chipText = { cursor: "pointer", userSelect: "none" } as const;
 const chipFrame: ViewStyle = {
-  cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2,
+  cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2, height: 20,
   borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05),
 };
 const chipHover: ViewStyle = { borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.09) };
@@ -492,7 +495,7 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
         <If when={st()}>
           <View style={{ cursor: "pointer", width: 6, height: 6, borderRadius: 3, backgroundColor: st()?.[1] ?? colors.muted }} />
         </If>
-        <Text style={{ ...chipText, fontFamily: MONO, fontSize: fs, color: colors.text }}>{n.text}</Text>
+        <Text style={{ ...chipText, fontFamily: MONO, fontSize: fs, lineHeight: 16, color: colors.text }}>{n.text}</Text>
       </View>
     );
   }
@@ -500,16 +503,16 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
     const a = n.attributes ?? {};
     return (
       <View role="link" testID={`gh-chip-${a.repo}-${a.n}`} accessibilityLabel={`GitHub ${a.kind} ${a.repo}#${a.n}`} onPress={() => void openUrl(n.text!).catch(() => {})}
-        hoverStyle={chipHover} style={{ ...chipFrame, paddingHorizontal: 7, paddingVertical: 1, borderRadius: 6 }}>
-        <Icon name="github" size={16} tint={colors.text} />
-        <Text style={{ ...chipText, fontSize: 13, color: colors.muted }}>{a.kind}</Text>
-        <Text style={{ ...chipText, fontSize: 13.5, fontWeight: "600", color: colors.text }}>{`${a.repo}#${a.n}`}</Text>
+        hoverStyle={chipHover} style={{ ...chipFrame, paddingHorizontal: 6, borderRadius: 6 }}>
+        <Icon name="github" size={14} tint={colors.text} />
+        <Text style={{ ...chipText, fontSize: fs, lineHeight: 16, color: colors.muted }}>{a.kind}</Text>
+        <Text style={{ ...chipText, fontSize: fs, lineHeight: 16, fontWeight: "600", color: colors.text }}>{`${a.repo}#${a.n}`}</Text>
       </View>
     );
   }
   return (
-    <View style={{ verticalAlign: "middle", marginHorizontal: 2, paddingHorizontal: 6, borderRadius: 5, backgroundColor: alpha(colors.text, 0.06) }}>
-      <Text style={{ fontFamily: MONO, fontSize: fs, color: colors.muted }}>{n.text}</Text>
+    <View style={{ verticalAlign: "middle", height: 20, justifyContent: "center", marginHorizontal: 2, paddingHorizontal: 6, borderRadius: 5, backgroundColor: alpha(colors.text, 0.06) }}>
+      <Text style={{ fontFamily: MONO, fontSize: fs, lineHeight: 16, color: colors.muted }}>{n.text}</Text>
     </View>
   );
 }
