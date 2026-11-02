@@ -991,7 +991,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
           </View>
           <If when={t()!.request}>
             {section("请求")}
-            <Text style={{ userSelect: "text", fontSize: 15, lineHeight: 23, color: colors.text }}>{t()!.request}</Text>
+            <View selectable><Rich text={t()!.request ?? ""} /></View>
           </If>
           <If when={t()!.runs?.length}>
             {section("结果")}
@@ -1016,7 +1016,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                     <View style={{ width: 12, height: 21, alignItems: "center", justifyContent: "center" }}>
                       <Dot tone={st().kind === "done" ? "off" : st().kind === "fail" ? "bad" : st().kind === "decision" ? "wait" : "off"} />
                     </View>
-                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text}</Text>
+                    <View style={{ flex: 1, minWidth: 0 }}><Rich text={st().text.replace(new RegExp(`^${t()!.id}\\b\\s*(→\\s*)?[:：]?\\s*`), "")} muted /></View>
                   </View>
                 )}
               </Each>
