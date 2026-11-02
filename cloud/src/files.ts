@@ -8,6 +8,9 @@
 //        This is the distributed lock that task claims rely on (exactly one host wins a move).
 //   GET  /api/files/history?path=&limit=[&content=1] → {history:[{seq, version, hash, ts, by, msg, deleted, size, content?}]}
 //   POST /api/files/revert {path, version, msg?} → {rev, version} (writes the old content as a new version)
+//   GET  /api/files/list?prefix=<dir/> → {files:[{path, size, updated, version}]}   (owner read; READABLE prefixes only)
+//   GET  /api/files/read?path=        → {path, content (utf8), size, updated, version} | 404
+//        Read-only views of the team's rules and memory. config.toml and everything else stay machine-only.
 //
 // Every write gets its own global `rev` (monotonic), so `changes?since=` pagination never splits a row.
 // History keeps ≤ 90 days and ≤ 20k rows, but always the latest row of each path.
@@ -96,6 +99,35 @@ export function pruneHistory(sql: FilesSql, now = Date.now()) {
   const cutoff = new Date(now - HISTORY_DAYS * 86400_000).toISOString();
   sql.exec(`DELETE FROM history WHERE (ts < ? OR seq <= (SELECT MAX(seq) FROM history) - ?)
     AND seq NOT IN (SELECT MAX(seq) FROM history GROUP BY path)`, cutoff, HISTORY_ROWS);
+}
+
+/** Prefixes the owner session may read (rules, memory, agent profiles, closed decisions). Never config / secrets. */
+export const READABLE = ["policies/", "memory/", "agents/", "decisions/closed/"] as const;
+export const readable = (p: unknown): p is string => validPath(String(p ?? "").replace(/\/$/, "") || "x") && READABLE.some((r) => String(p).startsWith(r));
+/** Exclusive upper bound for a prefix range scan on the primary key: "a/" → "a0". */
+export const prefixEnd = (p: string) => p.slice(0, -1) + String.fromCharCode(p.charCodeAt(p.length - 1) + 1);
+const LIST_ROWS = 2000;
+
+/** Read-only routes for the owner: a primary-key range on `files` (never the history table). */
+export function handleReadFiles(sql: FilesSql, url: URL): Response | null {
+  const p = url.pathname;
+  if (p === "/api/files/list") {
+    let prefix = url.searchParams.get("prefix") ?? "";
+    if (prefix && !prefix.endsWith("/")) prefix += "/";
+    if (!readable(prefix)) return json({ error: "prefix not readable" }, 403);
+    const rows = sql.exec(`SELECT path, LENGTH(content) AS size, updated, version FROM files
+      WHERE path >= ? AND path < ? AND deleted = 0 ORDER BY path LIMIT ?`, prefix, prefixEnd(prefix), LIST_ROWS).toArray();
+    return json({ files: rows.map((r) => ({ path: r.path, size: Number(r.size ?? 0), updated: r.updated, version: Number(r.version) })) });
+  }
+  if (p === "/api/files/read") {
+    const path = url.searchParams.get("path");
+    if (!validPath(path) || !readable(path)) return json({ error: "path not readable" }, 403);
+    const r = sql.exec("SELECT content, updated, version FROM files WHERE path = ? AND deleted = 0", path).toArray()[0];
+    if (!r) return json({ error: "not found" }, 404);
+    const c = bytes(r.content);
+    return json({ path, content: new TextDecoder().decode(c), size: c.length, updated: r.updated, version: Number(r.version) });
+  }
+  return null;
 }
 
 async function body(req: Request): Promise<any> { try { return await req.json(); } catch { return null; } }
