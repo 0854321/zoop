@@ -653,10 +653,17 @@ function Message(props: {
 }
 
 /** A task's state: its label, color and mark. */
-const STATE: Record<string, [string, string, string]> = {
+const STATE_OF = (): Record<string, [string, string, string]> => ({
   active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.muted, "○"], waiting: ["等子任务", colors.muted, "○"],
   blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.up, "✓"],
-};
+});
+
+/** A progress step's icon and color. */
+const STEP_OF = (): Record<string, [IconName, string]> => ({
+  chat: ["chat", colors.muted], start: ["play", colors.info], done: ["check", colors.up], fail: ["close", colors.danger],
+  decision: ["pause", colors.warn], retry: ["replace", colors.muted], followup: ["plus", colors.muted],
+  delegated: ["layers", colors.info], judge: ["sliders", colors.muted], edit: ["document", colors.muted],
+});
 
 /** "3 分钟" since an ISO time (to now, or to `end`). */
 function since(iso?: string, end?: string): string {
@@ -679,7 +686,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Badge label={STATE[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
+              <Badge label={STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
             </View>
             <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>
@@ -710,9 +717,12 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             <View selectable style={{ gap: 6 }}>
               <Each of={t()!.steps ?? []}>
                 {(st) => (
-                  <View style={{ flexDirection: "row", gap: 12 }}>
-                    <Text style={{ width: 44, fontSize: 13.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
-                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text.trim()}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+                    <Text style={{ width: 44, fontSize: 13.5, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
+                    <View style={{ width: 20, height: 21, alignItems: "center", justifyContent: "center" }}>
+                      <Icon name={STEP_OF()[st().kind ?? ""]?.[0] ?? "spark"} size={15} tint={STEP_OF()[st().kind ?? ""]?.[1] ?? colors.faint} weight={1.8} />
+                    </View>
+                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text}</Text>
                   </View>
                 )}
               </Each>
@@ -858,7 +868,7 @@ function Sidebar(props: {
             <Each of={(s()?.recent ?? []).slice(0, 6)} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={a().id}>
-                  <Text style={{ width: 14, fontSize: 13, color: STATE[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE[a().state ?? ""]?.[2] ?? "·"}</Text>
+                  <Text style={{ width: 14, fontSize: 13, color: STATE_OF()[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE_OF()[a().state ?? ""]?.[2] ?? "·"}</Text>
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
                 </SideRow>

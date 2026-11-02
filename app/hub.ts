@@ -26,7 +26,7 @@ export type TaskInfo = {
   started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string;
   request?: string;
   runs?: { ts: string; host: string; cli: string; status: string; summary: string }[];
-  steps?: { day?: string; time?: string; host?: string; text: string }[];
+  steps?: { day?: string; time?: string; host?: string; kind?: string; text: string }[];
 };
 
 export type Status = {

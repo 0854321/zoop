@@ -87,6 +87,12 @@ function journalLines(): string[] {
   return files.flatMap((f) => readFileSync(`${dir}/${f}`, "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => `${f.slice(0, 10)} ${l.slice(2)}`));
 }
 
+/** Journal lines' leading marks → a step kind the app draws with its own icon. */
+const STEP_KINDS: [string[], string][] = [
+  [["💬"], "chat"], [["▶"], "start"], [["✅", "✔"], "done"], [["❌", "💥"], "fail"], [["⏸", "📨"], "decision"],
+  [["↻", "♻️", "🔁", "↩️"], "retry"], [["↳"], "followup"], [["🧩"], "delegated"], [["⚖️", "👤"], "judge"], [["✏️"], "edit"],
+];
+
 /** What the app shows for a task: its request, state, timeline and results. */
 function taskView(path: string, state: string, log: string[]) {
   const { meta: m, body } = readDoc(path);
@@ -94,7 +100,15 @@ function taskView(path: string, state: string, log: string[]) {
   const runs = [...body.matchAll(/## Run (\S+) · (\S+) · (\S+)\n\*\*(\w+)\*\* — ([^\n]*)/g)]
     .map((r) => ({ ts: r[1], host: r[2], cli: r[3], status: r[4], summary: r[5] })).slice(-5);
   const steps = log.filter((l) => l.includes(` ${m.id} `) || l.endsWith(` ${m.id}`)).slice(-12)
-    .map((l) => { const x = l.match(/^(\S+) (\d\d:\d\d) `([^`]+)` (.*)$/); return x ? { day: x[1], time: x[2], host: x[3], text: x[4] } : { text: l }; });
+    .map((l) => {
+      const x = l.match(/^(\S+) (\d\d:\d\d) `([^`]+)` (.*)$/);
+      if (!x) return { text: l };
+      const raw = x[4].trim();
+      const lead = raw.match(/^[^\p{L}\p{N}\[(`]+/u)?.[0]?.trim() ?? "";
+      const kind = STEP_KINDS.find(([marks]) => marks.some((m) => lead.startsWith(m)))?.[1] ?? "note";
+      const text = raw.slice(lead.length).replace(new RegExp(`^${m.id}\\b[:：]?\\s*`), "").trim();
+      return { day: x[1], time: x[2], host: x[3], kind, text };
+    });
   return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, started: m.started, created: m.created,
     finished: m.finished, updated: m.finished ?? m.started ?? m.created, attempt: m.attempt, decision: m.decision, request, runs, steps };
 }
