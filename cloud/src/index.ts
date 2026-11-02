@@ -366,6 +366,13 @@ export class Hub extends DurableObject<Env> {
     }
 
     if (p === "/api/settings" && m === "GET") return json(this.get("settings") ?? { current: {}, effective: {}, options: {} });
+    if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it
+      if (who === "machine") return json({ error: "forbidden" }, 403);
+      const { id } = (await req.json().catch(() => ({}))) as { id?: string };
+      if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
+      this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "cancel", id }));
+      return json({ ok: true });
+    }
     if (p === "/api/settings" && m === "PUT") {
       const patch = await req.json();
       this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "settings", patch }));

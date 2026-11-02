@@ -8,7 +8,7 @@ import {
 } from "./core";
 import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
-import { ask, buildPrompt, parseResult, runAgent } from "./runner";
+import { agentProcs, ask, buildPrompt, parseResult, runAgent } from "./runner";
 import { writeRules } from "./rules";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
@@ -19,7 +19,7 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, setAppendToTask, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, setAppendToTask, setCancelTask, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { allowedClis, capOk, idTagFor, setApprovalGate, setIdTag } from "./core";
@@ -80,7 +80,8 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
 }
 
 // ------------------------------------------------------------------ task processing
-const pendingRoute: string[] = []; // decisions opened by workers, routed by the next tick
+const pendingRoute: string[] = [];
+const cancelled = new Set<string>(); // tasks the owner cancelled while their agent ran // decisions opened by workers, routed by the next tick
 async function processTask(path: string, cfg: Cfg, host: string) {
   const { meta, body } = readDoc(path);
   const wanted = allowedClis(meta, cfg);
@@ -115,6 +116,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     b.note += gh.note ? `\n${gh.note}` : "";
     out = await runAgent(cli, buildPrompt(meta, promptBody, cfg, b.note), meta.repo || P(), cfg, log, !!meta.gate_override,
       { ...b.env, ...accountEnv(acct) });
+    if (cancelled.has(meta.id)) { cancelled.delete(meta.id); return; } // the owner cancelled it while it ran
     res = parseResult(out);
     const failure = res.status === "failed" ? classify(out) : null;
     if (!failure) break;
@@ -476,6 +478,29 @@ async function daemon(cfg: Cfg) {
     return false;
   });
   setAppendToTask(appendFollowUp);
+  setCancelTask((tid) => locked(async () => {
+    await _pull();
+    const where = ["inbox", "waiting", "blocked", "proposed", "active"].find((d) => existsSync(P("tasks", d, `${tid}.md`)));
+    if (!where) return "not found";
+    const f = P("tasks", where, `${tid}.md`);
+    const { meta, body } = readDoc(f);
+    if (where === "active" && meta.claimed_by && meta.claimed_by !== host) return `running on ${meta.claimed_by}`;
+    cancelled.add(tid);
+    agentProcs.get(tid)?.kill("SIGTERM");
+    writeDoc(P("tasks", "rejected", `${tid}.md`), { ...meta, claimed_by: undefined, cancelled: now(), wake_at: undefined },
+      `${body}\n\n## Cancelled ${now()}\nThe owner cancelled this task.\n`);
+    unlinkSync(f);
+    for (const kid of (meta.children ?? "").split(",").filter(Boolean)) { // its sub-tasks go with it
+      const k = ["inbox", "waiting", "blocked", "proposed"].find((d) => existsSync(P("tasks", d, `${kid}.md`)));
+      if (!k) continue;
+      const kd = readDoc(P("tasks", k, `${kid}.md`));
+      writeDoc(P("tasks", "rejected", `${kid}.md`), { ...kd.meta, cancelled: now() }, `${kd.body}\n\n## Cancelled ${now()}\nParent ${tid} was cancelled.\n`);
+      unlinkSync(P("tasks", k, `${kid}.md`));
+    }
+    journal(host, `🛑 ${tid} 已按你的要求取消`);
+    await _commitPush(`[${host}] cancel ${tid}`);
+    return "cancelled";
+  }));
   if ((cfg.fleet?.primary ?? host) === host) startServer(cfg, async (text) => {
     // Same work as an open task? Add the message to it instead of opening a duplicate.
     const same = await sameOpenTask(text, cfg).catch(() => null);

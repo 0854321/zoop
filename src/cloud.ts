@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { writeHubToml } from "./sync";
-import { type Event, appendEvent, handleOwnerMessage, saveSettings, setMirror, settingsView, status } from "./server";
+import { type Event, appendEvent, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask } from "./server";
 
 const base = (cfg: Cfg) => String(cfg.cloud?.url ?? "").replace(/\/$/, "");
 const headers = (cfg: Cfg) => ({ Authorization: `Bearer ${cfg.server?.token}`, "Content-Type": "application/json" });
@@ -51,6 +51,8 @@ export function startCloudBridge(cfg: Cfg) {
           const e = it.event as Event;
           appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
           await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p) });
+        } else if (it.type === "cancel" && typeof it.id === "string") {
+          await cancelTask(it.id);
         } else if (it.type === "settings") {
           await saveSettings(it.patch);
           await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });

@@ -110,6 +110,9 @@ export function cliCommand(cli: string, cfg: Cfg, gateOverride = false): string[
   throw new Error(`unknown cli ${cli}`);
 }
 
+/** Running agent processes by task id (so the owner can cancel one). */
+export const agentProcs = new Map<string, { kill: (sig?: number | NodeJS.Signals) => void }>();
+
 export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cfg, logFile: string, gateOverride = false,
   extraEnv: Record<string, string> = {}): Promise<string> {
   const cmd = cliCommand(cli, cfg, gateOverride);
@@ -119,6 +122,9 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
     cwd: existsSync(dir) ? dir : ROOT, stdin: new Blob([prompt]), stdout: "pipe", stderr: "pipe",
     env: { ...process.env, ...extraEnv, HUB_DATA: ROOT },
   });
+  const tid = logFile.split("/").pop()!.match(/^([A-Z]-[\w]*?\d{4})-\d{10,}/)?.[1];
+  if (tid) agentProcs.set(tid, proc);
+  void proc.exited.then(() => { if (tid && agentProcs.get(tid) === proc) agentProcs.delete(tid); });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   const code = await proc.exited;

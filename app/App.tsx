@@ -854,11 +854,11 @@ function Message(props: {
 }
 
 /** A task's state as the sidebar's dot: only what needs attention gets a color. */
-const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "queue", waiting: "wait" };
+const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "queue", waiting: "wait", parked: "wait" };
 
 /** A task's state: its label, color and mark. */
 const STATE_OF = (): Record<string, [string, string, string]> => ({
-  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"],
+  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"], parked: ["等外部结果", colors.warn, "○"],
   blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.faint, "✓"],
 });
 
@@ -892,6 +892,23 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   const section = (title: string) => (
     <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
   );
+  const cancellable = () => ["active", "inbox", "waiting", "blocked", "proposed"].includes(t()?.state ?? "");
+  const cancelling = signal(false);
+  async function cancel() {
+    const running = t()?.state === "active";
+    const r = await AlertDialog.show({
+      title: `取消 ${props.id}？`,
+      description: running ? "正在运行的 agent 会被停下，已经做了的改动保留在仓库里。" : "这个任务不会再执行。",
+      actions: [
+        { id: "keep", label: "不取消", role: "cancel" },
+        { id: "cancel", label: "取消任务", role: "destructive" },
+      ],
+    });
+    if (r.action !== "cancel") return;
+    cancelling.set(true);
+    try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id }); }
+    catch { cancelling.set(false); }
+  }
   return (
     <Scroll style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
@@ -900,6 +917,13 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <Badge label={STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
+              <View style={{ flex: 1 }} />
+              <If when={cancellable() && !cancelling()}>
+                <Btn testID="cancel-task" label="取消任务" kind="ghost" icon="close" onPress={() => void cancel()} />
+              </If>
+              <If when={cancelling()}>
+                <Text style={{ fontSize: 13, color: colors.muted }}>正在取消…</Text>
+              </If>
             </View>
             <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>
             <Text style={{ fontSize: 14, color: colors.muted }}>

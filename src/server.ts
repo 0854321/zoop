@@ -119,7 +119,8 @@ export function taskView(path: string, state: string, log: string[]) {
       const text = raw.slice(lead.length).replace(new RegExp(`^${m.id}\\b[:：]?\\s*`), "").trim();
       return { day: x[1], time: x[2], host: x[3], kind, text };
     });
-  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, started: m.started, created: m.created, cli: m.cli_used, model: m.model,
+  if (state === "waiting" && m.wake_at) state = "parked"; // waiting on something slow (CI, a release), not on sub-tasks
+  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, waiting_on: m.waiting_on, wake_at: m.wake_at, started: m.started, created: m.created, cli: m.cli_used, model: m.model,
     finished: m.finished, updated: m.finished ?? m.started ?? m.created, attempt: m.attempt, decision: m.decision, request, runs, steps };
 }
 
@@ -198,6 +199,10 @@ const ID = /^\s*([DLP]-[A-Z]?\d{4})\b[\s:：,，\-]*([\s\S]*)$/;
 let lastAnswer: { id: string; at: number } | null = null;
 let followUp: { tid: string; at: number } | null = null;
 const FOLLOW_MS = 3 * 60_000;
+let cancelHook: ((tid: string) => Promise<string>) | null = null;
+export const setCancelTask = (fn: (tid: string) => Promise<string>) => { cancelHook = fn; };
+/** The owner cancels a task (queued, waiting, blocked, proposed or running). */
+export const cancelTask = async (tid: string) => (cancelHook ? cancelHook(tid) : "not available");
 let appendToTask: ((tid: string, text: string) => Promise<boolean>) | null = null;
 export const setAppendToTask = (fn: (tid: string, text: string) => Promise<boolean>) => { appendToTask = fn; };
 const AMEND_MS = 5 * 60_000;
@@ -337,6 +342,11 @@ export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<str
       }
       if (url.pathname === "/api/settings" && req.method === "GET") return json(settingsView());
       if (url.pathname === "/api/settings" && req.method === "PUT") return json(await saveSettings((await req.json()) as Record<string, unknown>));
+      if (url.pathname === "/api/tasks/cancel" && req.method === "POST") {
+        const { id } = (await req.json().catch(() => ({}))) as { id?: string };
+        if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
+        return json({ ok: true, result: await cancelTask(id) });
+      }
       if (url.pathname === "/api/media" && req.method === "POST") {
         const f = (await req.formData()).get("file") as File | null;
         if (!f) return json({ error: "file required" }, 400);
