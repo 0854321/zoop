@@ -22,7 +22,7 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token, openUrl } from "nsh";
+  windowSize, token, openUrl, keyboardFrame } from "nsh";
 import type { InputRef, JSX, ViewStyle } from "nsh";
 import { Input, Scrollbar } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
@@ -1816,7 +1816,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           </View>
 
           {/* The composer. */}
-          <View style={{ paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: Math.max(12, safeArea().bottom + 8) }}>
+          <View style={{ paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: keyboardFrame().height > 0 ? keyboardFrame().height + 8 : Math.max(12, safeArea().bottom + 8), transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
             <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 8 }}>
               <If when={hub.conn() === "offline" || hub.conn() === "unauthorized"}>
                 <View
