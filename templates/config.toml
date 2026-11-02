@@ -191,10 +191,12 @@ agent = "architect"
 weight = "heavy"
 prompt = "Deep weekly evolution: 30-day window. Re-read every agent profile and policy end to end; rewrite for clarity and remove obsolete rules (Tier 2 for removals). Propose new agents for recurring uncovered work and any framework PR."
 
-[email]                               # SMTP. Used for: owner login codes on the cloud client (`to` = who may log in,
+[email]                               # Used for: owner login codes on the cloud client (`to` = who may log in,
                                       # comma-separated) and the token-changed notice. `hub cloud deploy` copies this
-                                      # section into Worker secrets (HUB_OWNER_EMAIL, HUB_SMTP) — rerun it after edits.
-                                      # Port 465 = implicit TLS, 587 = STARTTLS.
+                                      # section into Worker secrets — rerun it after edits.
+                                      # No SMTP: set only `to` + `from` (an address on a Cloudflare domain with Email
+                                      # Routing on; `to` must be a verified destination) → HUB_MAIL_FROM.
+                                      # SMTP: also set host/user/pass → HUB_SMTP. Port 465 = implicit TLS, 587 = STARTTLS.
 # to = "you@example.com"
 # host = "smtp.example.com"
 # port = 465

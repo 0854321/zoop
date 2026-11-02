@@ -90,6 +90,9 @@ export async function cloudDeploy(cfg: Cfg) {
   if (e.to && e.host) {
     secrets.HUB_OWNER_EMAIL = String(e.to);
     secrets.HUB_SMTP = JSON.stringify({ host: e.host, port: e.port ?? 465, secure: e.secure ?? (e.port ?? 465) === 465, user: e.user, pass: e.pass, from: e.from ?? e.user });
+  } else if (e.to && e.from) { // Cloudflare Email Routing: no SMTP, `from` is an address on a domain with Email Routing on
+    secrets.HUB_OWNER_EMAIL = String(e.to);
+    secrets.HUB_MAIL_FROM = String(e.from).match(/<([^>]+)>/)?.[1] ?? String(e.from);
   } else console.log("还没配置邮箱：登录验证码发不出去，在共享的 config.toml 里填 [email] 后重新运行 noop cloud deploy");
   const vapid = await vapidKeys();
   secrets.HUB_VAPID_PUBLIC = vapid.publicKey;
