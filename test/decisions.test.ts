@@ -6,10 +6,11 @@ import { join } from "node:path";
 
 const W = mkdtempSync(join(tmpdir(), "hub-decisions-"));
 let judgeReply: any = null;
+const sent: string[] = [];
 const realRunner = await import("../src/runner");
 mock.module("../src/runner", () => ({ ...realRunner, ask: async () => judgeReply }));
 const realNotify = await import("../src/notify");
-mock.module("../src/notify", () => ({ ...realNotify, openDecisionIds: () => new Set<string>(), pollReplies: async () => [], notify: async () => ["test"] }));
+mock.module("../src/notify", () => ({ ...realNotify, openDecisionIds: () => new Set<string>(), pollReplies: async () => [], notify: async (t: string) => { sent.push(t); return ["test"]; } }));
 
 let core: typeof import("../src/core"), dec: typeof import("../src/decisions"), auto: typeof import("../src/autonomy");
 beforeAll(async () => {
@@ -38,6 +39,10 @@ test("judge hold is still recorded and scored against the owner", async () => {
   const o = core.readDoc(core.P("decisions", "open", `${id}.md`)).meta;
   expect(o.shadow_verdict).toBe("hold");
   expect(o.shadow_answer).toBe("B: wait");
+  // the card: the question, the agent's account, its recommendation; never the judge's reason for asking
+  expect(sent.at(-1)).toContain("Merge?");
+  expect(sent.at(-1)).toContain("建议：*A*");
+  expect(sent.at(-1)).not.toContain("release gate");
   dec.closeDecision(id, "B", "owner(chat)");
   expect(closed(id).shadow_agree).toBe("yes");
   // owner chose differently from the agent's recommendation → lesson appended (precedents() lists it too)

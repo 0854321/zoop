@@ -832,7 +832,7 @@ function Message(props: {
   const tag = TAGS[e.kind];
   const body = (
     <View selectable style={{ gap: 10 }}>
-      <Rich text={e.text} muted={e.kind === "system"} context={(e.options ?? []).join("\n")} />
+      <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system"} context={(e.options ?? []).join("\n")} />
       <If when={e.attachments?.length}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>

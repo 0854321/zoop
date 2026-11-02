@@ -159,6 +159,8 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
     // what is at stake (what the PR changes, what each choice means). The judge's reason for asking is not news to the owner.
     linkRefs(meta.question ?? "", meta.task, [context, ...opts].join("\n")),
     context ? `\n${linkRefs(context, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
+    // the app marks this option 推荐 (and drops the line); chat channels show it as written
+    meta.recommendation ? `\n建议：*${meta.recommendation}*` : "",
   ].filter(Boolean).join("\n");
   const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
     attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });
