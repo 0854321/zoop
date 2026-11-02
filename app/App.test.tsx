@@ -575,6 +575,18 @@ describe("phones", () => {
     };
   }
 
+  test("iOS settings allows logout", async () => {
+    const log = newLog();
+    const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios", network: { ...settingsServer([]), ...auth(log) } });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:phone-settings");
+    app.onDialog((d) => d.title === "退出登录？" ? "退出登录" : null);
+    await app.press("id:logout");
+    await app.waitFor("登录 noop");
+    expect(log.logouts).toBe(1);
+  });
+
   for (const platform of ["ios", "android"] as const) {
     test(`${platform}: settings is a grouped list whose rows push pages; back returns to the channel`, async () => {
       const puts: unknown[] = [];
