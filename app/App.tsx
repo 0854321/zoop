@@ -1894,10 +1894,10 @@ const SHORTCUTS: [string, string][] = [
   ["Shift+Enter", "换行"],
   [`${keymap.label("mod+enter")}`, "发送（任何时候）"],
   [`/  ·  ${keymap.label("mod+k")}`, "聚焦输入框"],
-  ["1 – 9", "选择当前决策的选项"],
-  ["J / K", "下一个 / 上一个待决策"],
-  ["R", "回复当前决策（其他指示）"],
-  ["G", "跳到最新消息"],
+  [`1 – 9  ·  ${keymap.label("alt+1")}…`, "选择当前决策的选项"],
+  [`J / K  ·  ${keymap.label("alt+j")} / ${keymap.label("alt+k")}`, "下一个 / 上一个待决策"],
+  [`R  ·  ${keymap.label("alt+r")}`, "回复当前决策（其他指示）"],
+  [`G  ·  ${keymap.label("alt+g")}`, "跳到最新消息"],
   ["Esc", "取消回复 / 离开输入框 / 关闭"],
   [keymap.label("mod+,"), "团队设置"],
   [keymap.label("mod+b"), "显示 / 隐藏侧栏"],
@@ -1945,7 +1945,7 @@ function HelpSheet(props: { open: boolean; onClose: () => void }) {
             )}
           </Each>
         </View>
-        <Text style={{ fontSize: 13, color: colors.faint, paddingHorizontal: 20, paddingBottom: 16 }}>单键快捷键在输入框里不生效，先按 Esc 离开输入框。</Text>
+        <Text style={{ fontSize: 13, color: colors.faint, paddingHorizontal: 20, paddingBottom: 16 }}>单键快捷键在输入框外生效；打字时用带 Alt（⌥）的组合键。</Text>
       </View>
     </Dialog>
   );
@@ -2262,6 +2262,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [String(i + 1), () => choose(i)])),
     },
     { when: "notEditing" },
+  );
+  // The same moves with Alt work while typing, so the cursor never has to leave the composer.
+  keymap.bind(
+    {
+      "alt+j": () => step(1),
+      "alt+k": () => step(-1),
+      "alt+r": () => target() && reply(target()!),
+      "alt+g": jumpToEnd,
+      ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`alt+${i + 1}`, () => choose(i)])),
+    },
+    { when: "always" },
   );
   keymap.bind("escape", () => {
     if (help()) help.set(false);

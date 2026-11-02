@@ -329,6 +329,16 @@ describe("keyboard", () => {
     expect(posts[0]).toEqual({ text: "D-0001 B" });
   });
 
+  test("Alt+number answers while the cursor is in the composer", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const app = await open("./App.tsx", { ...desk, network: hub(posts) });
+    await app.waitFor("id:opt-D-0001-B");
+    await app.type("id:composer", "");
+    await app.keyboard.press("alt+2");
+    await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
+    expect(posts[0]).toEqual({ text: "D-0001 B" });
+  });
+
   test("r replies, Escape cancels the reply, ? shows the shortcuts", async () => {
     const app = await open("./App.tsx", { ...desk, network: hub([]) });
     await app.waitFor("id:opt-D-0001-B");
