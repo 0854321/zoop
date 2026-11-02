@@ -39,12 +39,18 @@ export function startCloudBridge(cfg: Cfg) {
   };
   setMirror((e) => { pending.push(e); void flush(); });
 
-  let after = 0, n = 0, busy = false;
+  let after = 0, n = 0, busy = false, lastStatus = "";
+  // push the dashboard whenever it changes (an answered decision must leave "待你决定" at once), else every 10th poll
+  const pushStatus = async (force = false) => {
+    const st = JSON.stringify(status());
+    if (!force && st === lastStatus) return;
+    if (await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ status: JSON.parse(st), settings: settingsView() }) })) lastStatus = st;
+  };
   const loop = async () => {
     if (busy) return; busy = true;
     try {
       await flush();
-      if (n++ % 10 === 0) await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ status: status(), settings: settingsView() }) });
+      await pushStatus(n++ % 10 === 0);
       const r = await call(cfg, `/api/host/inbox?after=${after}`);
       for (const it of r?.items ?? []) {
         if (it.type === "message") {
@@ -59,6 +65,7 @@ export function startCloudBridge(cfg: Cfg) {
         }
         after = it.seq;
       }
+      if (r?.items?.length) await pushStatus();
     } catch (err) { console.error(`cloud bridge: ${err}`); }
     busy = false;
   };
