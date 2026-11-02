@@ -63,6 +63,28 @@ test("owner images are downloaded and named by absolute path in the task text", 
   rmSync(root, { recursive: true, force: true });
 });
 
+test("media older than media_days is pruned", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { pruneMedia, mediaDays } = await import("../src/server");
+  expect(mediaDays({} as any)).toBe(7);
+  expect(mediaDays({ media_days: 30 } as any)).toBe(30);
+  expect(mediaDays({ media_days: 5 } as any)).toBe(7);
+  const media = mkdtempSync(join(tmpdir(), "noop-media-"));
+  const att = mkdtempSync(join(tmpdir(), "noop-att-"));
+  const now = Date.now();
+  const age = (f: string, days: number) => utimesSync(f, (now - days * 86_400_000) / 1000, (now - days * 86_400_000) / 1000);
+  writeFileSync(join(media, "old.png"), "x"); age(join(media, "old.png"), 8);
+  writeFileSync(join(media, "new.png"), "x"); age(join(media, "new.png"), 6);
+  mkdirSync(join(att, "ev-old")); writeFileSync(join(att, "ev-old", "a.png"), "x"); age(join(att, "ev-old"), 10);
+  expect(pruneMedia(7, [media, att, join(media, "missing")], now)).toBe(2);
+  expect(existsSync(join(media, "old.png"))).toBe(false);
+  expect(existsSync(join(media, "new.png"))).toBe(true);
+  expect(existsSync(join(att, "ev-old"))).toBe(false);
+  rmSync(media, { recursive: true, force: true }); rmSync(att, { recursive: true, force: true });
+});
+
 test("repo language → host requirements (only when the repo is on disk)", async () => {
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

@@ -19,7 +19,7 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, recentChat, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
@@ -465,6 +465,17 @@ Build the owner's next-action menu per your profile and return needs_decision.${
   journal(host, `💤 fleet idle ${Math.round(idleMin)}m → ${id} chief-of-staff drafting a next-steps menu`);
 }
 
+/** This machine's copies of images (served media, downloaded attachments) go after `media_days`, checked hourly. */
+let mediaPruned = 0;
+function pruneMediaHourly(cfg: Cfg) {
+  if (Date.now() - mediaPruned < 3_600_000) return;
+  mediaPruned = Date.now();
+  try {
+    const n = pruneMedia(mediaDays(cfg));
+    if (n) console.log(`media: removed ${n} older than ${mediaDays(cfg)} days`);
+  } catch (e) { console.error(`media prune: ${e}`); }
+}
+
 export async function tick(cfg: Cfg, background = false) {
   const host = hostName(cfg);
   const primary = isPrimary(cfg, host);
@@ -481,6 +492,7 @@ export async function tick(cfg: Cfg, background = false) {
     } else reapStale(cfg, host, true);
     await _commitPush(`[${host}] tick`);
   });
+  pruneMediaHourly(cfg);
   await retryLogins(cfg);
   if (primary || pendingLoginIds().size) await handleReplies(cfg, host);
   if (primary) await planInbox(cfg, host);

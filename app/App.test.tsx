@@ -566,6 +566,34 @@ describe("team settings", () => {
     await app.press("label:返回频道");
     await app.waitFor("id:composer");
   });
+
+  test("picks how long images are kept", async () => {
+    const puts: unknown[] = [];
+    let view = { current: {} as Record<string, unknown>, effective: { agents: [], autonomy: "onboarding", routines: [], max_parallel: 2 }, options: { clis: [], autonomy: [] } };
+    const app = await open("./App.tsx", {
+      storage: STORAGE,
+      width: 1200,
+      height: 800,
+      platform: "macos",
+      network: {
+        ...hub([]),
+        [`GET ${URL}/api/settings`]: () => ({ body: view }),
+        [`PUT ${URL}/api/settings`]: (r: { body?: string | null }) => {
+          const p = JSON.parse(r.body!);
+          puts.push(p);
+          view = { ...view, current: { ...view.current, ...p } };
+          return { body: view };
+        },
+      },
+    });
+    await app.press("id:settings");
+    await app.press("id:settings-tab-storage");
+    await app.waitFor("id:media-days-90");
+    await app.press("id:media-days-30");
+    await app.waitUntil(() => puts.length === 1);
+    expect(puts).toEqual([{ media_days: 30 }]);
+    expect(app.shows("text:14 天")).toBe(true);
+  });
 });
 
 describe("notifications", () => {

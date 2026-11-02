@@ -221,6 +221,7 @@ export type SettingsView = {
     autonomy: Autonomy;
     routines: { name: string; desc?: string; every: string; agent: string; enabled: boolean }[];
     max_parallel: number | null;
+    media_days?: number;
   };
   options: { clis: string[][]; autonomy: string[] };
 };
@@ -251,11 +252,19 @@ export function everyLabel(every: string): string {
 export const intervalsWith = (every: string) => (INTERVALS.includes(every) ? INTERVALS : [...INTERVALS, every]);
 
 /** The PUT bodies the settings screen sends (whitelisted keys of the hub). */
+/** How long images are kept, in days: the choices and the one in force (7 by default). */
+export const MEDIA_DAYS = [7, 14, 30, 90];
+export const mediaDaysOf = (v: SettingsView | null | undefined): number => {
+  const d = Number(v?.current?.media_days ?? v?.effective?.media_days);
+  return MEDIA_DAYS.includes(d) ? d : 7;
+};
+
 export const patches = {
   clis: (agent: string, clis: string[]) => ({ clis: { agents: { [agent]: clis } } }),
   autonomy: (agent: string, level: string) => ({ autonomy: { agents: { [agent]: level } } }),
   routine: (name: string, change: { enabled?: boolean; every?: string }) => ({ routines: { [name]: change } }),
   maxParallel: (n: number) => ({ host: { max_parallel: n } }),
+  mediaDays: (days: number) => ({ media_days: days }),
   /** The whole list: an array replaces the saved one. */
   commands: (list: Command[]) => ({ commands: list }),
 };

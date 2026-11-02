@@ -112,9 +112,21 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
     const s = JSON.stringify(ev);
     for (const ws of this.ctx.getWebSockets()) try { ws.send(s); } catch {}
+    this.pruneMedia();
     const n = this.notification(ev);
     if (n) this.ctx.waitUntil(this.pushAll(n.payload, n.urgency).catch((err) => console.error(`push: ${err}`)));
     return ev;
+  }
+
+  /** Media older than settings `media_days` (7, 14, 30 or 90; 7 by default) goes, checked at most hourly. Ids start with Date.now(). */
+  pruneMedia(force = false) {
+    const now = Date.now();
+    if (!force && now - (this.get("media_pruned") ?? 0) < 3_600_000) return;
+    this.set("media_pruned", now);
+    const s = this.get("settings");
+    const want = Number(s?.current?.media_days ?? s?.effective?.media_days);
+    const days = [7, 14, 30, 90].includes(want) ? want : 7;
+    this.sql.exec("DELETE FROM media WHERE instr(id, '-') = 14 AND CAST(substr(id, 1, 13) AS INTEGER) < ?", now - days * 86_400_000);
   }
 
   ownerMessage(text: string, ref?: string, attachments?: string[]): Ev {
@@ -386,6 +398,7 @@ export class Hub extends DurableObject<Env> {
       const deep = (a: any, b: any): any => { const o = { ...a }; for (const [k, v] of Object.entries(b ?? {})) o[k] = v && typeof v === "object" && !Array.isArray(v) ? deep(o[k] ?? {}, v) : v; return o; };
       view.current = deep(view.current ?? {}, patch);
       this.set("settings", view);
+      if (patch && typeof patch === "object" && "media_days" in patch) this.pruneMedia(true);
       return json(view);
     }
 

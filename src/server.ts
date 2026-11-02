@@ -11,7 +11,7 @@
 //   POST /api/media (multipart file)      → { url }   (workers upload screenshots/recordings here)
 //   GET  /media/<file>                    → attachment
 //   GET  /api/files/list?prefix=  · GET /api/files/read?path=   → read-only rules & memory (same shape as the Worker)
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
@@ -193,7 +193,7 @@ export function status() {
 }
 
 // ---------------------------------------------------------------- settings (UI-adjustable, shared via data repo)
-const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs", "commands"]; // whitelisted top-level keys
+const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs", "commands", "media_days"]; // whitelisted top-level keys
 
 /** What an agent is for, from its profile's first line: "# Name (中文名) — what it does". */
 /** Chinese titles and one-liners for the built-in roles (a profile's own Chinese "(标题)" and text still win where present). */
@@ -255,6 +255,7 @@ export function settingsView() {
       autonomy: cfg.autonomy?.level ?? "onboarding",
       routines: (cfg.routine ?? []).map((r: any) => ({ name: r.name, desc: routineDesc(r), every: r.every, agent: r.agent, enabled: r.enabled !== false })),
       max_parallel: cfg.host?.max_parallel ?? null,
+      media_days: mediaDays(cfg),
     },
     options: { clis: [["claude"], ["codex", "claude"], ["claude", "codex"], ["codex"]], autonomy: ["onboarding", "assisted", "autonomous"] },
   };
@@ -306,6 +307,24 @@ export const localMedia: FetchAttachment = async (p) => {
   const f = join(MEDIA, basename(p));
   return existsSync(f) && statSync(f).isFile() ? new Uint8Array(readFileSync(f)) : null;
 };
+
+/** How long images and other media are kept: one of MEDIA_DAYS (settings `media_days`), 7 by default. */
+export const MEDIA_DAYS = [7, 14, 30, 90];
+export const mediaDays = (cfg: Cfg) => (MEDIA_DAYS.includes(Number(cfg.media_days)) ? Number(cfg.media_days) : 7);
+
+/** Delete media and downloaded attachments older than `days` (by modification time); returns how many entries went. */
+export function pruneMedia(days: number, dirs = [MEDIA, ATTACH_DIR], now = Date.now()): number {
+  const cutoff = now - days * 86_400_000;
+  let n = 0;
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      const f = join(dir, name);
+      try { if (statSync(f).mtimeMs < cutoff) { rmSync(f, { recursive: true, force: true }); n++; } } catch {}
+    }
+  }
+  return n;
+}
 
 /** Download a message's attachments into ATTACH_DIR/<key>/; returns the absolute paths saved (failures are skipped). */
 export async function saveAttachments(key: string, paths: string[], fetchOne: FetchAttachment = localMedia, root = ATTACH_DIR): Promise<string[]> {

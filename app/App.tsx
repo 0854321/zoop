@@ -79,6 +79,8 @@ import {
   activityLine,
   everyLabel,
   patches,
+  MEDIA_DAYS,
+  mediaDaysOf,
   type SettingsView,
   NOTIFY_KINDS,
   type NotifyKind,
@@ -596,12 +598,21 @@ function Media(props: { hub: Hub; path: string }) {
   // a thumbnail that keeps the timeline readable; press it to see the full image
   const THUMB = 240;
   const size = () => (ratio() >= 1 ? { width: THUMB, height: THUMB / ratio() } : { width: THUMB * ratio(), height: THUMB });
+  const gone = signal(false); // past the media retention (or otherwise unavailable)
   return (
-    <>
+    <If
+      when={!gone()}
+      else={
+        <View testID="media-gone" style={{ ...frame, width: THUMB, height: 72, alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 13.5, color: colors.faint }}>图片已过期</Text>
+        </View>
+      }
+    >
       <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ cursor: "pointer" }}>
         <Image
           src={src}
           onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
+          onError={() => gone.set(true)}
           style={{ ...frame, ...size(), objectFit: "cover" }}
         />
       </View>
@@ -616,7 +627,7 @@ function Media(props: { hub: Hub; path: string }) {
           <Image src={src} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
         </View>
       </Dialog>
-    </>
+    </If>
   );
 }
 
@@ -1782,6 +1793,7 @@ const SETTINGS_TABS = [
   ["routines", "例行任务", "play"],
   ["parallel", "并行", "layers"],
   ["commands", "常用指令", "terminal"],
+  ["storage", "存储", "photos"],
   ["version", "版本", "github"],
   ["rules", "规则与记忆", "scroll"],
   ["account", "账号与连接", "lock"],
@@ -1928,6 +1940,11 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
         <If when={on("commands")}>
         <Group title="常用指令" hint="在输入框里输入 / 选用。内置指令执行操作，你添加的指令把一段话发给团队。">
           <CommandRows settings={props.settings} />
+        </Group>
+        </If>
+        <If when={on("storage")}>
+        <Group title="图片保留" hint={MEDIA_HINT}>
+          <MediaDaysChoices settings={props.settings} />
         </Group>
         </If>
         <If when={on("version")}>
@@ -2282,6 +2299,21 @@ function SetRow(props: {
   );
 }
 
+const MEDIA_HINT = "聊天里的截图和图片保存多久，过期后自动删除。";
+
+/** How long images are kept: 7, 14, 30 or 90 days. */
+function MediaDaysChoices(props: { settings: Settings }) {
+  const { view, save } = props.settings;
+  return (
+    <Choices
+      label="图片保留"
+      choices={MEDIA_DAYS.map((d) => ({ id: String(d), label: `${d} 天`, testID: `media-days-${d}` }))}
+      selected={view() ? String(mediaDaysOf(view())) : null}
+      onPick={(id) => save(patches.mediaDays(Number(id)))}
+    />
+  );
+}
+
 type Choice = { id: string; label: string; detail?: string; testID: string };
 
 /** Pick one of a few: a radio set of rows, the chosen one checked. */
@@ -2431,6 +2463,9 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
       </If>
       <Section title="常用指令" hint="在输入框里输入 / 选用。内置指令执行操作，你添加的指令把一段话发给团队。">
         <CommandRows settings={props.settings} />
+      </Section>
+      <Section title="图片保留" hint={MEDIA_HINT}>
+        <MediaDaysChoices settings={props.settings} />
       </Section>
       <Section title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
         <VersionRows hub={props.hub} />
