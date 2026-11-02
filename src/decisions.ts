@@ -148,15 +148,17 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
   // hold → ask the human
   const opts = (meta.options ?? "").split(" | ").filter(Boolean);
   const menu = meta.kind === "menu";
+  const context = body.match(/## Context\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim() ?? "";
   const text = menu ? [
     `*${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`,
     ...opts.map((o) => `${o}`),
     `建议：*${meta.recommendation || "-"}*`,
     `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
   ].join("\n") : [
-    // the card already shows the id, the agent and the options as buttons: say only what to decide and why
-    linkRefs(meta.question ?? "", meta.task, [v?.reason ?? "", ...opts].join("\n")),
-    v?.reason ? `\n${linkRefs(v.reason, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
+    // the card already shows the id, the agent and the options as buttons: the question, then the agent's account of
+    // what is at stake (what the PR changes, what each choice means). The judge's reason for asking is not news to the owner.
+    linkRefs(meta.question ?? "", meta.task, [context, ...opts].join("\n")),
+    context ? `\n${linkRefs(context, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
   ].filter(Boolean).join("\n");
   const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
     attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });
