@@ -119,7 +119,7 @@ export async function migrateData() {
 
 // ------------------------------------------------------------------ self-update
 /** Fast-forward framework code if origin has new commits that pass tests. Returns true if updated. */
-export async function selfUpdate(opts: { busy?: number; force?: boolean } = {}): Promise<boolean> {
+export async function selfUpdate(opts: { busy?: number; force?: boolean; deploy?: boolean } = {}): Promise<boolean> {
   // never swap code (and then restart) under running work: defer until this host is idle
   if ((opts.busy ?? 0) > 0 && !opts.force) return false;
   const g = (...a: string[]) => $`git ${a}`.cwd(CODE).quiet().nothrow();
@@ -153,7 +153,7 @@ export async function selfUpdate(opts: { busy?: number; force?: boolean } = {}):
     const { loadConfig, hostName } = await import("./core");
     const c = loadConfig();
     const changed = (await g("diff", "--name-only", head, up)).stdout.toString();
-    if (c.cloud?.url && c.fleet?.primary === hostName(c) && /^(cloud|app)\//m.test(changed)) {
+    if (c.cloud?.url && c.fleet?.primary === hostName(c) && (opts.deploy || /^(cloud|app)\//m.test(changed))) {
       const { cloudDeploy } = await import("./cloud");
       await cloudDeploy(c);
     }

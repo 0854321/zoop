@@ -7,6 +7,7 @@
 //   POST /api/messages {text, reply_to?, attachments?}  → owner message: answers D-/P-/L- ids, otherwise becomes a task for `lead`
 //   POST /api/uploads (multipart file)    → { url }   (the owner's images for a message: image/*, ≤ 10 MB)
 //   GET  /api/status                      → queue, decisions, hosts, accounts
+//   POST /api/fleet/update               → every machine updates to the latest code; the primary redeploys the cloud
 //   POST /api/media (multipart file)      → { url }   (workers upload screenshots/recordings here)
 //   GET  /media/<file>                    → attachment
 //   GET  /api/files/list?prefix=  · GET /api/files/read?path=   → read-only rules & memory (same shape as the Worker)
@@ -203,6 +204,15 @@ let cancelHook: ((tid: string) => Promise<string>) | null = null;
 export const setCancelTask = (fn: (tid: string) => Promise<string>) => { cancelHook = fn; };
 /** The owner cancels a task (queued, waiting, blocked, proposed or running). */
 export const cancelTask = async (tid: string) => (cancelHook ? cancelHook(tid) : "not available");
+let updateHook: (() => Promise<number>) | null = null;
+export const setUpdateFleet = (fn: () => Promise<number>) => { updateHook = fn; };
+/** The owner asks every machine to update to the latest code (the primary also redeploys the Worker and the web app). */
+export async function updateFleet(): Promise<string> {
+  if (!updateHook) return "not available";
+  const n = await updateHook();
+  appendEvent({ from: "hub", kind: "system", text: `已通知 ${n} 台机器更新到最新代码：空闲的马上更新，有任务在跑的等跑完再重启；主控机同时重新发布线上。` });
+  return "ok";
+}
 let appendToTask: ((tid: string, text: string) => Promise<boolean>) | null = null;
 export const setAppendToTask = (fn: (tid: string, text: string) => Promise<boolean>) => { appendToTask = fn; };
 const AMEND_MS = 5 * 60_000;
@@ -347,6 +357,7 @@ export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<str
         if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
         return json({ ok: true, result: await cancelTask(id) });
       }
+      if (url.pathname === "/api/fleet/update" && req.method === "POST") return json({ ok: true, result: await updateFleet() });
       if (url.pathname === "/api/media" && req.method === "POST") {
         const f = (await req.formData()).get("file") as File | null;
         if (!f) return json({ error: "file required" }, 400);

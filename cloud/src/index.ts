@@ -374,6 +374,11 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "cancel", id }));
       return json({ ok: true });
     }
+    if (p === "/api/fleet/update" && m === "POST") { // owner: every machine updates to the latest code; the primary acts on it
+      if (who === "machine") return json({ error: "forbidden" }, 403);
+      this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "update" }));
+      return json({ ok: true });
+    }
     if (p === "/api/settings" && m === "PUT") {
       const patch = await req.json();
       this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "settings", patch }));

@@ -137,3 +137,21 @@ test("uploads: the real image type comes from the bytes", async () => {
   expect(sniffImage(new Uint8Array([1, 2, 3]), "image/jpg")).toBe("image/jpeg");
 });
 
+
+test("update the fleet: the owner's request reaches the hook and the feed says how many machines", async () => {
+  const { updateFleet, setUpdateFleet, setMirror } = await import("../src/server");
+  const seen: string[] = [];
+  setMirror((e) => { seen.push(e.text); });
+  expect(await updateFleet()).toBe("not available");
+  setUpdateFleet(async () => 3);
+  expect(await updateFleet()).toBe("ok");
+  expect(seen.at(-1)).toContain("已通知 3 台机器");
+  setMirror(() => {});
+});
+
+test("heartbeat carries the running code version, linked to its commit", async () => {
+  const { runningRev } = await import("../src/core");
+  const r = runningRev();
+  expect(r.rev).toMatch(/^[0-9a-f]{40}$/);
+  if (r.rev_url) expect(r.rev_url).toEndWith(`/commit/${r.rev}`);
+});

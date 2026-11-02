@@ -29,6 +29,7 @@ const status = {
     os: "linux", arch: "x64", clis: ["claude"], accounts: [{ cli: "claude", name: "default", state: "ok" }],
     running: [{ id: "T-0007", title: "截图检查 gallery", agent: "dev", started: ts(50) }],
     recent: [{ id: "T-0005", title: "修复登录页", state: "done", finished: ts(30) }],
+    rev: "c1cc0851234567890abcdef1234567890abcdef0", rev_url: "https://github.com/acme/noop/commit/c1cc0851234567890abcdef1234567890abcdef0",
   }],
 };
 
@@ -241,6 +242,26 @@ describe("channel", () => {
     await app.waitFor("修复登录页");
     await app.press("label:T-0005 修复登录页");
     await app.waitFor("任务 T-0005");
+  });
+
+  test("machines show the code they run, and settings updates them all after a confirm", async () => {
+    let updates = 0;
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub([]), [`GET ${URL}/api/settings`]: { status: 500 }, [`POST ${URL}/api/fleet/update`]: () => { updates++; return { body: { ok: true } }; } },
+    });
+    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
+    await app.waitFor("id:rev-linux-box");
+    expect(app.shows("c1cc085")).toBe(true);
+    await app.press("id:settings");
+    await app.waitFor("id:version-linux-box");
+    app.onDialog((d) => (d.title === "更新所有机器？" ? "取消" : null));
+    await app.press("id:update-fleet");
+    await app.waitUntil(() => app.dialogs().length === 1);
+    expect(updates).toBe(0);
+    app.onDialog((d) => (d.title === "更新所有机器？" ? "更新" : null));
+    await app.press("id:update-fleet");
+    await app.waitUntil(() => updates === 1);
   });
 
   test("sends a task with the button, and the drawer opens on phones", async () => {

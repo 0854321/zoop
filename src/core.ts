@@ -236,13 +236,27 @@ export function chooseCli(meta: Record<string, string>, cfg: Cfg): string | null
 }
 
 // ------------------------------------------------------------------ fleet presence (heartbeats)
-export type HostBeat = { host: string; caps: string[]; seen: string; busy: number; version: string; stats?: any };
+export type HostBeat = { host: string; caps: string[]; seen: string; busy: number; version: string; stats?: any;
+  /** The noop code this host runs: its commit and that commit's page. */ rev?: string; rev_url?: string };
+
+/** The commit of the code this process runs (read once: an update restarts the daemon) and its GitHub page. */
+let codeRev: { rev?: string; rev_url?: string } | undefined;
+export function runningRev(): { rev?: string; rev_url?: string } {
+  if (codeRev) return codeRev;
+  const git = (...a: string[]) => { try { return Bun.spawnSync(["git", "-C", CODE, ...a], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim(); } catch { return ""; } };
+  const rev = git("rev-parse", "HEAD") || undefined;
+  const repo = git("remote", "get-url", "origin").match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(\.git)?$/)?.[1];
+  return (codeRev = { rev, rev_url: rev && repo ? `https://github.com/${repo}/commit/${rev}` : undefined });
+}
+
+/** The owner's "update every machine" (fleet/update.json, synced): each host updates once per request. */
+export const UPDATE_REQUEST = () => P("fleet", "update.json");
 
 export function heartbeat(cfg: Cfg, busy: number, stats?: unknown) {
   const host = hostName(cfg);
   const f = P("fleet", "hosts", `${host}.json`);
   mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify({ host, caps: hostCaps(cfg), seen: now(), busy, version: "1", stats } satisfies HostBeat, null, 2));
+  writeFileSync(f, JSON.stringify({ host, caps: hostCaps(cfg), seen: now(), busy, version: "1", stats, ...runningRev() } satisfies HostBeat, null, 2));
 }
 
 export function onlineHosts(cfg: Cfg): HostBeat[] {

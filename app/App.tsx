@@ -91,6 +91,7 @@ import {
   RULE_PREFIXES,
   groupRules,
   stripFrontMatter,
+  type HostInfo,
 } from "./hub";
 
 type Config = { url: string; token: string };
@@ -1084,6 +1085,9 @@ function MachineDetail(props: { hub: Hub; host: string; wide: boolean; onTask: (
             <Text style={{ fontSize: 14, color: colors.muted }}>
               {["在线", [h()!.os ?? osOf(h()!), h()!.arch].filter(Boolean).join(" "), h()!.seen ? `心跳 ${ago(h()!.seen)}` : "", `${h()!.busy ?? 0} 个运行中`].filter(Boolean).join(" · ")}
             </Text>
+            <If when={h()!.rev}>
+              <RevLink host={h()!} />
+            </If>
           </View>
           {section("资源")}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -1671,6 +1675,9 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
             </View>
           )}
         </If>
+        <Group title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
+          <VersionRows hub={props.hub} />
+        </Group>
         <Group title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
           <SetRow first label="查看规则与记忆" chevron onPress={props.onRules} testID="settings-rules" />
         </Group>
@@ -1742,6 +1749,60 @@ function Hairline(props: { inset?: number }) {
 }
 
 /** A row of a section, at least 48 pt tall: a label (and a line under it), then a value, a control or a chevron. */
+/** The code a machine runs: the short commit, a link to it on GitHub. */
+function RevLink(props: { host: HostInfo }) {
+  const short = () => (props.host.rev ?? "").slice(0, 7);
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <Text style={{ fontSize: 14, color: colors.muted }}>版本</Text>
+      <Text
+        role={props.host.rev_url ? "link" : undefined}
+        testID={`rev-${props.host.host}`}
+        accessibilityLabel={`版本 ${short()}`}
+        onPress={props.host.rev_url ? () => void openUrl(props.host.rev_url!).catch(() => {}) : undefined}
+        style={{ fontFamily: MONO, fontSize: 13, color: props.host.rev_url ? colors.accent : colors.muted }}
+      >
+        {short()}
+      </Text>
+    </View>
+  );
+}
+
+/** Ask every machine to update to the latest code; the primary also redeploys the web app and the Worker. */
+async function updateAllMachines(hub: Hub) {
+  const r = await AlertDialog.show({
+    title: "更新所有机器？",
+    description: "每台机器拉取最新代码后重启：空闲的马上更新，有任务在跑的等跑完再重启。主控机同时重新发布线上。",
+    actions: [
+      { id: "cancel", label: "取消", role: "cancel" },
+      { id: "update", label: "更新" },
+    ],
+  });
+  if (r.action === "update") await hub.api("POST", "/api/fleet/update").catch(() => {});
+}
+
+/** One row per online machine with the commit it runs, then the button that updates them all. */
+function VersionRows(props: { hub: Hub }) {
+  const hosts = () => props.hub.status()?.hosts ?? [];
+  return (
+    <>
+      <Each of={hosts()}>
+        {(h, i) => (
+          <SetRow
+            first={i() === 0}
+            label={h().host}
+            value={h().rev?.slice(0, 7) ?? "未知"}
+            chevron={!!h().rev_url}
+            onPress={h().rev_url ? () => void openUrl(h().rev_url!).catch(() => {}) : undefined}
+            testID={`version-${h().host}`}
+          />
+        )}
+      </Each>
+      <SetRow first={!hosts().length} label="更新所有机器" tone="accent" onPress={() => void updateAllMachines(props.hub)} testID="update-fleet" />
+    </>
+  );
+}
+
 function SetRow(props: {
   label: string;
   detail?: string;
@@ -1944,6 +2005,9 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
           </View>
         )}
       </If>
+      <Section title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
+        <VersionRows hub={props.hub} />
+      </Section>
       <Section title="账号与连接" hint="登录状态保存在这台设备上，下次打开自动连接。">
         <SetRow
           first

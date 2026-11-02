@@ -25,6 +25,9 @@ export type HostInfo = {
   accounts?: { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string }[];
   running?: { id: string; title: string; agent: string; started?: string }[];
   recent?: { id: string; title: string; state?: string; finished?: string }[];
+  /** The code the machine runs: its git commit, and that commit on GitHub. */
+  rev?: string;
+  rev_url?: string;
 };
 
 export type TaskInfo = {

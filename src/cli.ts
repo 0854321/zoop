@@ -19,10 +19,10 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, setAppendToTask, setCancelTask, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, setAppendToTask, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
-import { allowedClis, capOk, idTagFor, isPrimary, setApprovalGate, setIdTag } from "./core";
+import { CODE, UPDATE_REQUEST, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
@@ -311,6 +311,31 @@ async function drainAndExit(why: string, host: string) {
   process.exit(0);
 }
 
+const UPDATE_DONE = () => P("..", "update-handled");
+/** The owner's "update every machine": once per request, now (not at the hourly check), running work finishing
+ *  first. The primary redeploys the Worker and the web app even when its code was already current. */
+async function ownerUpdate(c: Cfg, host: string) {
+  let at = "";
+  try { at = JSON.parse(readFileSync(UPDATE_REQUEST(), "utf8")).at ?? ""; } catch { return; }
+  let done = "";
+  try { done = readFileSync(UPDATE_DONE(), "utf8").trim(); } catch {}
+  if (!at || at <= done) return;
+  writeFileSync(UPDATE_DONE(), at);
+  const before = runningRev().rev?.slice(0, 7) ?? "?";
+  const updated = await selfUpdate({ force: true, deploy: true }).catch(() => false);
+  if (updated) {
+    journal(host, `⬆️ updated on the owner's request (was ${before}); restarting${running ? ` after ${running} running task(s)` : ""}`);
+    void drainAndExit("self-update", host);
+    return;
+  }
+  const now7 = (Bun.spawnSync(["git", "-C", CODE, "rev-parse", "--short", "HEAD"], { stdout: "pipe" }).stdout.toString().trim()) || before;
+  if (isPrimary(c, host) && c.cloud?.url) {
+    const { cloudDeploy } = await import("./cloud");
+    const ok = await cloudDeploy(c).then((u) => !!u, (e) => { console.error(`cloud deploy: ${e}`); return false; });
+    journal(host, `⬆️ already at ${now7}; ${ok ? "redeployed the Worker and the web app" : "redeploying the Worker failed"}`);
+  } else journal(host, now7 === before ? `⬆️ already at ${now7}` : `⬆️ not updated (still running ${before}; local edits or failing tests)`);
+}
+
 /** A good report doesn't forward raw errors. Retry, call the medic for tooling problems, and only after that
  *  tell the owner — in one plain sentence, and only for work the owner actually cares about. */
 async function handleFailure(meta: Record<string, string>, body: string, summary: string, out: string, cfg: Cfg, host: string) {
@@ -533,6 +558,14 @@ async function daemon(cfg: Cfg) {
     return false;
   });
   setAppendToTask(appendFollowUp);
+  setUpdateFleet(() => locked(async () => {
+    await _pull();
+    mkdirSync(P("fleet"), { recursive: true });
+    writeFileSync(UPDATE_REQUEST(), JSON.stringify({ at: now(), by: "owner" }, null, 2));
+    journal(host, "⬆️ owner asked every machine to update");
+    await _commitPush(`[${host}] update requested`);
+    return onlineHosts(cfg).length;
+  }));
   setCancelTask((tid) => locked(async () => {
     await _pull();
     const where = ["inbox", "waiting", "blocked", "proposed", "active"].find((d) => existsSync(P("tasks", d, `${tid}.md`)));
@@ -594,6 +627,7 @@ async function daemon(cfg: Cfg) {
       const force = readFileSync(RESTART_FLAG(), "utf8").includes("force");
       if (restartAllowed(force)) { unlinkSync(RESTART_FLAG()); void drainAndExit("restart", host); }
     }
+    if (!draining) await ownerUpdate(c, host);
     try { await tick(c, true); failures = 0; } catch (e) {
       console.error("tick failed", e);
       if (++failures >= 3) void medic(`noop daemon: ${failures} consecutive tick failures on ${host}.\n${(e as Error)?.stack ?? e}`, c, { auto: true, kind: "daemon" });
