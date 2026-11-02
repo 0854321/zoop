@@ -477,7 +477,7 @@ describe("team settings", () => {
       effective: {
         agents: [{ id: "reporter", clis: ["codex", "claude"], autonomy: "onboarding" }],
         autonomy: "onboarding",
-        routines: [{ name: "triage-inbound", every: "30m", agent: "lead", enabled: true }],
+        routines: [{ name: "triage-inbound", desc: "扫描收件箱", every: "30m", agent: "lead", enabled: true }],
         max_parallel: 4,
       },
       options: { clis: [["claude"], ["codex", "claude"], ["claude", "codex"], ["codex"]], autonomy: ["onboarding", "assisted", "autonomous"] },
@@ -508,7 +508,10 @@ describe("team settings", () => {
     await app.press("id:autonomy-reporter");
     await app.press("id:autonomy-reporter-assisted");
     await app.press("id:settings-tab-routines");
+    await app.waitFor("text:扫描收件箱");
+    await app.waitFor("text:每 30 分钟");
     await app.press("id:routine-triage-inbound");
+    await app.press("id:every-triage-inbound");
     await app.press("id:every-triage-inbound-1h");
     await app.press("id:settings-tab-parallel");
     await app.press("id:parallel-inc");

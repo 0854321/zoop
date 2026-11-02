@@ -205,7 +205,7 @@ export type SettingsView = {
   effective: {
     agents: { id: string; title?: string; about?: string; clis: string[]; autonomy: Autonomy }[];
     autonomy: Autonomy;
-    routines: { name: string; every: string; agent: string; enabled: boolean }[];
+    routines: { name: string; desc?: string; every: string; agent: string; enabled: boolean }[];
     max_parallel: number | null;
   };
   options: { clis: string[][]; autonomy: string[] };
@@ -222,6 +222,18 @@ export const cliLabel = (clis: string[]) => CLI_LABELS[cliKey(clis)] ?? clis.joi
 const AUTONOMY_LABELS: Record<string, string> = { onboarding: "学习期", assisted: "协助", autonomous: "自主" };
 export const autonomyLabel = (a: string) => AUTONOMY_LABELS[a] ?? a;
 export const INTERVALS = ["15m", "30m", "1h", "2h", "6h", "1d"];
+const DAYS: Record<string, string> = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
+/** A routine's schedule in words: "30m" → 每 30 分钟, "weekly FRI 17:00" → 每周五 17:00. */
+export function everyLabel(every: string): string {
+  const e = every.trim();
+  let m = e.match(/^(\d+)\s*([mhd])$/);
+  if (m) return m[1] === "1" ? { m: "每分钟", h: "每小时", d: "每天" }[m[2]]! : `每 ${m[1]} ${{ m: "分钟", h: "小时", d: "天" }[m[2]]}`;
+  if (e === "hourly") return "每小时";
+  if ((m = e.match(/^daily\s+(\d\d?:\d\d)$/))) return `每天 ${m[1]}`;
+  if ((m = e.match(/^weekdays\s+(\d\d?:\d\d)$/))) return `工作日 ${m[1]}`;
+  if ((m = e.match(/^weekly\s+(\w{3})\s+(\d\d?:\d\d)$/i)) && DAYS[m[1].toUpperCase()]) return `每周${DAYS[m[1].toUpperCase()]} ${m[2]}`;
+  return e;
+}
 export const intervalsWith = (every: string) => (INTERVALS.includes(every) ? INTERVALS : [...INTERVALS, every]);
 
 /** The PUT bodies the settings screen sends (whitelisted keys of the hub). */

@@ -76,6 +76,7 @@ import {
   cliKey,
   cliLabel,
   intervalsWith,
+  everyLabel,
   patches,
   type SettingsView,
   NOTIFY_KINDS,
@@ -1778,32 +1779,35 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
               </If>
 
               <If when={on("routines")}>
-              <Group title="例行任务" hint="开关与运行间隔">
+              <Group title="例行任务" hint="定时生成任务的规则：开关和运行时间">
                 <Each of={e().routines} key={(r) => r.name}>
                   {(r, i) => (
-                    <View style={{ ...row, borderTopWidth: i() === 0 ? 0 : 1 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                        <Toggle
-                          testID={`routine-${r().name}`}
-                          label={r().name}
-                          value={r().enabled}
-                          onChange={(on) => save(patches.routine(r().name, { enabled: on }))}
-                        />
-                        <Text style={{ flex: 1, fontSize: 15.5, color: r().enabled ? colors.text : colors.faint }}>{r().name}</Text>
-                        <Text style={{ fontSize: 13, color: colors.faint }}>{r().agent}</Text>
+                    <View style={{ ...row, flexDirection: "row", alignItems: "center", gap: 12, borderTopWidth: i() === 0 ? 0 : 1 }}>
+                      <Toggle
+                        testID={`routine-${r().name}`}
+                        label={r().name}
+                        value={r().enabled}
+                        onChange={(on) => save(patches.routine(r().name, { enabled: on }))}
+                      />
+                      <View style={{ flex: 1, gap: 3 }}>
+                        <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+                          <Text style={{ fontSize: 15.5, fontWeight: "500", color: r().enabled ? colors.text : colors.faint }}>{r().name}</Text>
+                          <If when={r().agent}>
+                            <Text style={{ fontSize: 12.5, color: colors.faint }}>{e().agents.find((a) => a.id === r().agent)?.title ?? r().agent}</Text>
+                          </If>
+                        </View>
+                        <If when={r().desc}>
+                          <Text testID={`routine-desc-${r().name}`} style={{ fontSize: 13, lineHeight: 18, color: colors.muted }}>{r().desc}</Text>
+                        </If>
                       </View>
-                      <View style={{ ...chips, paddingLeft: 52 }}>
-                        <Each of={intervalsWith(r().every)}>
-                          {(iv) => (
-                            <Chip
-                              testID={`every-${r().name}-${iv()}`}
-                              label={iv()}
-                              on={iv() === r().every}
-                              onPress={() => save(patches.routine(r().name, { every: iv() }))}
-                            />
-                          )}
-                        </Each>
-                      </View>
+                      <Dropdown
+                        testID={`every-${r().name}`}
+                        label="运行"
+                        value={everyLabel(r().every)}
+                        options={intervalsWith(r().every).map((iv) => ({ id: iv, label: everyLabel(iv), testID: `every-${r().name}-${iv}` }))}
+                        selected={r().every}
+                        onPick={(iv) => save(patches.routine(r().name, { every: iv }))}
+                      />
                     </View>
                   )}
                 </Each>
@@ -2239,7 +2243,7 @@ function SaveNote(props: { settings: Settings }) {
   );
 }
 
-const routineValue = (r: { enabled: boolean; every: string }) => (r.enabled ? `每 ${r.every}` : "已关闭");
+const routineValue = (r: { enabled: boolean; every: string }) => (r.enabled ? everyLabel(r.every) : "已关闭");
 
 /** 设置 on a phone: a list of sections; 通知, each member and each routine push pages of their own. */
 function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen: (r: Route) => void; onDisconnect: () => void }) {
@@ -2452,7 +2456,7 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
       <If when={routine()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>没有这个例行任务</Text>}>
         {(r) => (
           <>
-            <Section hint={`由 ${r().agent} 执行。`}>
+            <Section hint={[r().desc, r().agent && `由 ${r().agent} 执行。`].filter(Boolean).join("\n")}>
               <SetRow
                 first
                 label="启用"
@@ -2462,7 +2466,7 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
             <Section title="运行间隔">
               <Choices
                 label="运行间隔"
-                choices={intervalsWith(r().every).map((iv) => ({ id: iv, label: `每 ${iv}`, testID: `every-${props.name}-${iv}` }))}
+                choices={intervalsWith(r().every).map((iv) => ({ id: iv, label: everyLabel(iv), testID: `every-${props.name}-${iv}` }))}
                 selected={r().every}
                 onPick={(iv) => save(patches.routine(props.name, { every: iv }))}
               />

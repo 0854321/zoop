@@ -198,6 +198,26 @@ export function agentRole(agent: string): { title?: string; about?: string } {
   return { title: (m[2] ?? m[1]).trim(), about: m[3]?.trim() };
 }
 
+/** What each built-in routine does, for the settings page (a routine's own `desc` in config.toml wins). */
+const ROUTINE_DESC: Record<string, string> = {
+  "triage-inbound": "扫描 GitHub 通知、待你审的 PR、指派给你的 issue 和 CI 失败，拆成任务交给对应成员",
+  "uptime-watch": "查看线上可用性告警，按升级规则处理",
+  "pr-review": "审查 Core 仓库里还没审过的 PR，每次最多 3 个",
+  "own-prs-ci": "让你自己的 PR 保持可合并：解冲突、修 CI、改掉明显的评审意见",
+  "nightly-health": "在最新 main 上跑 cargo check / test，发现回归就建任务",
+  "macos-check": "在 macOS 上构建并测试 Core 仓库，报告平台相关的失败",
+  "daily-report": "根据日志、提交和 GitHub 动态写当天的日报",
+  "weekly-report": "按 OKR 起草本周周报，正式提交前先问你",
+  "focus-check": "核对你的关注点：哪些继续、哪些已完成、哪些该新增",
+  "learn-ceo": "每台机器从本机的 Claude / Codex 会话里学习你的做事方式和判断",
+  evolve: "回顾最近 7 天，调整团队的规则、提示词和记忆",
+  "evolve-deep": "回顾最近 30 天，重写各成员的设定，提议新角色",
+  "release-monday": "周一发布：按 runbook 发 gpui-fast / gpui-kit，每个关口找你确认",
+  "release-wednesday": "周三发布 NSH：准备好一切，发布前问你一次",
+};
+const routineDesc = (r: any) =>
+  String(r.desc ?? ROUTINE_DESC[r.name] ?? String(r.prompt ?? "").split(/(?<=[.。])\s/)[0].slice(0, 120)).trim() || undefined;
+
 export function settingsView() {
   const cfg = loadConfig();
   const agents = readdirSync(P("agents"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
@@ -206,7 +226,7 @@ export function settingsView() {
     effective: {
       agents: agents.map((a) => ({ id: a, ...agentRole(a), clis: allowedClis({ agent: a }, cfg), autonomy: cfg.autonomy?.agents?.[a] ?? cfg.autonomy?.level ?? "onboarding" })),
       autonomy: cfg.autonomy?.level ?? "onboarding",
-      routines: (cfg.routine ?? []).map((r: any) => ({ name: r.name, every: r.every, agent: r.agent, enabled: r.enabled !== false })),
+      routines: (cfg.routine ?? []).map((r: any) => ({ name: r.name, desc: routineDesc(r), every: r.every, agent: r.agent, enabled: r.enabled !== false })),
       max_parallel: cfg.host?.max_parallel ?? null,
     },
     options: { clis: [["claude"], ["codex", "claude"], ["claude", "codex"], ["codex"]], autonomy: ["onboarding", "assisted", "autonomous"] },
