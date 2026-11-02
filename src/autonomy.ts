@@ -125,8 +125,10 @@ export function resolveProposals(id: string, answer: string, by: string): boolea
 export function judgeAccuracy(agent?: string) {
   const rows = list(P("decisions", "closed")).map((p) => readDoc(p).meta)
     .filter((m) => m.shadow_verdict && /^owner/.test(m.answered_by ?? "") && (!agent || m.agent === agent));
-  const comparable = rows.filter((m) => m.shadow_verdict === "decided");
-  const agree = comparable.filter((m) => (m.answer ?? "").trim().slice(0, 1).toUpperCase() === (m.shadow_answer ?? "").trim().slice(0, 1).toUpperCase());
-  return { samples: rows.length, would_decide: comparable.length, agreed: agree.length,
-    accuracy: comparable.length ? +(agree.length / comparable.length).toFixed(2) : null };
+  // every owner-answered decision the judge also answered counts (held ones too): shadow_agree is set by closeDecision
+  const scored = rows.filter((m) => m.shadow_agree === "yes" || m.shadow_agree === "no");
+  const agree = scored.filter((m) => m.shadow_agree === "yes");
+  const decided = rows.filter((m) => m.shadow_verdict === "decided");
+  return { samples: rows.length, would_decide: decided.length, scored: scored.length, agreed: agree.length,
+    accuracy: scored.length ? +(agree.length / scored.length).toFixed(2) : null };
 }

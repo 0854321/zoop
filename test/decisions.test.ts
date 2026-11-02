@@ -59,7 +59,8 @@ test("shadow decided verdict feeds judgeAccuracy; agreeing with the recommendati
   const acc = auto.judgeAccuracy();
   expect(acc.samples).toBe(2);
   expect(acc.would_decide).toBe(1);
-  expect(acc.agreed).toBe(1);
+  expect(acc.scored).toBe(2); // the held decision is scored too
+  expect(acc.agreed).toBe(2);
 });
 
 test("judge failure is recorded as error; judge auto-decision keeps its shadow fields and is not self-scored", async () => {
