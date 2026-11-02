@@ -1,13 +1,12 @@
 // Slack / Discord: outbound notifications + polling owner replies (no public webhook server needed).
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
-import { type Cfg, P, hostName, list } from "./core";
+import { type Cfg, P, hostName, isPrimary, list } from "./core";
 import { appendEvent, type Event, forwardEvent, storeMedia, uploadMedia } from "./server";
 
 export type NotifyOpts = { kind?: Event["kind"]; ref?: string; options?: string[]; attachments?: string[]; from?: string;
   /** Team channel only: no ntfy / Slack / Discord (agents' routine results). */ quiet?: boolean };
 
-const isPrimary = (cfg: Cfg) => (cfg.fleet?.primary ?? hostName(cfg)) === hostName(cfg);
 
 async function slackUpload(n: Cfg, file: string, thread?: string) {
   const f = Bun.file(file);

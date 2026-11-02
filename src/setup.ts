@@ -39,13 +39,14 @@ async function joinViaLogin(url: string, host: string): Promise<string | null> {
   if (!v.ok || !v.json?.session) { console.error(`verification failed (${v.status}): ${v.json?.error ?? ""}`); return null; }
   const j = await post("/api/host/join", { host }, v.json.session);
   await post("/api/auth/logout", {}, v.json.session); // the session was only needed to mint the machine token
-  if (!j.ok || !j.json?.token) { console.error(`join failed (${j.status}): ${j.json?.error ?? ""}; or use: hub init --worker ${url} --token <machine-token>`); return null; }
+  if (!j.ok || !j.json?.token) { console.error(`join failed (${j.status}): ${j.json?.error ?? ""}; or use: noop init ${url} --token <machine-token>`); return null; }
   return String(j.json.token);
 }
 
-/** `hub init` (primary): deploy your own Worker, seed templates, push them.
- *  `hub init --worker <hub-url> [--token <machine-token>]`: join an existing hub and mirror its data. */
-export async function init(opts: { worker?: string; token?: string } = {}) {
+/** `hub init [<hub-url>] [--token <machine-token>]` (the default): join an existing hub as a worker and mirror its data.
+ *  `hub init --primary`: the fleet's one primary: deploy your own Worker, seed templates, push them.
+ *  A host already set up as the primary (or already joined) keeps its role when init runs again. */
+export async function init(opts: { worker?: string; token?: string; primary?: boolean } = {}) {
   const { commitPush, pull, loadConfig, hostName } = await import("./core");
   const { readHubToml, syncMode, writeHubToml } = await import("./sync");
   if (existsSync(join(DATA, ".git"))) {
@@ -54,9 +55,12 @@ export async function init(opts: { worker?: string; token?: string } = {}) {
   }
   mkdirSync(DATA, { recursive: true });
   const me = hostname().split(".")[0];
-  if (opts.worker) {
-    const url = opts.worker.replace(/\/$/, "");
-    const token = opts.token ?? await joinViaLogin(url, me);
+  const joined = readHubToml().cloud?.url;
+  const primaryHere = existsSync(P("config.toml")) && new RegExp(`^\\s*primary\\s*=\\s*"${me}"`, "m").test(readFileSync(P("config.toml"), "utf8"));
+  if (!opts.primary && !primaryHere) {
+    const url = (opts.worker || joined || (prompt("your noop URL (e.g. https://noop.example.com; set up the first machine with --primary):") ?? "")).trim().replace(/\/$/, "");
+    if (!url) { console.error("no noop URL: run init <noop-url>, or init --primary on the machine that hosts it"); process.exitCode = 1; return; }
+    const token = opts.token ?? (url === joined ? readHubToml().server?.token : undefined) ?? await joinViaLogin(url, me);
     if (!token) return;
     writeHubToml({ cloud: { url }, server: { token } });
     if (!(await pull())) { console.error(`could not sync from ${url} (check the URL / token)`); process.exitCode = 1; return; }

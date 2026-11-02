@@ -11,10 +11,10 @@ noop runs a small team of Claude Code and Codex agents on your own computers. Th
 
 ## Install
 
-On an always-on Linux machine:
+On an always-on Linux machine, once — it becomes the primary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- --primary
 ```
 
 You'll be asked to log in to your Cloudflare account once (the free plan is enough).
@@ -23,7 +23,7 @@ Add more machines whenever you like — they help when they're online and are ne
 
 ```bash
 # macOS
-curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- --worker
+curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash
 ```
 
 ```powershell

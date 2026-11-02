@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # noop installer (Linux / macOS)
-#   primary:  curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash
-#   worker:   curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- --worker [<noop-url>]
+#   a machine (the default; joins your noop):  curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- [<noop-url>]
+#   the first machine, once (the primary):     curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- --primary
 set -euo pipefail
 
 HOME_DIR="${NOOP_HOME:-$([ -d "$HOME/.agent-hub" ] && [ ! -d "$HOME/.noop" ] && echo "$HOME/.agent-hub" || echo "$HOME/.noop")}"
@@ -43,7 +43,8 @@ step "AI tools"; if [ ${#missing[@]} -eq 0 ]; then ok "claude, codex, gh"; else 
 echo
 
 export NOOP_HOME="$HOME_DIR"
-"$APP/bin/noop" init "$@"      # interactive: Cloudflare login (primary) or email code (worker)
+# interactive: email code (joining) or Cloudflare login (--primary); the questions read the terminal, not the piped script
+if [ -r /dev/tty ]; then "$APP/bin/noop" init "$@" </dev/tty; else "$APP/bin/noop" init "$@"; fi
 step "background service"; run "$APP/bin/noop" install; ok
 echo
 "$APP/bin/noop" status --brief || true

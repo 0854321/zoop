@@ -32,7 +32,7 @@ if ($missing) { Write-Host "! missing: $($missing -join ', ') (install and log i
 Write-Host ""
 
 $env:NOOP_HOME = $HomeDir
-bun "$App\src\cli.ts" init --worker @args
+bun "$App\src\cli.ts" init @args   # joins your noop; the first machine passes --primary
 Step "background service"; Run { bun "$App\src\cli.ts" install }; Run { powercfg /change standby-timeout-ac 0 }; Ok
 Write-Host ""
 bun "$App\src\cli.ts" status --brief

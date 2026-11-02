@@ -92,3 +92,14 @@ test("ids: non-primary hosts are tagged, primary skips ids taken in any state", 
   expect(nextId("T", P("tasks"))).toBe("T-M0004");
   expect(nextId("D", P("decisions"))).toBe("D-M0001");
 });
+
+test("primary: named in the config, else only while no other host has a heartbeat", () => {
+  rmSync(P("fleet", "hosts"), { recursive: true, force: true });
+  expect(core.isPrimary({ fleet: { primary: "pc" } }, "mac")).toBe(false);
+  expect(core.isPrimary({}, "mac")).toBe(true); // alone: a fresh first machine
+  core.heartbeat({ host: { name: "pc" } }, 0);
+  expect(core.isPrimary({}, "mac")).toBe(false); // another host is here: a worker, never a second primary
+  expect(idTagFor({}, "mac")).toBe("M");
+  expect(core.isPrimary({}, "pc")).toBe(true); // its own heartbeat does not count
+  expect(core.isPrimary({ fleet: { primary: "mac" } }, "mac")).toBe(true);
+});

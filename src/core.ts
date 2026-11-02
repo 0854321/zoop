@@ -2,7 +2,7 @@
 import { $ } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import * as sync from "./sync";
 
 /** Framework code (this repo, self-updating). */
@@ -153,9 +153,19 @@ export function nextId(prefix: string, dir: string): string {
   return `${prefix}-${idTag}${String(n).padStart(4, "0")}`;
 }
 
+/**
+ * Whether `host` is the fleet's primary (runs routines, the judge, the server, mints untagged ids). Named by
+ * [fleet] primary; with none named, a host is the primary only while it is alone: once another host's heartbeat
+ * is in the data, it is a worker, so a machine that joined before its config synced never takes over.
+ */
+export function isPrimary(cfg: Cfg, host = hostName(cfg)): boolean {
+  if (cfg.fleet?.primary) return cfg.fleet.primary === host;
+  return !list(P("fleet", "hosts"), /\.json$/).some((p) => basename(p, ".json") !== host);
+}
+
 /** Id tag for a host: "" on the primary, else [host].id_tag or the host name's first letter, upper-cased. */
 export function idTagFor(cfg: Cfg, host: string): string {
-  if ((cfg.fleet?.primary ?? host) === host) return "";
+  if (isPrimary(cfg, host)) return "";
   return String(cfg.host?.id_tag ?? (host.replace(/[^a-z]/gi, "").charAt(0) || "W")).toUpperCase();
 }
 

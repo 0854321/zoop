@@ -22,7 +22,7 @@ import { doctor, visual } from "./visual";
 import { drainInbound, handleOwnerMessage, setAppendToTask, setCancelTask, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
-import { allowedClis, capOk, idTagFor, setApprovalGate, setIdTag } from "./core";
+import { allowedClis, capOk, idTagFor, isPrimary, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
@@ -399,7 +399,7 @@ Build the owner's next-action menu per your profile and return needs_decision.${
 
 export async function tick(cfg: Cfg, background = false) {
   const host = hostName(cfg);
-  const primary = (cfg.fleet?.primary ?? host) === host;
+  const primary = isPrimary(cfg, host);
   await locked(async () => {
     await _pull();
     try { writeRules(); } catch (e) { console.error(`rules.md: ${e}`); }
@@ -518,7 +518,7 @@ async function daemon(cfg: Cfg) {
     journal(host, `⚙️ owner changed settings: ${summary}`);
     await _commitPush(`[${host}] settings: ${summary.slice(0, 60)}`);
   }));
-  if ((cfg.fleet?.primary ?? host) === host) startCloudBridge(cfg);
+  if (isPrimary(cfg, host)) startCloudBridge(cfg);
   const appendFollowUp = (tid: string, text: string) => locked(async () => {
     await _pull();
     for (const dir of ["inbox", "active", "waiting"]) {
@@ -556,7 +556,7 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] cancel ${tid}`);
     return "cancelled";
   }));
-  if ((cfg.fleet?.primary ?? host) === host) startServer(cfg, async (text) => {
+  if (isPrimary(cfg, host)) startServer(cfg, async (text) => {
     // Same work as an open task? Add the message to it instead of opening a duplicate.
     const same = await sameOpenTask(text, cfg).catch(() => null);
     if (same && (await appendFollowUp(same, text))) return same;
@@ -641,8 +641,8 @@ function status(cfg: Cfg, brief = false) {
 
 const HELP = `noop — your own AI team
 
-  noop init                   primary: deploy your own Cloudflare Worker (holds the fleet data), seed ~/.noop/data
-  noop init --worker <hub-url> [--token <machine-token>]   join a hub (owner email login, or a machine token)
+  noop init [<hub-url>] [--token <machine-token>]   join your hub (owner email login, or a machine token); asks for the URL if not given
+  noop init --primary         the first machine, once: deploy your own Cloudflare Worker (holds the fleet data), seed ~/.noop/data
   noop migrate-data           one-time: upload the old git data repo to your Worker, retire its .git
   noop install                run as a service (systemd / launchd / Task Scheduler)
   noop update                 self-update framework now (also automatic in daemon)
@@ -669,8 +669,11 @@ async function main() {
   const host = hostName(cfg);
   switch (cmd) {
     case "init": {
-      const { values } = parseArgs({ args: rest, options: { worker: { type: "string" }, token: { type: "string" } } });
-      return init(values);
+      // a bare `--worker` (older install lines) means the default: join an existing noop
+      const args = rest.flatMap((a, i) => (a === "--worker" && (!rest[i + 1] || rest[i + 1].startsWith("-")) ? [] : [a]));
+      const { values, positionals } = parseArgs({ args, allowPositionals: true,
+        options: { worker: { type: "string" }, token: { type: "string" }, primary: { type: "boolean" } } });
+      return init({ ...values, worker: values.worker ?? positionals[0] });
     }
     case "migrate-data": return migrateData();
     case "install": return install();
