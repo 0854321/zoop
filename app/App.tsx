@@ -849,7 +849,8 @@ function Message(props: {
             ) : (
             <>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
+            {/* one option per line: options are sentences, side by side they read as a jumble */}
+            <View style={{ alignItems: "flex-start", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
               <Each of={choicesOf(e).slice(0, 12)}>
                 {(c, i) => (
                   <Btn
