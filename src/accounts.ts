@@ -87,7 +87,7 @@ export async function reportFailure(a: Account, kind: Failure, output: string, c
   st.last_error = output.slice(-300);
   if (kind === "quota") {
     st.cooldown_until = resetTime(output).toISOString();
-    journal(host, `⛽ ${key(a)} hit usage limit → cooldown until ${st.cooldown_until.slice(11, 16)}Z`);
+    journal(host, `${key(a)} hit usage limit → cooldown until ${st.cooldown_until.slice(11, 16)}Z`);
   } else {
     st.needs_login = true;
     journal(host, `🔑 ${key(a)} needs login`);
@@ -110,7 +110,7 @@ async function alertIfAllExhausted(cfg: Cfg) {
     const st = load().accounts[key(a)] ?? {};
     return `• ${key(a)}：${st.needs_login ? "需要登录" : st.cooldown_until ? `额度用尽，约 ${new Date(st.cooldown_until).toLocaleTimeString()} 恢复` : "?"}`;
   });
-  await notify([`⛽ ${hostName(cfg)} 上所有 AI 账户都不可用，fleet 暂停中：`, ...lines,
+  await notify([`${hostName(cfg)} 上所有 AI 账户都不可用，fleet 暂停中：`, ...lines,
     `可以：回复登录码完成待登录账户，或在 config.local.toml 的 [[accounts]] 加一个账户。`].join("\n"), cfg);
 }
 
@@ -176,8 +176,8 @@ export async function startLogin(a: Account, cfg: Cfg) {
     const ok = code === 0;
     st.accounts[k] = { ...st.accounts[k], needs_login: !ok, login_id: undefined, cooldown_until: undefined };
     save(st);
-    journal(host, ok ? `✅ ${k} logged in (${id})` : `❌ ${k} login ${id} failed (exit ${code})`);
-    await notify(ok ? `✅ ${k} 登录成功，fleet 继续运转` : `❌ ${id} 登录未完成（exit ${code}），稍后会再发新链接`, cfg);
+    journal(host, ok ? `${k} logged in (${id})` : `${k} login ${id} failed (exit ${code})`);
+    await notify(ok ? `${k} 登录成功，fleet 继续运转` : `${id} 登录未完成（exit ${code}），稍后会再发新链接`, cfg);
   });
   setTimeout(() => { if (pending.has(id)) proc.kill(); }, 30 * 60_000); // link expiry
 }

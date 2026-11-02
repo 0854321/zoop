@@ -40,10 +40,10 @@ export async function proposeBatch(cfg: Cfg, host: string) {
     id, kind: "proposals", created: now(), host, items: items.map((p) => readDoc(p).meta.id).join(","),
     question: "Which of these should the fleet do?",
   }, `## Proposed\n${lines.join("\n")}\n`);
-  await notify([`🗂 *${id}* · 我们打算做这些（学习期需要你确认）：`, ...lines,
+  await notify([`*${id}* · 我们打算做这些（学习期需要你确认）：`, ...lines,
     `回复 \`${id} 1,3\` / \`${id} all\` / \`${id} none\`，也可以 \`${id} 1 但先只做 Linux\``].join("\n"), cfg,
     { kind: "proposals", ref: id, options: ["all", "none", ...lines.map((_, i) => String(i + 1))] });
-  journal(host, `🗂 ${id} asked owner to approve ${items.length} proposed tasks`);
+  journal(host, `${id} asked owner to approve ${items.length} proposed tasks`);
 }
 
 /** Owner's answer to a proposals batch: approve picked ones, reject the rest (rejections are a learning signal). */

@@ -143,7 +143,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     journal(host, `${res.status === "done" ? "✅" : "❌"} ${meta.id} ${res.summary}`);
     // the owner asked for this (and it is not an internal sub-step) → bring back the result
     if (res.status === "done" && ownerWork && !meta.parent)
-      void notify(`✅ ${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
+      void notify(`${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
     if (res.status !== "done") void handleFailure(meta, body, res.summary, out, cfg, host);
   }
   await _commitPush(`[${host}] ${res.status} ${meta.id}: ${meta.title}`);
@@ -157,8 +157,8 @@ async function handleReplies(cfg: Cfg, host: string) {
   for (const r of replies) {
     if (r.id.startsWith("P-")) {
       if (resolveProposals(r.id, r.answer, `owner(${r.source})`)) {
-        journal(host, `🗂 ${r.id} owner approved: ${r.answer}`);
-        await notify(`👌 ${r.id} 已按你的选择排队`, cfg);
+        journal(host, `${r.id} owner approved: ${r.answer}`);
+        await notify(`${r.id} 已按你的选择排队`, cfg);
       }
       continue;
     }
@@ -169,17 +169,17 @@ async function handleReplies(cfg: Cfg, host: string) {
     if (r.source === "chat-amend") {
       const tid = amendDecision(r.id, r.answer, "owner(chat)");
       if (tid) {
-        journal(host, `✏️ ${r.id} owner correction: ${r.answer}`);
-        await notify(`✏️ 已按你的纠正更新 ${r.id}（${tid}），之前的选择作废`, cfg);
+        journal(host, `${r.id} owner correction: ${r.answer}`);
+        await notify(`已按你的纠正更新 ${r.id}（${tid}），之前的选择作废`, cfg);
       } else await handleOwnerMessage(r.answer, undefined, true);
       continue;
     }
     if (open.has(r.id)) {
       closeDecision(r.id, r.answer, `owner(${r.source})`);
       journal(host, `✔ ${r.id} owner answered via ${r.source}: ${r.answer}`);
-      await notify(`👌 收到 ${r.id}：${r.answer} — 任务已重新排队`, cfg);
+      await notify(`收到 ${r.id}：${r.answer} — 任务已重新排队`, cfg);
     } else if (/^override\b/i.test(r.answer) && overrideJudge(r.id, r.answer.replace(/^override[\s:：]*/i, ""), r.source, host)) {
-      await notify(`🔁 已记录你对 ${r.id} 的纠正，judge 以后会参考；已创建重做任务`, cfg);
+      await notify(`已记录你对 ${r.id} 的纠正，judge 以后会参考；已创建重做任务`, cfg);
     }
   }
 }
@@ -493,7 +493,7 @@ async function main() {
     case "decide": {
       const [id, ...ans] = rest;
       await pull();
-      if (id.startsWith("P-")) { if (!resolveProposals(id, ans.join(" "), `owner(cli@${host})`)) process.exit(1); journal(host, `🗂 ${id} owner approved via cli: ${ans.join(" ")}`); await commitPush(`[${host}] approve ${id}`); return; }
+      if (id.startsWith("P-")) { if (!resolveProposals(id, ans.join(" "), `owner(cli@${host})`)) process.exit(1); journal(host, `${id} owner approved via cli: ${ans.join(" ")}`); await commitPush(`[${host}] approve ${id}`); return; }
       if (!closeDecision(id, ans.join(" "), `owner(cli@${host})`)) {
         if (!overrideJudge(id, ans.join(" "), `cli@${host}`, host)) { console.error("no such open decision"); process.exit(1); }
       } else journal(host, `✔ ${id} owner answered via cli: ${ans.join(" ")}`);

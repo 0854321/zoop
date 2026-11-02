@@ -119,12 +119,12 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
   const opts = (meta.options ?? "").split(" | ").filter(Boolean);
   const menu = meta.kind === "menu";
   const text = menu ? [
-    `📋 *${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`,
+    `*${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`,
     ...opts.map((o) => `${o}`),
     `建议：*${meta.recommendation || "-"}*`,
     `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
   ].join("\n") : [
-    `🤔 *${id}* · ${agentName(meta.agent)} (${meta.agent}@${meta.host}) · task ${meta.task}`,
+    `*${id}* · ${agentName(meta.agent)} (${meta.agent}@${meta.host}) · task ${meta.task}`,
     meta.question,
     ...opts.map((o) => `• ${o}`),
     `建议：*${meta.recommendation || "-"}*${v ? `　judge：${v.reason}` : ""}`,

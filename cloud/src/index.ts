@@ -16,12 +16,23 @@
 import { DurableObject } from "cloudflare:workers";
 import { handleFiles, initFilesSchema } from "./files";
 import { sendMail, type SmtpCfg } from "./smtp";
+import { EmailMessage } from "cloudflare:email";
+
+const b64 = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+async function cfMail(binding: SendEmail, from: string, to: string, subject: string, text: string) {
+  const raw = [`From: noop <${from}>`, `To: ${to}`, `Subject: =?UTF-8?B?${b64(subject)}?=`,
+    `Message-ID: <${crypto.randomUUID()}@${from.split("@")[1]}>`, `Date: ${new Date().toUTCString()}`,
+    "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(text)].join("\r\n");
+  await binding.send(new EmailMessage(from, to, raw));
+}
 import { sendPush, type PushSub, type Vapid } from "./push";
 
 interface Env {
   HUB: DurableObjectNamespace<Hub>; HUB_TOKEN: string; ASSETS: Fetcher;
   HUB_OWNER_EMAIL?: string; // comma-separated allow-list
   HUB_SMTP?: string;        // JSON SmtpCfg
+  EMAIL?: SendEmail;        // Cloudflare Email Routing binding (no SMTP needed)
+  HUB_MAIL_FROM?: string;   // sender on a domain with Email Routing on, e.g. noop@example.com
   HUB_VAPID_PUBLIC?: string;  // b64url raw P-256 point
   HUB_VAPID_PRIVATE?: string; // JWK JSON
 }
@@ -217,7 +228,8 @@ export class Hub extends DurableObject<Env> {
       let smtp: SmtpCfg | null = null;
       try { smtp = this.env.HUB_SMTP ? JSON.parse(this.env.HUB_SMTP) : null; } catch {}
       // No email set up yet: the code is shown on the owner's own machine instead (`noop login`, needs the machine key).
-      const cli = !smtp?.host;
+      const cf = !smtp?.host && !!this.env.EMAIL && !!this.env.HUB_MAIL_FROM;
+      const cli = !smtp?.host && !cf;
       this.sql.exec("DELETE FROM auth_sends WHERE ts < ?", now - 3600_000);
       // Per-email throttle applies to every address alike, so it reveals nothing about the allow-list.
       const recent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE email = ? AND ts > ?", email, now - RESEND_MS).one().n as number;
@@ -233,8 +245,10 @@ export class Hub extends DurableObject<Env> {
       if (cli) { this.set("cli_code", { email, code, expires: now + CODE_TTL }); return json({ ok: true, delivery: "cli" }); }
       if (!isOwner) return json({ ok: true });
       try {
-        await sendMail(smtp, email, `noop 登录验证码：${code}`,
-          `你的 noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`);
+        const subject = `noop 登录验证码：${code}`;
+        const text = `你的 noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`;
+        if (cf) await cfMail(this.env.EMAIL!, this.env.HUB_MAIL_FROM!, email, subject, text);
+        else await sendMail(smtp!, email, subject, text);
       } catch (err) {
         console.error(`auth mail failed: ${err}`);
         this.sql.exec("DELETE FROM auth_codes WHERE email = ?", email);

@@ -21,3 +21,8 @@ class_name = "Hub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Hub"]
+
+# Login codes by email without SMTP: turn on Email Routing for one of your domains and verify the owner address,
+# then set HUB_MAIL_FROM (an address on that domain). `noop cloud deploy` does this from [email].
+[[send_email]]
+name = "EMAIL"
