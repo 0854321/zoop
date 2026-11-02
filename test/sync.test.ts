@@ -137,3 +137,32 @@ test("own commit echoing back on the next pull does not clobber newer local edit
   expect(await sync.commitPush("a v2")).toBe(true);
   as("b"); await sync.pull(); expect(get("b", "config.toml")).toBe("v2 local\n");
 });
+
+test("append-only files merge by union when both sides diverged; nothing ever gets conflict markers", async () => {
+  const enc = (s: string) => new TextEncoder().encode(s), dec = (b: Uint8Array | null) => (b ? new TextDecoder().decode(b) : null);
+  // journal where local no longer starts with base (an old line was edited) → union, no markers
+  const base = "# Journal\n\n- 1 a\n", local = "# Journal\n\n- 1 a (edited)\n- 2 local\n", remote = "# Journal\n\n- 1 a\n- 3 remote\n";
+  const m = dec(sync.mergeAppend("journal/x.md", enc(base), enc(local), enc(remote)))!;
+  expect(m).toBe("# Journal\n\n- 1 a\n- 3 remote\n- 1 a (edited)\n- 2 local\n");
+  expect(sync.hasConflictMarkers(m)).toBe(false);
+  // markers already present in either input are dropped, both sides' lines kept
+  const dirty = "- x\n<<<<<<< HEAD\n- y\n=======\n- z\n>>>>>>> 1668512 (up)\n";
+  expect(dec(sync.mergeAppend("memory/lessons.md", null, enc(dirty), enc("- x\n- w\n")))).toBe("- x\n- w\n- y\n- z\n");
+  // repeated identical lines survive as many times as either side has them
+  expect(sync.unionLines("a\na\nb\n", "a\nc\n")).toBe("a\nc\na\nb\n");
+  // non-append files are never merged textually: remote wins, no markers
+  expect(sync.mergeAppend("decisions/closed/D-1.md", enc("q\n"), enc("q\nlocal\n"), enc("r\n"))).toBeNull();
+
+  // end to end: diverged journal on two hosts plus a decision edited on both
+  as("a"); put("a", "journal/2026-12-01.md", "# J\n\n- a1\n"); put("a", "decisions/closed/D-9.md", "---\nid: D-9\n---\nbase\n");
+  expect(await sync.commitPush("a")).toBe(true);
+  as("b"); await sync.pull();
+  as("a"); put("a", "journal/2026-12-01.md", "# J\n\n- a1 fixed\n- a2\n"); put("a", "decisions/closed/D-9.md", "---\nid: D-9\n---\nfrom a\n");
+  expect(await sync.commitPush("a")).toBe(true);
+  as("b"); put("b", "journal/2026-12-01.md", "# J\n\n- a1\n- b1\n"); put("b", "decisions/closed/D-9.md", "---\nid: D-9\n---\nfrom b\n");
+  await sync.pull();
+  const j = get("b", "journal/2026-12-01.md");
+  for (const l of ["- a1 fixed", "- a2", "- b1"]) expect(j).toContain(l);
+  expect(get("b", "decisions/closed/D-9.md")).toBe("---\nid: D-9\n---\nfrom a\n");
+  for (const f of [j, get("b", "decisions/closed/D-9.md")]) expect(sync.hasConflictMarkers(f)).toBe(false);
+});
