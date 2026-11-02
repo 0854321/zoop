@@ -625,3 +625,67 @@ describe("phones", () => {
     expect(app.shows("id:composer")).toBe(true);
   });
 });
+
+describe("rules and memory", () => {
+  const enc = encodeURIComponent;
+  const day = "2026-10-30T08:00:00.000Z";
+  const files: Record<string, unknown[]> = {
+    "policies/": [{ path: "policies/fleet.md", size: 10, updated: day }, { path: "policies/projects/app.md", size: 10, updated: day }],
+    "memory/": [{ path: "memory/owner.md", size: 10, updated: day }],
+    "agents/": [{ path: "agents/dev/profile.md", size: 1, updated: day }, { path: "agents/dev/memory.md", size: 1, updated: day }, { path: "agents/dev/notes.txt", size: 1, updated: day }],
+    "decisions/closed/": [],
+  };
+  const docs: Record<string, string> = {
+    "policies/fleet.md": "---\nid: fleet\n---\n# 全队规则\n\n- 先写测试再改代码",
+    "agents/dev/profile.md": "# dev 的档案\n\n负责前端",
+  };
+  function rulesServer(reads: string[]) {
+    const routes: Record<string, unknown> = { ...hub([]) };
+    for (const [pre, list] of Object.entries(files)) routes[`GET ${URL}/api/files/list?prefix=${enc(pre)}`] = { body: { files: list } };
+    for (const [p, content] of Object.entries(docs)) {
+      routes[`GET ${URL}/api/files/read?path=${enc(p)}`] = () => {
+        reads.push(p);
+        return { body: { path: p, content, size: content.length, updated: day, version: 1 } };
+      };
+    }
+    return routes;
+  }
+
+  test("desktop: the sidebar opens the grouped list; an item renders its markdown", async () => {
+    const reads: string[] = [];
+    const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: rulesServer(reads) });
+    await app.waitFor("id:composer");
+    await app.press("label:团队规则与记忆");
+    await app.waitFor("id:rules-policies");
+    for (const t of ["规则", "我的偏好", "Agents", "决策先例", "fleet", "projects/app", "owner", "dev · 档案", "dev · 记忆", "暂无内容"]) expect(app.shows(`id:rules >> text:${t}`)).toBe(true);
+    expect(app.shows("text:notes")).toBe(false);
+    await app.press("id:rule-policies/fleet.md");
+    await app.waitFor("全队规则");
+    expect(app.shows("text:先写测试再改代码")).toBe(true);
+    expect(app.shows("text:id: fleet")).toBe(false);
+    expect(reads).toEqual(["policies/fleet.md"]);
+    await app.press("label:返回规则与记忆");
+    await app.waitFor("id:rules");
+  });
+
+  test("phone: settings opens the list; an agent's profile pushes a page; back walks down", async () => {
+    const reads: string[] = [];
+    const view = { current: {}, effective: { agents: [], autonomy: "onboarding", routines: [], max_parallel: 2 }, options: { clis: [], autonomy: [] } };
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios",
+      network: { ...rulesServer(reads), [`GET ${URL}/api/settings`]: { body: view } },
+    });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:phone-settings");
+    await app.press("id:settings-rules");
+    await app.waitFor("id:rules-agents");
+    await app.press("id:rule-agents/dev/profile.md");
+    await app.waitFor("负责前端");
+    await app.back();
+    await app.waitUntil(() => !app.shows("id:rule-doc"));
+    expect(app.shows("id:rules")).toBe(true);
+    await app.back();
+    await app.waitFor("id:phone-settings");
+  });
+});
