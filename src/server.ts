@@ -25,7 +25,7 @@ export type Event = {
   text: string; ref?: string; options?: string[]; attachments?: string[];
 };
 
-const MEDIA = join(DATA, "..", "media");
+export const MEDIA = join(DATA, "..", "media");
 const NSH_WEB = join(import.meta.dir, "..", "app", "dist", "web", "noop"); // built NSH web client
 const FEED_DIR = join(DATA, "..", "feed"); // primary-local (next to the data repo), append-only JSONL per day
 const sockets = new Set<ServerWebSocket<unknown>>();

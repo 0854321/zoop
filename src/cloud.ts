@@ -5,11 +5,11 @@
 import { $ } from "bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { writeHubToml } from "./sync";
-import { type Event, appendEvent, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
+import { type Event, MEDIA, appendEvent, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
 
 const base = (cfg: Cfg) => String(cfg.cloud?.url ?? "").replace(/\/$/, "");
 const headers = (cfg: Cfg) => ({ Authorization: `Bearer ${cfg.server?.token}`, "Content-Type": "application/json" });
@@ -31,8 +31,23 @@ export async function cloudMedia(cfg: Cfg, path: string): Promise<Uint8Array | n
 export function startCloudBridge(cfg: Cfg) {
   if (!base(cfg) || !cfg.server?.token) return;
   const pending: Event[] = [];
+  // an event's images live in this machine's media folder ("/media/<name>"): upload them first, then point the event at the copies
+  const upload = async (url: string): Promise<string | null> => {
+    const f = join(MEDIA, basename(url));
+    if (!url.startsWith("/media/") || !existsSync(f)) return url;
+    const fd = new FormData();
+    fd.append("file", Bun.file(f), basename(f));
+    const r = await fetch(base(cfg) + "/api/media", { method: "POST", body: fd, headers: { Authorization: `Bearer ${cfg.server?.token}` }, signal: AbortSignal.timeout(60_000) }).catch(() => null);
+    return r?.ok ? ((await r.json()) as { url: string }).url : null;
+  };
   const flush = async () => {
     while (pending.length) {
+      const e = pending[0];
+      if (e.attachments?.length) {
+        const urls = await Promise.all(e.attachments.map(upload));
+        if (urls.some((u) => !u)) return; // retry on the next poll
+        pending[0] = { ...e, attachments: urls as string[] };
+      }
       if (!(await call(cfg, "/api/events", { method: "POST", body: JSON.stringify(pending[0]) }))) return;
       pending.shift();
     }
