@@ -550,14 +550,20 @@ async function daemon(cfg: Cfg) {
       const f = P("tasks", dir, `${tid}.md`);
       if (!existsSync(f)) continue;
       const { meta, body } = readDoc(f);
-      writeDoc(f, meta, `${body}\n\n${FOLLOW_UP} ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n`);
-      journal(host, `💬 ${tid} owner added: ${text.slice(0, 80)}`);
+      const added = `${body}\n\n${FOLLOW_UP} ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n`;
+      if (dir === "waiting") { // parked until its sub-tasks finish: the owner's new message is acted on now, not then
+        const kids = meta.children ? ` Its sub-tasks (${meta.children}) may still be open: check them, don't start them again.` : "";
+        writeDoc(P("tasks", "inbox", `${tid}.md`), { ...meta, claimed_by: undefined, status: undefined, wake_at: undefined, resumed: "yes" },
+          `${added}\nWoken from waiting by the owner's message above: act on it now.${kids}\n`);
+        unlinkSync(f);
+      } else writeDoc(f, meta, added);
+      journal(host, `💬 ${tid} owner added${dir === "waiting" ? " (woken from waiting)" : ""}: ${text.slice(0, 80)}`);
       await _commitPush(`[${host}] chat follow-up ${tid}`);
-      return true;
+      return String(meta.title ?? tid);
     }
-    return false;
+    return "";
   });
-  setAppendToTask(appendFollowUp);
+  setAppendToTask(async (tid, text) => !!(await appendFollowUp(tid, text)));
   setUpdateFleet(() => locked(async () => {
     await _pull();
     mkdirSync(P("fleet"), { recursive: true });
@@ -592,14 +598,15 @@ async function daemon(cfg: Cfg) {
   if (isPrimary(cfg, host)) startServer(cfg, async (text) => {
     // Same work as an open task? Add the message to it instead of opening a duplicate.
     const same = await sameOpenTask(text, cfg).catch(() => null);
-    if (same && (await appendFollowUp(same, text))) return same;
+    const title = same ? await appendFollowUp(same, text) : "";
+    if (same && title) return { id: same, title };
     return locked(async () => {
     await _pull();
     const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}\n\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
       { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner" } });
     journal(host, `💬 ${id} from owner chat: ${text.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
-    return id;
+    return { id };
     });
   });
   await locked(async () => { // recover tasks this host was running when it died/restarted

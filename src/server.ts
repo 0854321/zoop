@@ -31,7 +31,9 @@ const FEED_DIR = join(DATA, "..", "feed"); // primary-local (next to the data re
 const sockets = new Set<ServerWebSocket<unknown>>();
 type Inbound = { id: string; answer: string; source: string };
 const inbound: Inbound[] = [];
-let ownerTask: ((text: string) => Promise<string>) | null = null;
+/** The owner's chat request becomes a task: a new one, or (with its title) the open task it continues. */
+type OwnerTask = (text: string) => Promise<{ id: string; title?: string }>;
+let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
 
@@ -153,7 +155,12 @@ export function status() {
   return {
     tasks: Object.fromEntries(["proposed", "inbox", "active", "waiting", "blocked", "failed", "done"].map((f) => [f, count(f)])),
     active,
-    recent: others.filter((t) => !active.some((a) => a.id === t.id)).slice(0, 12), // a task copied in two folders mid-sync shows once, as running
+    // every open task (queued, waiting on sub-tasks, blocked) and the newest finished ones; a task copied in two folders mid-sync shows once, as running
+    recent: (() => {
+      const rest = others.filter((t) => !active.some((a) => a.id === t.id));
+      const open = rest.filter((t) => ["inbox", "waiting", "blocked"].includes(t.state));
+      return [...open, ...rest.filter((t) => !open.includes(t)).slice(0, 12)].sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
+    })(),
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),
     hosts: hostViews(active, others.filter((t) => t.state === "done" || t.state === "failed")),
   };
@@ -272,13 +279,15 @@ export async function handleOwnerMessage(
     followUp.at = Date.now();
     appendEvent({ from: "hub", kind: "system", text: `已补充到 ${followUp.tid}`, ref: followUp.tid });
   } else if (ownerTask) {
-    const tid = await ownerTask(text);
+    const { id: tid, title } = await ownerTask(text);
     followUp = { tid, at: Date.now() };
-    appendEvent({ from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
+    appendEvent(title
+      ? { from: "hub", kind: "system", text: `收到，这是 ${tid}「${title}」的后续，已补充进去，Kai 接着处理。`, ref: tid }
+      : { from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
   }
 }
 
-export const setOwnerTask = (fn: (text: string) => Promise<string>) => { ownerTask = fn; };
+export const setOwnerTask = (fn: OwnerTask) => { ownerTask = fn; };
 
 // ---------------------------------------------------------------- read-only rules & memory (mirrors the Worker's /api/files/list|read)
 export function listDataFiles(prefix: string, root = DATA) {
@@ -307,7 +316,7 @@ export function readDataFile(path: string, root = DATA) {
   } catch { return undefined; }
 }
 
-export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<string>) {
+export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
   const s = cfg.server ?? {};
   if (s.enabled === false) return;
   if (!s.token) { console.error("server: set [server].token in config.local.toml to enable the chat API"); return; }
