@@ -20,6 +20,13 @@ async function call(cfg: Cfg, path: string, init: RequestInit = {}) {
   return r.json() as Promise<any>;
 }
 
+/** One of the Worker's media files ("/media/<id>": the owner's uploaded images), as bytes. */
+export async function cloudMedia(cfg: Cfg, path: string): Promise<Uint8Array | null> {
+  if (!/^\/media\/[\w.\-]+$/.test(path)) return null;
+  const r = await fetch(base(cfg) + path, { headers: { Authorization: `Bearer ${cfg.server?.token}` }, signal: AbortSignal.timeout(60_000) }).catch(() => null);
+  return r?.ok ? new Uint8Array(await r.arrayBuffer()) : null;
+}
+
 /** Primary: run the bridge loop. */
 export function startCloudBridge(cfg: Cfg) {
   if (!base(cfg) || !cfg.server?.token) return;
@@ -43,7 +50,7 @@ export function startCloudBridge(cfg: Cfg) {
         if (it.type === "message") {
           const e = it.event as Event;
           appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
-          await handleOwnerMessage(e.text, e.ref);
+          await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p) });
         } else if (it.type === "settings") {
           await saveSettings(it.patch);
           await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });

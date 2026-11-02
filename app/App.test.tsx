@@ -198,6 +198,81 @@ describe("channel", () => {
   });
 });
 
+describe("images", () => {
+  const desk = { storage: STORAGE, width: 1200, height: 800, platform: "linux" as const };
+  const here = (f: string) => decodeURIComponent(new globalThis.URL(`./${f}`, import.meta.url).pathname);
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0d, 0x0a, 0x2d, 0xb4, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+  function withUploads(posts: { text: string; reply_to?: string; attachments?: string[] }[], uploads: string[]) {
+    return {
+      ...hub(posts),
+      [`POST ${URL}/api/uploads`]: () => {
+        uploads.push(`/media/shot-${uploads.length + 1}.png`);
+        return { body: { url: uploads[uploads.length - 1] } };
+      },
+    };
+  }
+
+  test("a picked image shows as a thumbnail, can be removed, and is sent with the text", async () => {
+    const posts: { text: string; attachments?: string[] }[] = [];
+    const uploads: string[] = [];
+    const app = await open("./App.tsx", { ...desk, network: withUploads(posts, uploads) });
+    await app.waitFor("id:composer");
+    app.onPick(() => [{ name: "a.png", type: "image/png", data: PNG }, { name: "b.png", type: "image/png", data: PNG }]);
+    await app.press("id:attach");
+    await app.waitUntil(() => app.count("id:attachment") === 2);
+    await app.press("label:移除 b.png");
+    expect(app.count("id:attachment")).toBe(1);
+    await app.type("id:composer", "看这个报错");
+    await app.press("id:send");
+    expect(app.count("id:attachment")).toBe(0);
+    expect(app.shows("id:owner-images")).toBe(true); // the held bubble shows the image
+    await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
+    expect(uploads.length).toBe(1);
+    expect(posts[0]).toEqual({ text: "看这个报错", attachments: ["/media/shot-1.png"] });
+  });
+
+  test("undo brings the image back to the composer; nothing is uploaded", async () => {
+    const posts: { text: string }[] = [];
+    const uploads: string[] = [];
+    const app = await open("./App.tsx", { ...desk, network: withUploads(posts, uploads) });
+    await app.waitFor("id:composer");
+    app.onPick(() => [{ name: "a.png", type: "image/png", data: PNG }]);
+    await app.press("id:attach");
+    await app.waitFor("id:attachment");
+    await app.press("id:send"); // an image alone can be sent
+    await app.waitFor("id:undo-send");
+    await app.press("id:undo-send");
+    expect(app.count("id:attachment")).toBe(1);
+    await app.wait(6000);
+    expect(uploads.length).toBe(0);
+    expect(posts.length).toBe(0);
+  });
+
+  test("a pasted screenshot attaches; a non-image is refused", async () => {
+    const posts: { text: string; attachments?: string[] }[] = [];
+    const uploads: string[] = [];
+    const app = await open("./App.tsx", { ...desk, network: withUploads(posts, uploads) });
+    await app.waitFor("id:composer");
+    await app.paste("id:composer", { files: [here("icon.png")] });
+    await app.waitFor("id:attachment");
+    await app.paste("id:composer", { files: [here("hub.ts")] });
+    await app.waitFor("id:attach-note");
+    expect(app.shows("只能发送图片")).toBe(true);
+    expect(app.count("id:attachment")).toBe(1);
+    await app.submit("id:composer");
+    await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
+    expect(posts[0]).toEqual({ text: "", attachments: ["/media/shot-1.png"] });
+  });
+
+  test("an image file dropped on the composer attaches", async () => {
+    const app = await open("./App.tsx", { ...desk, network: withUploads([], []) });
+    await app.waitFor("id:composer");
+    await app.dropFiles("id:composer-area", [`file://${here("icon.png")}`]);
+    await app.waitFor("id:attachment");
+    expect(app.count("id:attachment")).toBe(1);
+  });
+});
+
 describe("keyboard", () => {
   const desk = { storage: STORAGE, width: 1200, height: 800, platform: "macos" as const };
 

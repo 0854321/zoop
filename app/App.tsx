@@ -22,7 +22,8 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token, openUrl } from "nsh";
+  windowSize, token, openUrl, Picker } from "nsh";
+import fs from "fs/promises";
 import type { InputRef, JSX, ViewStyle } from "nsh";
 import { Input, Scrollbar } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
@@ -58,6 +59,10 @@ import {
   normalizeUrl,
   osOf,
   recommended,
+  type Attachment,
+  attachProblem,
+  filePath,
+  imageType,
   rows,
   spans,
   type Status,
@@ -205,11 +210,23 @@ function createHub(cfg: Config) {
     };
   }
 
-  async function send(text: string, replyTo: string | null) {
+  /** Uploads one image the owner attaches; resolves with its media path ("/media/…"). */
+  async function upload(a: Attachment): Promise<string> {
+    const fd = new FormData();
+    fd.append("file", a.file, a.name);
+    const r = await fetch(`${cfg.url}/api/uploads`, { method: "POST", headers: { Authorization: headers.Authorization }, body: fd });
+    if (r.status === 401) conn.set("unauthorized");
+    if (!r.ok) throw new Error(`图片上传失败（${r.status}）`);
+    return ((await r.json()) as { url: string }).url;
+  }
+
+  async function send(text: string, replyTo: string | null, files: Attachment[] = []) {
+    const attachments: string[] = [];
+    for (const f of files) attachments.push(await upload(f));
     const r = await fetch(`${cfg.url}/api/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify(replyTo ? { text, reply_to: replyTo } : { text }),
+      body: JSON.stringify({ text, ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}) }),
     });
     if (r.status === 401) conn.set("unauthorized");
     if (!r.ok) throw new Error(`发送失败（${r.status}）`);
@@ -469,7 +486,7 @@ function Media(props: { hub: Hub; path: string }) {
 // ---------------------------------------------------------------- timeline
 
 /** A message the owner sent that the hub has not confirmed yet (optimistic send). */
-type Outgoing = { id: string; ts: string; text: string; ref: string | null; state: "held" | "sending" | "failed" };
+type Outgoing = { id: string; ts: string; text: string; ref: string | null; files: Attachment[]; state: "held" | "sending" | "failed" };
 
 /** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
 const MARKS = ["★", "◆", "▲", "●", "✦", "☾", "✿", "♪"];
@@ -517,11 +534,17 @@ function optionText(e: HubEvent, c: string): string {
   return full ? full.trim() : choiceLabel(c);
 }
 
-function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void }) {
+function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void }) {
   const e = props.event;
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
+        <If when={e.attachments?.length}>
+          <View testID="owner-images" style={{ width: 320, maxWidth: "100%", gap: 6, opacity: props.out ? 0.65 : 1 }}>
+            <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
+          </View>
+        </If>
+        <If when={e.text.trim() || e.ref}>
         <View
           style={{
             paddingHorizontal: 16,
@@ -540,6 +563,7 @@ function OwnerBubble(props: { event: HubEvent; out?: Outgoing; onRetry?: () => v
           </If>
           <Rich text={e.text} />
         </View>
+        </If>
         <If
           when={props.out}
           else={<Text style={{ fontSize: size.tiny, color: colors.faint }}>{timeOf(e.ts)}</Text>}
@@ -1384,7 +1408,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const shown = computed(() =>
     merge(
       hub.events().filter((e) => !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))),
-      outbox().map((o) => ({ id: o.id, ts: o.ts, from: "owner", kind: "owner" as const, text: o.text, ref: o.ref ?? undefined })),
+      outbox().map((o) => ({
+        id: o.id, ts: o.ts, from: "owner", kind: "owner" as const, text: o.text, ref: o.ref ?? undefined,
+        attachments: o.files.length ? o.files.map((f) => f.preview) : undefined,
+      })),
     ),
   );
   const answered = computed(() => answeredIds(shown()));
@@ -1437,9 +1464,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // A message waits a few seconds before it leaves, so a wrong tap or a typo can be taken back.
   const UNDO_MS = 5000;
   const holds = new Map<string, ReturnType<typeof setTimeout>>();
-  function send(text: string, ref: string | null, id = `local:${++seq}`) {
+  function send(text: string, ref: string | null, id = `local:${++seq}`, files: Attachment[] = []) {
     const ts = new Date().toISOString();
-    outbox.update((o) => [...o.filter((x) => x.id !== id), { id, ts, text, ref, state: "held" }]);
+    outbox.update((o) => [...o.filter((x) => x.id !== id), { id, ts, text, ref, files, state: "held" }]);
     jumpToEnd();
     holds.set(id, setTimeout(() => { holds.delete(id); void deliver(id); }, UNDO_MS));
   }
@@ -1449,16 +1476,21 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     clearTimeout(holds.get(o.id));
     holds.delete(o.id);
     outbox.update((list) => list.filter((x) => x.id !== o.id));
-    if (!/^[DLP]-[A-Z]?\d{4} \S+$/.test(o.text) || o.ref) { draft.set(o.text); replyTo.set(o.ref); composer?.focus(); }
+    if (!/^[DLP]-[A-Z]?\d{4} \S+$/.test(o.text) || o.ref || o.files.length) {
+      draft.set(o.text);
+      replyTo.set(o.ref);
+      attachments.update((a) => [...o.files, ...a]);
+      composer?.focus();
+    }
     return true;
   }
   async function deliver(id: string) {
     const o = outbox().find((x) => x.id === id);
     if (!o) return;
-    const { text, ref } = o;
+    const { text, ref, files } = o;
     outbox.update((l) => l.map((x) => (x.id === id ? { ...x, state: "sending" } : x)));
     try {
-      await hub.send(text, ref);
+      await hub.send(text, ref, files);
       outbox.update((o) => o.filter((x) => x.id !== id));
     } catch {
       outbox.update((o) => o.map((x) => (x.id === id ? { ...x, state: "failed" } : x)));
@@ -1466,14 +1498,62 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   }
   function submit() {
     const v = draft().trim();
-    if (!v) return;
+    const files = attachments();
+    if (!v && !files.length) return;
     // A bare choice ("1", "B", "1,3", "全部") answers the decision the keyboard is on, never becomes a new task.
-    const r = replyTo() ?? (/^([1-9](\s*[,，]\s*[1-9])*|[A-Za-z]|全部|都不要)$/.test(v) ? target() : null);
+    const r = replyTo() ?? (!files.length && /^([1-9](\s*[,，]\s*[1-9])*|[A-Za-z]|全部|都不要)$/.test(v) ? target() : null);
     draft.set("");
     replyTo.set(null);
+    attachments.set([]);
+    attachNote.set(null);
     inputHeight.set(28);
-    send(v, r);
+    send(v, r, undefined, files);
   }
+
+  // Images the owner attaches: pasted, dropped on the window, or picked.
+  const attachments = signal<Attachment[]>([]);
+  const attachNote = signal<string | null>(null);
+  const dropping = signal(false);
+  let attachSeq = 0;
+  function attach(file: Blob, name: string) {
+    const type = imageType(file.type, name);
+    const problem = attachProblem(type, file.size, attachments().length);
+    if (problem) return attachNote.set(problem);
+    attachNote.set(null);
+    const typed = file.type === type ? file : new Blob([file], { type: type! });
+    const preview = URL.createObjectURL(typed);
+    attachments.update((a) => [...a, { id: `a${++attachSeq}`, name: name || `image-${attachSeq}.png`, type: type!, size: file.size, file: typed, preview }]);
+  }
+  function unattach(id: string) {
+    const a = attachments().find((x) => x.id === id);
+    if (a) URL.revokeObjectURL(a.preview);
+    attachments.update((list) => list.filter((x) => x.id !== id));
+    attachNote.set(null);
+  }
+  /** Local files (`file:` URLs from a drop or a file manager's copy): read the images among them. */
+  async function attachUris(uris: string[]) {
+    for (const u of uris) {
+      const path = filePath(u);
+      const name = path.split(/[\\/]/).pop() ?? "image";
+      if (!imageType(undefined, name)) { attachNote.set("只能发送图片"); continue; }
+      try {
+        const bytes = await fs.readFile(path);
+        attach(new Blob([bytes as Uint8Array<ArrayBuffer>]), name);
+      } catch {
+        attachNote.set(`读不到 ${name}`);
+      }
+    }
+  }
+  async function pickImages() {
+    try {
+      const picked = await Picker.pickImages({ multiple: true, limit: 10 });
+      for (const p of picked) attach(p.file, p.file.name);
+    } catch {
+      attachNote.set("这台设备上不能选择图片");
+    }
+    composer?.focus();
+  }
+  const canSend = () => !!draft().trim() || attachments().length > 0;
   const answer = (ref: string, c: string) => {
     hostCall("clearNotifications", { ref });
     return send(`${ref} ${c}`, null);
@@ -1765,7 +1845,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id); }} onUndo={() => undo(row.event.id)} />;
+                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id, o.files); }} onUndo={() => undo(row.event.id)} />;
                     }
                     return (
                       <Message
@@ -1815,8 +1895,14 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             </If>
           </View>
 
-          {/* The composer. */}
-          <View style={{ paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: Math.max(12, safeArea().bottom + 8) }}>
+          {/* The composer: files dropped on it (or on the timeline above) attach their images. */}
+          <View
+            testID="composer-area"
+            onFileDragEnter={() => dropping.set(true)}
+            onFileDragLeave={() => dropping.set(false)}
+            onFileDrop={({ uris }) => { dropping.set(false); void attachUris(uris); }}
+            style={{ paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: Math.max(12, safeArea().bottom + 8) }}
+          >
             <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 8 }}>
               <If when={hub.conn() === "offline" || hub.conn() === "unauthorized"}>
                 <View
@@ -1843,7 +1929,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   gap: 6,
                   borderRadius: 16,
                   borderWidth: 1,
-                  borderColor: focused() ? colors.accent : colors.fieldBorder,
+                  borderColor: focused() || dropping() ? colors.accent : colors.fieldBorder,
+                  ...(dropping() ? { borderStyle: "dashed" as const } : {}),
                   backgroundColor: colors.field,
                   paddingTop: 10,
                   paddingBottom: 8,
@@ -1872,6 +1959,38 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     </View>
                   )}
                 </If>
+                <If when={attachments().length}>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingTop: 2 }}>
+                    <Each of={attachments()} key={(a) => a.id}>
+                      {(a) => (
+                        <View testID="attachment" accessibilityLabel={a().name} style={{ width: 64, height: 64 }}>
+                          <Image
+                            src={a().preview}
+                            style={{ width: 64, height: 64, borderRadius: radius.inset, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inset, objectFit: "cover" }}
+                          />
+                          <View
+                            testID="remove-attachment"
+                            role="button"
+                            accessibilityLabel={`移除 ${a().name}`}
+                            tooltip={touch ? undefined : <Tip label="移除" />}
+                            onPress={() => unattach(a().id)}
+                            hoverStyle={{ opacity: 0.85 }}
+                            style={{
+                              position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 11,
+                              alignItems: "center", justifyContent: "center",
+                              backgroundColor: colors.text, borderWidth: 2, borderColor: colors.field,
+                            }}
+                          >
+                            <Icon name="close" size={10} tint={colors.background} />
+                          </View>
+                        </View>
+                      )}
+                    </Each>
+                  </View>
+                </If>
+                <If when={attachNote()}>
+                  {(note) => <Text testID="attach-note" style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>}
+                </If>
                 <Input
                   testID="composer"
                   ref={(r) => (composer = r)}
@@ -1880,6 +1999,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   onSubmit={submit}
                   value={draft()}
                   onChange={({ value }) => draft.set(value)}
+                  onPaste={({ files, uris }) => {
+                    for (const f of files) attach(f, f.name);
+                    if (uris.length) void attachUris(uris);
+                  }}
                   onFocus={() => focused.set(true)}
                   onBlur={() => focused.set(false)}
                   onContentSizeChange={({ size: s }) => inputHeight.set(Math.min(220, Math.max(28, s.height)))}
@@ -1889,6 +2012,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 />
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <View
+                      testID="attach"
+                      role="button"
+                      accessibilityLabel="添加图片"
+                      tooltip={touch ? undefined : <Tip label="添加图片（也可粘贴或拖入）" />}
+                      onPress={() => void pickImages()}
+                      hoverStyle={hovered()}
+                      style={{ width: touch ? 40 : 32, height: touch ? 40 : 32, marginLeft: -8, borderRadius: radius.control, alignItems: "center", justifyContent: "center" }}
+                    >
+                      <Icon name="image" size={18} tint={colors.muted} />
+                    </View>
                     <If when={!touch && wide()}>
                       <Kbd k="Enter" />
                       <Text style={{ fontSize: 13, color: colors.faint }}>发送</Text>
@@ -1910,10 +2044,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     testID="send"
                     role="button"
                     accessibilityLabel="发送"
-                    accessibilityState={{ disabled: !draft().trim() }}
+                    accessibilityState={{ disabled: !canSend() }}
                     onPress={submit}
                     tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
-                    hoverStyle={draft().trim() ? { opacity: 0.9 } : undefined}
+                    hoverStyle={canSend() ? { opacity: 0.9 } : undefined}
                     style={{
                       height: touch ? 40 : 36,
                       flexDirection: "row",
@@ -1921,13 +2055,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                       gap: 6,
                       paddingHorizontal: 14,
                       borderRadius: radius.control,
-                      backgroundColor: draft().trim() ? colors.accentFill : colors.raised,
+                      backgroundColor: canSend() ? colors.accentFill : colors.raised,
                       transitionProperty: "background-color",
                       transitionDuration: 120,
                     }}
                   >
-                    <Text style={{ fontSize: 15, fontWeight: "600", color: draft().trim() ? colors.onAccent : colors.faint }}>发送</Text>
-                    <Icon name="arrow-up" size={15} tint={draft().trim() ? colors.onAccent : colors.faint} />
+                    <Text style={{ fontSize: 15, fontWeight: "600", color: canSend() ? colors.onAccent : colors.faint }}>发送</Text>
+                    <Icon name="arrow-up" size={15} tint={canSend() ? colors.onAccent : colors.faint} />
                   </View>
                 </View>
               </View>
