@@ -22,8 +22,7 @@ import {
   untracked,
   Video,
   View,
-  windowSize,
-} from "nsh";
+  windowSize, token } from "nsh";
 import type { InputRef, JSX, ViewStyle } from "nsh";
 import { Input, Scrollbar } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
@@ -353,6 +352,8 @@ function Btn(props: {
       focusStyle={focusRing()}
       style={{
         minHeight: size.control,
+        maxWidth: "100%",
+        flexShrink: 1,
         flexGrow: props.grow ? 1 : 0,
         flexDirection: "row",
         alignItems: "center",
@@ -450,10 +451,21 @@ function Media(props: { hub: Hub; path: string }) {
 /** A message the owner sent that the hub has not confirmed yet (optimistic send). */
 type Outgoing = { id: string; ts: string; text: string; ref: string | null; state: "sending" | "failed" };
 
+/** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
+const MARKS = ["★", "◆", "▲", "●", "✦", "☾", "✿", "♪"];
+function persona(from: string): { tint: string; mark: string } {
+  const id = from.split("@")[0].toLowerCase();
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return { tint: token(`agent-${(h % 8) + 1}` as "agent-1"), mark: MARKS[(h >>> 3) % MARKS.length] };
+}
+
 function Avatar(props: { from: string }) {
   const hubbed = isHub(props.from);
+  const p = persona(props.from);
   return (
     <View
+      accessibilityLabel={displayName(props.from)}
       style={{
         width: 36,
         height: 36,
@@ -461,13 +473,18 @@ function Avatar(props: { from: string }) {
         flexShrink: 0,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: hubbed ? colors.text : colors.raised,
-        borderWidth: hubbed ? 0 : 1,
-        borderColor: colors.border,
+        backgroundColor: hubbed ? colors.raised : alpha(p.tint, 0.16),
       }}
     >
-      <If when={hubbed} else={<Text style={{ fontSize: 13, fontWeight: "600", color: colors.muted }}>{initials(props.from)}</Text>}>
-        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.surface }} />
+      <If when={hubbed} else={
+        <>
+          <Text style={{ fontSize: 16, fontWeight: "700", color: p.tint }}>{displayName(props.from).slice(0, 1).toUpperCase()}</Text>
+          <View style={{ position: "absolute", right: -3, bottom: -3, width: 17, height: 17, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+            <Text style={{ fontSize: 10, lineHeight: 12, color: p.tint }}>{p.mark}</Text>
+          </View>
+        </>
+      }>
+        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.muted }} />
       </If>
     </View>
   );
@@ -533,7 +550,7 @@ function Message(props: {
   const ask = isAsk(e);
   const tag = TAGS[e.kind];
   const body = (
-    <View style={{ gap: 10 }}>
+    <View selectable style={{ gap: 10 }}>
       <Rich text={e.text} muted={e.kind === "system"} />
       <If when={e.attachments?.length}>
         <View style={{ gap: 10 }}>
@@ -567,13 +584,12 @@ function Message(props: {
               marginTop: 6,
               borderRadius: radius.card,
               borderWidth: 1,
-              borderColor: targeted() ? colors.accent : colors.border,
+              borderColor: colors.border,
               backgroundColor: colors.surface,
               opacity: done() ? 0.62 : 1,
               overflow: "hidden",
               transitionProperty: "border-color, opacity",
               transitionDuration: 160,
-              ...(targeted() ? { outlineStyle: "solid", outlineWidth: 3, outlineColor: alpha(colors.accent, 0.14) } : {}),
             }}
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
@@ -582,9 +598,6 @@ function Message(props: {
               <View style={{ flex: 1 }} />
               <If when={done()}>
                 <Text style={{ fontSize: 13, color: colors.up }}>✓ 已回复</Text>
-              </If>
-              <If when={targeted() && !touch}>
-                <Text style={{ fontSize: 13, color: colors.muted }}>按数字键选择 · R 回复</Text>
               </If>
             </View>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
@@ -609,6 +622,78 @@ function Message(props: {
         )}
       </View>
     </View>
+  );
+}
+
+/** A task's state: its label, color and mark. */
+const STATE: Record<string, [string, string, string]> = {
+  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.muted, "○"], waiting: ["等子任务", colors.muted, "○"],
+  blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.up, "✓"],
+};
+
+/** "3 分钟" since an ISO time (to now, or to `end`). */
+function since(iso?: string, end?: string): string {
+  if (!iso) return "";
+  const m = Math.max(0, Math.round(((end ? Date.parse(end) : Date.now()) - Date.parse(iso)) / 60000));
+  return m < 1 ? "刚刚" : m < 60 ? `${m} 分钟` : m < 1440 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
+}
+
+function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
+  const t = () => {
+    const s = props.hub.status();
+    return [...(s?.active ?? []), ...(s?.recent ?? [])].find((x) => x.id === props.id);
+  };
+  const section = (title: string) => (
+    <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
+  );
+  return (
+    <Scroll style={{ flex: 1 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
+        <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
+          <View style={{ gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Badge label={STATE[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
+              <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
+            </View>
+            <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>
+            <Text style={{ fontSize: 14, color: colors.muted }}>
+              {[displayName(t()!.agent), t()!.host, t()!.state === "active" ? `已运行 ${since(t()!.started)}` : t()!.finished ? `${since(t()!.finished)}前结束` : "",
+                Number(t()!.attempt ?? 1) > 1 ? `第 ${t()!.attempt} 次` : ""].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+          <If when={t()!.request}>
+            {section("请求")}
+            <Text style={{ userSelect: "text", fontSize: 15, lineHeight: 23, color: colors.text }}>{t()!.request}</Text>
+          </If>
+          <If when={t()!.runs?.length}>
+            {section("结果")}
+            <View style={{ gap: 12 }}>
+              <Each of={[...(t()!.runs ?? [])].reverse()}>
+                {(r) => (
+                  <View style={{ gap: 4 }}>
+                    <Text style={{ fontSize: 13, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${r().ts.slice(5, 16).replace("T", " ")} · ${r().host} · ${r().status}`}</Text>
+                    <Rich text={r().summary} />
+                  </View>
+                )}
+              </Each>
+            </View>
+          </If>
+          <If when={t()!.steps?.length}>
+            {section("进度")}
+            <View selectable style={{ gap: 6 }}>
+              <Each of={t()!.steps ?? []}>
+                {(st) => (
+                  <View style={{ flexDirection: "row", gap: 12 }}>
+                    <Text style={{ width: 44, fontSize: 13.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
+                    <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text.trim()}</Text>
+                  </View>
+                )}
+              </Each>
+            </View>
+          </If>
+        </If>
+      </View>
+    </Scroll>
   );
 }
 
@@ -664,6 +749,8 @@ function Sidebar(props: {
   hub: Hub;
   target: () => string | null;
   onPick: (ref: string) => void;
+  task: () => string | null;
+  onTask: (id: string) => void;
   onSettings: () => void;
   onHelp: () => void;
   onClose?: () => void;
@@ -699,7 +786,7 @@ function Sidebar(props: {
           <SideHeading title="待你决定" count={waits().length || undefined} accent />
           <Each of={waits()} key={(d) => d.id}>
             {(d) => (
-              <SideRow onPress={() => props.onPick(d().id)} selected={props.target() === d().id} title={d().id}>
+              <SideRow onPress={() => props.onPick(d().id)} title={d().id}>
                 <Dot tone="wait" />
                 <Text style={rowText}>{d().question || d().id}</Text>
                 <Text style={{ fontFamily: MONO, fontSize: 12, color: colors.faint }}>{d().id}</Text>
@@ -713,15 +800,28 @@ function Sidebar(props: {
           <SideHeading title="进行中" count={s()?.active.length || undefined} />
           <Each of={s()?.active ?? []} key={(a) => a.id}>
             {(a) => (
-              <SideRow title={`${a().id} · ${a().agent}${a().host ? ` @ ${a().host}` : ""}`}>
+              <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${a().agent}${a().host ? ` @ ${a().host}` : ""}`}>
                 <Dot tone="run" />
                 <Text style={rowText}>{a().title}</Text>
-                <Text style={{ fontSize: 12.5, color: colors.faint }}>{a().agent}</Text>
+                <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().started)}</Text>
               </SideRow>
             )}
           </Each>
           <If when={!s()?.active.length}>
             <SideEmpty text="空闲" />
+          </If>
+
+          <If when={s()?.recent?.length}>
+            <SideHeading title="最近" />
+            <Each of={(s()?.recent ?? []).slice(0, 6)} key={(a) => a.id}>
+              {(a) => (
+                <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={a().id}>
+                  <Text style={{ width: 14, fontSize: 13, color: STATE[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE[a().state ?? ""]?.[2] ?? "·"}</Text>
+                  <Text style={{ ...rowText, color: colors.muted }}>{a().title}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
+                </SideRow>
+              )}
+            </Each>
           </If>
 
           <SideHeading title="机器" count={s()?.hosts.length || undefined} />
@@ -1222,7 +1322,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const drawer = signal(false);
   const sidebarOpen = signal(true);
   const help = signal(false);
-  const page = signal<"channel" | "team">("channel");
+  const page = signal<"channel" | "team" | "task">("channel");
+  const taskId = signal<string | null>(null);
+  const openTask = (id: string) => { taskId.set(id); page.set("task"); drawer.set(false); };
   const draft = signal("");
   const replyTo = signal<string | null>(null);
   const focused = signal(false);
@@ -1436,6 +1538,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       hub={hub}
       target={target}
       onPick={pick}
+      task={() => (page() === "task" ? taskId() : null)}
+      onTask={openTask}
       onSettings={openTeam}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
@@ -1470,7 +1574,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           <If when={wide() && !sidebarOpen()}>
             <ToolButton icon="sidebar" label="显示侧栏" shortcut={keymap.label("mod+b")} onPress={() => sidebarOpen.set(true)} />
           </If>
-          <If when={page() === "team"}>
+          <If when={page() !== "channel"}>
             <View
               role="button"
               accessibilityLabel="返回频道"
@@ -1483,7 +1587,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             </View>
           </If>
           <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : "团队频道"}</Text>
+            <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{page() === "team" ? "团队设置" : page() === "task" ? `任务 ${taskId() ?? ""}` : "团队频道"}</Text>
             <If when={pending().length && page() === "channel"}>
               <Badge label={`${pending().length} 项待决定`} tone="warn" />
             </If>
@@ -1506,6 +1610,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           </If>
         </View>
 
+        <If when={page() === "task" && taskId()}>
+          <TaskDetail hub={hub} id={taskId()!} wide={wide()} />
+        </If>
         <If when={page() === "team"}>
           <TeamSettings hub={hub} push={push} wide={wide()} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
         </If>
@@ -1522,7 +1629,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 if (end) unseen.set(0);
               }}
             >
-              <View selectable style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: 24 }}>
+              <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: 24 }}>
                 <If when={suggest()}>
                   <View
                     testID="notify-banner"

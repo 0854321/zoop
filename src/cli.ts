@@ -153,7 +153,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     journal(host, `${res.status === "done" ? "✅" : "❌"} ${meta.id} ${res.summary}`);
     // the owner asked for this (and it is not an internal sub-step) → bring back the result
     if (res.status === "done" && ownerWork && !meta.parent)
-      void notify(`${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
+      void notify(meta.source === "owner@chat" ? res.summary : `${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
     if (res.status !== "done") void handleFailure(meta, body, res.summary, out, cfg, host);
   }
   await _commitPush(`[${host}] ${res.status} ${meta.id}: ${meta.title}`);

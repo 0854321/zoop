@@ -21,9 +21,18 @@ export type HostInfo = {
   stats?: { loadRatio?: number; diskFreeGB?: number; [k: string]: unknown };
 };
 
+export type TaskInfo = {
+  id: string; title: string; agent: string; host?: string; state?: string;
+  started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string;
+  request?: string;
+  runs?: { ts: string; host: string; cli: string; status: string; summary: string }[];
+  steps?: { day?: string; time?: string; host?: string; text: string }[];
+};
+
 export type Status = {
   tasks: Record<"proposed" | "inbox" | "active" | "blocked" | "failed" | "done", number>;
-  active: { id: string; title: string; agent: string; host?: string }[];
+  active: TaskInfo[];
+  recent?: TaskInfo[];
   decisions: { id: string; kind: string; question?: string; held: boolean }[];
   hosts: HostInfo[];
 };

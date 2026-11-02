@@ -79,11 +79,34 @@ export async function forwardEvent(e: Omit<Event, "id" | "ts">, cfg: Cfg) {
   return !!r?.ok;
 }
 
+/** The last journal lines, for each task's timeline. */
+function journalLines(): string[] {
+  const dir = P("journal");
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort().slice(-2);
+  return files.flatMap((f) => readFileSync(`${dir}/${f}`, "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => `${f.slice(0, 10)} ${l.slice(2)}`));
+}
+
+/** What the app shows for a task: its request, state, timeline and results. */
+function taskView(path: string, state: string, log: string[]) {
+  const { meta: m, body } = readDoc(path);
+  const request = (body.match(/> [\s\S]*?(?=\n\n[^>]|$)/)?.[0] ?? body.split("\n## ")[0]).replace(/^> ?/gm, "").trim().slice(0, 1200);
+  const runs = [...body.matchAll(/## Run (\S+) · (\S+) · (\S+)\n\*\*(\w+)\*\* — ([^\n]*)/g)]
+    .map((r) => ({ ts: r[1], host: r[2], cli: r[3], status: r[4], summary: r[5] })).slice(-5);
+  const steps = log.filter((l) => l.includes(` ${m.id} `) || l.endsWith(` ${m.id}`)).slice(-12)
+    .map((l) => { const x = l.match(/^(\S+) (\d\d:\d\d) `([^`]+)` (.*)$/); return x ? { day: x[1], time: x[2], host: x[3], text: x[4] } : { text: l }; });
+  return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by, state, started: m.started, created: m.created,
+    finished: m.finished, updated: m.finished ?? m.started ?? m.created, attempt: m.attempt, decision: m.decision, request, runs, steps };
+}
+
 export function status() {
+  const log = journalLines();
   const count = (f: string) => list(P("tasks", f), /^T-.*\.md$/).length;
   return {
     tasks: Object.fromEntries(["proposed", "inbox", "active", "waiting", "blocked", "failed", "done"].map((f) => [f, count(f)])),
-    active: list(P("tasks", "active"), /^T-.*\.md$/).map((p) => { const m = readDoc(p).meta; return { id: m.id, title: m.title, agent: m.agent, host: m.claimed_by }; }),
+    active: list(P("tasks", "active"), /^T-.*\.md$/).map((p) => taskView(p, "active", log)),
+    recent: ["done", "failed", "blocked", "waiting", "inbox"].flatMap((f) => list(P("tasks", f), /^T-.*\.md$/).map((p) => taskView(p, f, log)))
+      .sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? "")).slice(0, 12),
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),
     hosts: onlineHosts({}),
   };
