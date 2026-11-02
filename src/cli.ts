@@ -9,6 +9,7 @@ import {
 import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
 import { ask, buildPrompt, parseResult, runAgent } from "./runner";
+import { writeRules } from "./rules";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -336,6 +337,7 @@ export async function tick(cfg: Cfg, background = false) {
   const primary = (cfg.fleet?.primary ?? host) === host;
   await locked(async () => {
     await _pull();
+    try { writeRules(); } catch (e) { console.error(`rules.md: ${e}`); }
     heartbeat(cfg, running, sample(cfg));
     if (primary) {
       runRoutines(cfg, host, primary);
