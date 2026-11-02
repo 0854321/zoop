@@ -1524,7 +1524,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 if (end) unseen.set(0);
               }}
             >
-              <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: 24 }}>
+              <View selectable style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: 24 }}>
                 <If when={suggest()}>
                   <View
                     testID="notify-banner"

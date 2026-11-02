@@ -73,6 +73,25 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   return true;
 }
 
+/** Owner corrected an answer they just gave: put the task back in the queue with the correction on top. */
+export function amendDecision(id: string, text: string, by: string): string | null {
+  const d = P("decisions", "closed", `${id}.md`);
+  if (!existsSync(d)) return null;
+  const tid = readDoc(d).meta.task;
+  if (!tid) return null;
+  for (const dir of ["inbox", "active", "blocked", "done"]) {
+    const t = P("tasks", dir, `${tid}.md`);
+    if (!existsSync(t)) continue;
+    const { meta, body } = readDoc(t);
+    const note = `\n\n## Owner correction to ${id} (${by}) — overrides the answer above\n${text}\nDo not act on the earlier answer where this contradicts it.\n`;
+    if (dir === "active") { writeDoc(t, meta, body + note); return tid; }
+    writeDoc(P("tasks", "inbox", `${tid}.md`), { ...meta, claimed_by: undefined, status: undefined, gate_override: undefined }, body + note);
+    if (dir !== "inbox") unlinkSync(t);
+    return tid;
+  }
+  return null;
+}
+
 /** Send a decided-by-judge question back to the agent. */
 export function sendBack(id: string, reason: string) {
   closeDecision(id, `SENT BACK by judge: ${reason}`, "judge");

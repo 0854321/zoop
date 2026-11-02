@@ -127,11 +127,19 @@ export async function saveSettings(patch: Record<string, unknown>) {
 const ID = /^\s*([DLP]-[A-Z]?\d{4})\b[\s:：,，\-]*([\s\S]*)$/;
 
 /** Owner said something (local chat or via the cloud inbox): answer an open D-/P-/L- item, or hand it to lead. */
-export async function handleOwnerMessage(text: string, reply_to?: string) {
+let lastAnswer: { id: string; at: number } | null = null;
+const AMEND_MS = 5 * 60_000;
+
+export async function handleOwnerMessage(text: string, reply_to?: string, noAmend = false) {
   const m = text.match(ID);
-  if (m) inbound.push({ id: m[1], answer: m[2].trim(), source: "chat" });
-  else if (reply_to && /^[DLP]-[A-Z]?\d{4}$/.test(reply_to)) inbound.push({ id: reply_to, answer: text.trim(), source: "chat" });
-  else if (ownerTask) {
+  const id = m?.[1] ?? (reply_to && /^[DLP]-[A-Z]?\d{4}$/.test(reply_to) ? reply_to : null);
+  if (id) {
+    inbound.push({ id, answer: (m ? m[2] : text).trim(), source: "chat" });
+    if (id.startsWith("D-")) lastAnswer = { id, at: Date.now() };
+  } else if (!noAmend && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS) {
+    // a plain message right after answering a decision is about that decision ("wait, I clicked the wrong one")
+    inbound.push({ id: lastAnswer.id, answer: text.trim(), source: "chat-amend" });
+  } else if (ownerTask) {
     const tid = await ownerTask(text);
     appendEvent({ from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
   }

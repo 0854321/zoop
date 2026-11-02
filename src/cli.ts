@@ -6,7 +6,7 @@ import {
   type Cfg, P, _commitPush, _pull, agentName, chooseCli, claim, commitPush, heartbeat, hostCaps, hostName, journal,
   list, loadConfig, locked, newTask, now, onlineHosts, pickTask, pull, readDoc, remember, writeDoc,
 } from "./core";
-import { closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
+import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
 import { buildPrompt, parseResult, runAgent } from "./runner";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
@@ -18,7 +18,7 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals } from "./autonomy";
 import { allowedClis, setApprovalGate, setIdTag } from "./core";
@@ -164,6 +164,14 @@ async function handleReplies(cfg: Cfg, host: string) {
     }
     if (r.id.startsWith("L-")) {
       if (submitLoginCode(r.id, r.answer)) journal(host, `🔑 ${r.id} login code received via ${r.source}`);
+      continue;
+    }
+    if (r.source === "chat-amend") {
+      const tid = amendDecision(r.id, r.answer, "owner(chat)");
+      if (tid) {
+        journal(host, `✏️ ${r.id} owner correction: ${r.answer}`);
+        await notify(`✏️ 已按你的纠正更新 ${r.id}（${tid}），之前的选择作废`, cfg);
+      } else await handleOwnerMessage(r.answer, undefined, true);
       continue;
     }
     if (open.has(r.id)) {
