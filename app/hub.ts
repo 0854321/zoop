@@ -18,7 +18,13 @@ export type HostInfo = {
   caps: string[];
   seen?: string;
   busy?: number;
-  stats?: { loadRatio?: number; diskFreeGB?: number; [k: string]: unknown };
+  stats?: { loadRatio?: number; load1?: number; cores?: number; memFreePct?: number; diskFreeGB?: number; diskFreePct?: number; [k: string]: unknown };
+  os?: string;
+  arch?: string;
+  clis?: string[];
+  accounts?: { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string }[];
+  running?: { id: string; title: string; agent: string; started?: string }[];
+  recent?: { id: string; title: string; state?: string; finished?: string }[];
 };
 
 export type TaskInfo = {
