@@ -1,0 +1,29 @@
+{
+  "name": "noop",
+  "id": "dev.noop.app",
+  "version": "0.1.0",
+  "build": 1,
+  "appearance": "system",
+  "theme": "theme.json",
+  "web": {
+    "host": "./host.js"
+  },
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "*"
+      ]
+    },
+    "host": [
+      "page",
+      "pushState",
+      "pushEnable",
+      "pushDisable",
+      "setSession",
+      "setBadge",
+      "clearNotifications",
+      "vibrate"
+    ]
+  },
+  "icon": "icon.png"
+}

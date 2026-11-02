@@ -1,0 +1,306 @@
+// noop core — shared files as the world (stigmergy; synced via the owner's Worker, src/sync.ts), task queue, agent runner, journal, memory.
+import { $ } from "bun";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import * as sync from "./sync";
+
+/** Framework code (this repo, self-updating). */
+export const CODE = resolve(import.meta.dir, "..");
+/** Machine-local home: $NOOP_HOME, else ~/.noop if it exists, else ~/.noop (older installs) if it exists, else ~/.noop. */
+export function homeDir(): string {
+  if (process.env.NOOP_HOME) return resolve(process.env.NOOP_HOME.replace(/^~/, homedir()));
+  for (const d of [".noop", ".agent-hub"]) if (existsSync(join(homedir(), d))) return join(homedir(), d);
+  return join(homedir(), ".noop");
+}
+export const HOME_DIR = homeDir();
+/** Fleet state: local mirror of the files shared by all machines through the owner's Worker (tasks, journal, decisions, agents, memory, config). */
+export const DATA = resolve((process.env.HUB_DATA || join(HOME_DIR, "data")).replace(/^~/, homedir()));
+export const ROOT = DATA;
+export const P = (...p: string[]) => join(DATA, ...p);
+// sync state (noop.toml, sync.json) lives in HOME_DIR; a custom HUB_DATA (tests, extra mirrors) keeps its own next to it
+sync.setSyncData(DATA, process.env.HUB_DATA && !process.env.NOOP_HOME ? dirname(DATA) : HOME_DIR);
+
+// ------------------------------------------------------------------ config
+export type Cfg = Record<string, any>;
+
+function merge(a: any, b: any): any {
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b ?? {}))
+    out[k] = v && typeof v === "object" && !Array.isArray(v) && typeof out[k] === "object" ? merge(out[k], v) : v;
+  return out;
+}
+
+export function loadConfig(): Cfg {
+  const read = (f: string) => (existsSync(P(f)) ? Bun.TOML.parse(readFileSync(P(f), "utf8")) : {});
+  // noop.toml = machine-local bootstrap (Worker url + machine token), outside DATA because DATA itself comes from the Worker
+  // settings.json = changes made from the UI (shared via the data repo), applied over config.toml; config.local.toml wins last
+  const ui = existsSync(P("settings.json")) ? JSON.parse(readFileSync(P("settings.json"), "utf8")) : {};
+  const cfg: Cfg = merge(merge(merge(sync.readHubToml(), read("config.toml")), ui), read("config.local.toml"));
+  // routine tweaks from the UI: { routines: { <name>: { enabled, every } } }
+  for (const r of cfg.routine ?? []) Object.assign(r, ui.routines?.[r.name] ?? {});
+  cfg.notify ??= {};
+  // the owner's own Cloudflare hub (hub cloud deploy) is the fixed address for clients and workers
+  if (cfg.cloud?.url) { cfg.server ??= {}; cfg.server.url ??= cfg.cloud.url; cfg.server.public_url ??= cfg.cloud.url; }
+  // public hub URL published by the primary's tunnel (fleet/hub.json) → workers and push links use it unless pinned locally
+  if (existsSync(P("fleet", "hub.json"))) try {
+    const { url } = JSON.parse(readFileSync(P("fleet", "hub.json"), "utf8"));
+    cfg.server ??= {};
+    if (url && !cfg.server.url) cfg.server.url = url;
+    if (url && !cfg.server.public_url) cfg.server.public_url = url;
+  } catch {}
+  const envMap: Record<string, string> = {
+    slack_bot_token: "HUB_SLACK_BOT_TOKEN", slack_channel: "HUB_SLACK_CHANNEL", slack_webhook: "HUB_SLACK_WEBHOOK",
+    discord_bot_token: "HUB_DISCORD_BOT_TOKEN", discord_channel: "HUB_DISCORD_CHANNEL", discord_webhook: "HUB_DISCORD_WEBHOOK",
+  };
+  for (const [k, env] of Object.entries(envMap)) if (process.env[env]) cfg.notify[k] = process.env[env];
+  return cfg;
+}
+
+export const hostName = (cfg: Cfg): string =>
+  process.env.HUB_HOST || cfg.host?.name || hostname().split(".")[0];
+
+export const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+export const today = () => new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD local
+export const hhmm = () => new Date().toLocaleTimeString("sv-SE").slice(0, 5);
+
+// ------------------------------------------------------------------ data sync (src/sync.ts)
+// All data mutations are serialized so parallel workers in one daemon never race on the mirror.
+let chain: Promise<unknown> = Promise.resolve();
+export function locked<T>(fn: () => Promise<T> | T): Promise<T> {
+  const run = chain.then(fn, fn);
+  chain = run.catch(() => {});
+  return run;
+}
+
+// Machines installed before the Worker store still hold DATA as a git clone; until they run `noop migrate-data`
+// (primary) or `noop init --worker` (others) they keep syncing through git so an update never cuts them off.
+const legacyGit = async () => existsSync(join(DATA, ".git")) && (await sync.syncMode()) === "local" && process.env.HUB_SYNC !== "local" && !process.env.HUB_SYNC_FAKE;
+const git = (...args: string[]) => $`git ${args}`.cwd(DATA).quiet().nothrow();
+async function gitPull() {
+  if ((await git("remote")).stdout.toString().trim() && (await git("pull", "--rebase", "--autostash", "-q")).exitCode !== 0) await git("rebase", "--abort");
+  return true;
+}
+async function gitCommitPush(msg: string): Promise<boolean> {
+  await git("add", "-A");
+  if ((await git("diff", "--cached", "--quiet")).exitCode === 0) return true;
+  await git("commit", "-q", "-m", msg);
+  if (!(await git("remote")).stdout.toString().trim()) return true;
+  for (let i = 0; i < 3; i++) {
+    if ((await git("push", "-q")).exitCode === 0) return true;
+    if ((await git("pull", "--rebase", "-q")).exitCode !== 0) { await git("rebase", "--abort"); return false; }
+  }
+  return false;
+}
+
+export const hasRemote = async () => (await legacyGit()) || (await sync.syncMode()) === "remote";
+
+export const pull = () => locked(_pull);
+/** Apply remote changes to DATA (remote wins on paths edited on both sides, except mergeable appends). */
+export async function _pull(): Promise<boolean> { return (await legacyGit()) ? gitPull() : sync.pull(); }
+
+/** Commit every local change via the Worker's compare-and-swap; false if we lost a race (or are offline). */
+export const commitPush = (msg: string) => locked(() => _commitPush(msg));
+export const _commitPush = async (msg: string): Promise<boolean> => (await legacyGit()) ? gitCommitPush(msg) : sync.commitPush(msg);
+
+/** Discard local edits and re-pull. */
+export const resetToUpstream = async () => (await legacyGit()) ? git("reset", "--hard", "-q", "@{u}") : sync.resetToUpstream();
+
+// ------------------------------------------------------------------ markdown docs w/ front-matter
+export type Doc = { meta: Record<string, string>; body: string };
+
+export function readDoc(path: string): Doc {
+  const text = readFileSync(path, "utf8");
+  const m = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!m) return { meta: {}, body: text };
+  const meta: Record<string, string> = {};
+  for (const line of m[1].split("\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return { meta, body: m[2] };
+}
+
+export function writeDoc(path: string, meta: Record<string, string | undefined>, body: string) {
+  mkdirSync(dirname(path), { recursive: true });
+  const head = Object.entries(meta).filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}: ${String(v).replace(/\n/g, " ")}`).join("\n");
+  writeFileSync(path, `---\n${head}\n---\n${body.trimEnd()}\n`);
+}
+
+export const list = (dir: string, re = /\.md$/) =>
+  existsSync(dir) ? readdirSync(dir).filter((f) => re.test(f)).sort().map((f) => join(dir, f)) : [];
+
+/** Non-primary hosts mint IDs with a host letter (T-M0001) so two machines never create the same ID. */
+let idTag = "";
+export const setIdTag = (tag: string) => { idTag = tag; };
+
+export function nextId(prefix: string, dir: string): string {
+  let max = 0;
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(join(d, e.name));
+      const m = e.name.match(new RegExp(`^${prefix}-${idTag}(\\d+)`));
+      if (m) max = Math.max(max, +m[1]);
+    }
+  };
+  walk(dir);
+  return `${prefix}-${idTag}${String(max + 1).padStart(4, "0")}`;
+}
+
+// ------------------------------------------------------------------ tasks
+export type TaskOpts = {
+  agent?: string; cli?: string; host?: string; requires?: string; prefer?: string; weight?: string; repo?: string; priority?: string; source?: string;
+  extra?: Record<string, string>;
+};
+
+/** Capabilities of this machine: os:<linux|macos|windows>, host:<name>, plus config [host].caps (e.g. gpu, docker, home). */
+export function hostCaps(cfg: Cfg): string[] {
+  const os = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
+  const clis = ["claude", "codex", "gh", "cargo"].filter((c) => Bun.which(c)).map((c) => `cli:${c}`);
+  return [`os:${os}`, `host:${hostName(cfg)}`, `arch:${process.arch}`, ...clis, ...(cfg.host?.caps ?? [])];
+}
+
+/** A task matches if every comma-separated requirement is in the host's caps. */
+export function matches(meta: Record<string, string>, caps: string[]): boolean {
+  const reqs = [meta.requires, meta.host && meta.host !== "any" ? `host:${meta.host}` : ""]
+    .join(",").split(",").map((s) => s.trim()).filter(Boolean);
+  return reqs.every((r) => caps.includes(r));
+}
+
+/** Hook set by the CLI so core stays free of policy imports. */
+export let approvalGate: (source: string) => boolean = () => false;
+export const setApprovalGate = (fn: (source: string) => boolean) => { approvalGate = fn; };
+
+export function newTask(title: string, body = "", o: TaskOpts = {}): string {
+  const id = nextId("T", P("tasks"));
+  // work the owner asked for (directly or via a delegated parent) never needs re-approval
+  const folder = o.extra?.origin !== "owner" && approvalGate(o.source ?? "owner") ? "proposed" : "inbox";
+  writeDoc(P("tasks", folder, `${id}.md`), {
+    id, title, agent: o.agent ?? "lead", cli: o.cli ?? "auto", host: o.host ?? "any",
+    requires: o.requires ?? "", prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
+    created: now(), ...(o.extra ?? {}),
+  }, body || title);
+  return id;
+}
+
+export const which = (bin: string) => Bun.which(bin) !== null;
+
+/** Claude Opus does the challenging work (development, debugging, architecture, UI, judgement);
+ *  Codex (ChatGPT) does routine work: triage, monitoring, reports, first-pass review, everyday planning. */
+const ROUTINE = ["dispatcher", "ops-watcher", "reporter", "oss-triage", "reviewer", "chief-of-staff"];
+
+export function allowedClis(meta: Record<string, string>, cfg: Cfg): string[] {
+  if (meta.cli && meta.cli !== "auto") return [meta.cli];
+  if (meta.difficulty === "hard" || meta.weight === "heavy") return ["claude"];
+  const agent = meta.agent || "lead";
+  const per = cfg.clis?.agents?.[agent] as string[] | undefined;
+  if (per) return per;
+  const routine: string[] = cfg.clis?.routine_agents ?? cfg.clis?.codex_agents ?? ROUTINE;
+  return routine.includes(agent) ? ["codex", "claude"] : ["claude"]; // routine: Codex first, Claude as fallback
+}
+
+export function chooseCli(meta: Record<string, string>, cfg: Cfg): string | null {
+  return allowedClis(meta, cfg).find(which) ?? null;
+}
+
+// ------------------------------------------------------------------ fleet presence (heartbeats)
+export type HostBeat = { host: string; caps: string[]; seen: string; busy: number; version: string; stats?: any };
+
+export function heartbeat(cfg: Cfg, busy: number, stats?: unknown) {
+  const host = hostName(cfg);
+  const f = P("fleet", "hosts", `${host}.json`);
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, JSON.stringify({ host, caps: hostCaps(cfg), seen: now(), busy, version: "1", stats } satisfies HostBeat, null, 2));
+}
+
+export function onlineHosts(cfg: Cfg): HostBeat[] {
+  const staleMs = (cfg.fleet?.offline_after_minutes ?? 5) * 60_000;
+  return list(P("fleet", "hosts"), /\.json$/).map((p) => JSON.parse(readFileSync(p, "utf8")) as HostBeat)
+    .filter((h) => Date.now() - Date.parse(h.seen) < staleMs);
+}
+
+const reqList = (s?: string) => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+
+/** Should this host leave the task for a preferred, currently-online host? */
+function yieldToPreferred(meta: Record<string, string>, caps: string[], cfg: Cfg): boolean {
+  const prefer = reqList(meta.prefer);
+  if (!prefer.length || prefer.every((r) => caps.includes(r))) return false;
+  const waitMs = (cfg.fleet?.prefer_wait_minutes ?? 10) * 60_000;
+  if (Date.now() - Date.parse(meta.created) > waitMs) return false; // waited long enough
+  return onlineHosts(cfg).some((h) => h.host !== hostName(cfg) && prefer.every((r) => h.caps.includes(r)));
+}
+
+/** Heavy work goes to the least-loaded capable online host. */
+function yieldHeavy(meta: Record<string, string>, cfg: Cfg, myLoad: number, heavyOk: boolean): boolean {
+  if (meta.weight !== "heavy") return false;
+  if (!heavyOk) return true;
+  const me = hostName(cfg);
+  return onlineHosts(cfg).some((h) => h.host !== me && matches(meta, h.caps) && h.stats
+    && h.stats.loadRatio + 0.2 < myLoad && h.busy === 0);
+}
+
+export function pickTask(cfg: Cfg, myLoad = 0, heavyOk = true): string | null {
+  const caps = hostCaps(cfg);
+  const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+  const cands = list(P("tasks", "inbox"), /^T-.*\.md$/)
+    .map((p) => ({ p, m: readDoc(p).meta }))
+    .filter(({ m }) => matches(m, caps) && chooseCli(m, cfg) && !yieldToPreferred(m, caps, cfg) && !yieldHeavy(m, cfg, myLoad, heavyOk))
+    .sort((a, b) => (rank[a.m.priority] ?? 2) - (rank[b.m.priority] ?? 2) || a.p.localeCompare(b.p));
+  return cands[0]?.p ?? null;
+}
+
+/** Move inbox → active and push. The Worker's compare-and-swap commit is the distributed lock between machines. */
+export const claim = (path: string, host: string) => locked(() => _claim(path, host));
+async function _claim(path: string, host: string): Promise<string | null> {
+  if (!existsSync(path)) return null;
+  const { meta, body } = readDoc(path);
+  const dest = P("tasks", "active", `${meta.id}.md`);
+  writeDoc(dest, { ...meta, claimed_by: host, started: now(), host_caps: hostCaps(loadConfig()).join(",") }, body);
+  unlinkSync(path);
+  if (await _commitPush(`[${host}] claim ${meta.id}: ${meta.title}`)) return dest;
+  // undo only our claim (other pending local results stay queued); after a lost race the pull already applied the winner
+  if (await legacyGit()) await git("reset", "--hard", "-q", "HEAD~1");
+  else sync.revertLocal([relative(DATA, dest), relative(DATA, path)]);
+  return null;
+}
+
+// ------------------------------------------------------------------ journal & memory
+export function journal(host: string, line: string) {
+  const f = P("journal", `${today()}.md`);
+  if (!existsSync(f)) writeFileSync(f, `# Journal ${today()}\n\n`);
+  appendFileSync(f, `- ${hhmm()} \`${host}\` ${line}\n`);
+}
+
+export function remember(agent: string, lessons: string[] | undefined, source: string) {
+  if (!lessons?.length) return;
+  const f = P("agents", agent, "memory.md");
+  if (!existsSync(f)) { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, `# ${agent} memory\n\n`); }
+  appendFileSync(f, lessons.map((l) => `- ${l} _(${source}, ${today()})_\n`).join(""));
+}
+
+export const readIf = (p: string, tail = 12000) => (existsSync(p) ? readFileSync(p, "utf8").slice(-tail) : "");
+
+export const readAll = (dir: string, tail = 12000) =>
+  list(dir).map((p) => `### ${p.split("/").pop()}\n${readFileSync(p, "utf8").trim()}`).join("\n\n").slice(-tail);
+
+export const recentJournal = (days = 2) =>
+  list(P("journal")).slice(-days).map((p) => readFileSync(p, "utf8").slice(-4000)).join("\n");
+
+export function precedents(n = 30): string {
+  return list(P("decisions", "closed")).slice(-n).map((p) => {
+    const { meta } = readDoc(p);
+    return `- ${meta.id} [${meta.agent}] Q: ${meta.question}\n  → **${meta.answer}** (by ${meta.answered_by})`;
+  }).join("\n");
+}
+
+export function signature(agent: string, host: string, cfg: Cfg) {
+  const name = agentName(agent);
+  return `— 🤖 ${name} (${agent}) · AI agent acting for @${cfg.owner?.github ?? "owner"}`;
+}
+
+export function agentName(agent: string): string {
+  const p = P("agents", agent, "profile.md");
+  const m = existsSync(p) ? readFileSync(p, "utf8").match(/^Name:\s*(.+)$/m) : null;
+  return m ? m[1].trim() : agent;
+}

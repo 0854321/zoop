@@ -1,0 +1,1 @@
+export function createChunkLoader(e,t,n=e=>import(e),r=()=>{}){return async(i,a=[])=>{if(!t()||(await Promise.all([i,...a].map(r)),!t()))throw Error(`the app was disposed`);let o=await n(new URL(i,e).href);if(!t())throw Error(`the app was disposed`);return o}}

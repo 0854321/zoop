@@ -1,0 +1,23 @@
+# Your own noop coordination plane on Cloudflare's free plan.
+# Deployed by `hub cloud deploy` (also run by `hub init` on the primary). Each user deploys into their own account.
+name = "noop"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+# Secrets (set by `hub cloud deploy`, never in this file):
+#   HUB_TOKEN        machine (fleet) credential
+#   HUB_OWNER_EMAIL  owner allow-list for email-code login (comma-separated) — from [email] to
+#   HUB_SMTP         JSON {host, port, secure, user, pass, from} — from [email]
+
+[assets]
+directory = "../app/dist/web/noop"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/media/*"]
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]

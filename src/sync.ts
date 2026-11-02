@@ -1,0 +1,360 @@
+// Data sync: ~/.noop/data is a local working mirror of the fleet files stored in the owner's own
+// Cloudflare Worker (cloud/src/files.ts). Agents and code keep reading/writing plain files; this module
+//   pull()        applies remote changes since the last seen rev (remote wins for paths changed on both sides,
+//                 except pure appends on both sides, which are merged so journals/memory don't lose lines),
+//   commitPush()  sends local changes (vs. the recorded hashes) through the compare-and-swap commit API;
+//                 a 409 means someone else changed one of our base versions → pull, and return false if we lost,
+//   revertLocal() / resetToUpstream() discard local edits.
+// Machine-local state next to DATA: noop.toml (cloud url + machine token), sync.json (rev + per-path version/hash),
+// sync-base/ (content of each path as last synced; used to revert and to merge appends), sync.lock (cross-process).
+// Modes: remote (noop.toml has [cloud] url + [server] token) · HUB_SYNC=local (no remote; commits are no-ops) ·
+//        HUB_SYNC_FAKE=<sqlite file> (offline tests: the real Worker module over bun:sqlite, in-process).
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { hostname } from "node:os";
+
+export const MAX_FILE = 1_500_000;
+
+// ------------------------------------------------------------------ locations (resolved lazily so tests can repoint DATA)
+let dataDir = "", homeDir = "";
+/** home defaults to the folder containing the mirror. */
+export function setSyncData(dir: string, home = dirname(dir)) { dataDir = dir; homeDir = home; transport = undefined; }
+const D = () => dataDir;
+const HOME = () => homeDir;
+export const hubTomlPath = () => process.env.HUB_CONF || join(HOME(), "noop.toml");
+const STATE = () => join(HOME(), "sync.json");
+const BASE = () => join(HOME(), "sync-base");
+const LOCK = () => join(HOME(), "sync.lock");
+
+// ------------------------------------------------------------------ machine-local bootstrap config (noop.toml)
+export function readHubToml(): Record<string, any> {
+  try { return existsSync(hubTomlPath()) ? Bun.TOML.parse(readFileSync(hubTomlPath(), "utf8")) as any : {}; } catch { return {}; }
+}
+/** Merge sections into noop.toml (string values only). */
+export function writeHubToml(patch: Record<string, Record<string, string>>) {
+  const cur = readHubToml();
+  for (const [s, kv] of Object.entries(patch)) cur[s] = { ...(cur[s] ?? {}), ...kv };
+  const q = (v: unknown) => JSON.stringify(String(v));
+  const text = "# machine-local noop bootstrap (never synced): your Worker URL + this machine's token\n" +
+    Object.entries(cur).map(([s, kv]) => `[${s}]\n${Object.entries(kv as object).map(([k, v]) => `${k} = ${q(v)}`).join("\n")}\n`).join("\n");
+  mkdirSync(dirname(hubTomlPath()), { recursive: true });
+  writeFileSync(hubTomlPath(), text);
+  try { chmodSync(hubTomlPath(), 0o600); } catch {}
+}
+
+// ------------------------------------------------------------------ transport
+export type Reply = { status: number; json: any } | null; // null = network failure
+export type Transport = (path: string, init?: { method?: string; body?: unknown }) => Promise<Reply>;
+let transport: Transport | null | undefined;
+export function setTransport(t: Transport | null) { transport = t; }
+
+function httpTransport(url: string, token: string): Transport {
+  const base = url.replace(/\/$/, "");
+  return async (path, init = {}) => {
+    try {
+      const r = await fetch(base + path, {
+        method: init.method ?? "GET", body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Noop-Host": process.env.HUB_HOST || require("node:os").hostname().split(".")[0] }, signal: AbortSignal.timeout(60_000),
+      });
+      return { status: r.status, json: await r.json().catch(() => ({})) };
+    } catch { return null; }
+  };
+}
+
+/** In-process fake: the real Worker module over a bun:sqlite file (shared by all processes using the same file). */
+export async function fakeTransport(file: string, actor = hostname()): Promise<Transport> {
+  const { Database } = await import("bun:sqlite");
+  const { initFilesSchema, handleFiles } = await import("../cloud/src/files");
+  const db = new Database(file, { create: true });
+  db.exec("PRAGMA busy_timeout = 10000; PRAGMA journal_mode = WAL;");
+  const conv = (v: unknown) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v);
+  const sql = {
+    exec(q: string, ...b: any[]) {
+      if (!b.length && q.trim().replace(/;\s*$/, "").includes(";")) { db.exec(q); return { toArray: () => [] }; }
+      const rows = db.query(q).all(...b.map(conv) as any[]);
+      return { toArray: () => rows as any[] };
+    },
+  };
+  initFilesSchema(sql);
+  return async (path, init = {}) => {
+    const req = new Request(`http://fake${path}`, { method: init.method ?? "GET", body: init.body === undefined ? undefined : JSON.stringify(init.body) });
+    // a real DO runs one request at a time; BEGIN IMMEDIATE gives the same isolation across processes
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const r = await handleFiles(sql, req, new URL(req.url), process.env.HUB_HOST || actor);
+      db.exec("COMMIT");
+      return r ? { status: r.status, json: await r.json() } : { status: 404, json: {} };
+    } catch (e) { db.exec("ROLLBACK"); throw e; }
+  };
+}
+
+async function getTransport(): Promise<Transport | null> {
+  if (transport !== undefined) return transport;
+  if (process.env.HUB_SYNC_FAKE) return (transport = await fakeTransport(process.env.HUB_SYNC_FAKE));
+  if (process.env.HUB_SYNC === "local") return (transport = null);
+  const h = readHubToml();
+  const url = h.cloud?.url, token = h.server?.token;
+  return (transport = url && token ? httpTransport(String(url), String(token)) : null);
+}
+export async function syncMode(): Promise<"remote" | "local"> { return (await getTransport()) ? "remote" : "local"; }
+
+// ------------------------------------------------------------------ state
+type Entry = { v: number; h: string; m: number; s: number };
+type State = { rev: number; files: Record<string, Entry> };
+function loadState(): State {
+  try { return JSON.parse(readFileSync(STATE(), "utf8")); } catch { return { rev: 0, files: {} }; }
+}
+function saveState(s: State) {
+  mkdirSync(HOME(), { recursive: true });
+  const tmp = `${STATE()}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(s));
+  renameSync(tmp, STATE());
+}
+
+const hash = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
+const unb64 = (s: string) => new Uint8Array(Buffer.from(s, "base64"));
+
+/** Paths never synced: machine-local config, logs, git leftovers, editor/tmp files. */
+export function ignored(rel: string): boolean {
+  const parts = rel.split("/");
+  const first = parts[0], name = parts[parts.length - 1];
+  if (first === ".git" || first.startsWith(".git.bak") || first === "logs" || rel === "config.local.toml") return true;
+  return /^\.sync-tmp-|\.tmp$|~$|\.sw[po]$|^\.DS_Store$|^#.*#$/.test(name) || parts.includes(".git");
+}
+
+function walk(dir = D(), rel = "", out: string[] = []): string[] {
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (ignored(r)) continue;
+    if (e.isDirectory()) walk(join(dir, e.name), r, out);
+    else if (e.isFile()) out.push(r);
+  }
+  return out;
+}
+
+function readLocal(rel: string): Uint8Array | null {
+  try { return new Uint8Array(readFileSync(join(D(), rel))); } catch { return null; }
+}
+function writeAtomic(abs: string, data: Uint8Array) {
+  mkdirSync(dirname(abs), { recursive: true });
+  const tmp = join(dirname(abs), `.sync-tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  writeFileSync(tmp, data);
+  renameSync(tmp, abs);
+}
+function setBase(rel: string, data: Uint8Array | null) {
+  const f = join(BASE(), rel);
+  if (data) writeAtomic(f, data); else rmSync(f, { force: true });
+}
+const getBase = (rel: string): Uint8Array | null => { try { return new Uint8Array(readFileSync(join(BASE(), rel))); } catch { return null; } };
+function stamp(rel: string): { m: number; s: number } {
+  try { const st = statSync(join(D(), rel)); return { m: st.mtimeMs, s: st.size }; } catch { return { m: -1, s: -1 }; }
+}
+
+export type Change = { path: string; base_version: number; content?: string; deleted?: true; _bytes?: Uint8Array; _hash?: string };
+
+/** Local changes vs. the recorded state. Updates mtime/size stamps of unchanged files in `st`. */
+export function scan(st: State): Change[] {
+  const changes: Change[] = [];
+  const seen = new Set<string>();
+  for (const rel of walk()) {
+    seen.add(rel);
+    const e = st.files[rel];
+    const { m, s } = stamp(rel);
+    if (e && e.m === m && e.s === s) continue;
+    const data = readLocal(rel);
+    if (!data) continue;
+    if (data.length > MAX_FILE) { console.error(`sync: skipping ${rel} (${data.length} bytes > ${MAX_FILE}); keep large files outside the data folder`); continue; }
+    const h = hash(data);
+    if (e && e.h === h) { e.m = m; e.s = s; continue; }
+    changes.push({ path: rel, base_version: e?.v ?? 0, content: b64(data), _bytes: data, _hash: h });
+  }
+  for (const [rel, e] of Object.entries(st.files)) if (!seen.has(rel) && !ignored(rel)) changes.push({ path: rel, base_version: e.v, deleted: true });
+  return changes;
+}
+
+// ------------------------------------------------------------------ cross-process lock (CLI commands vs. the daemon)
+async function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  mkdirSync(HOME(), { recursive: true });
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    try { mkdirSync(LOCK()); break; } catch {
+      try { if (Date.now() - statSync(LOCK()).mtimeMs > 120_000) { rmSync(LOCK(), { recursive: true, force: true }); continue; } } catch { continue; }
+      if (Date.now() > deadline) throw new Error(`sync: lock ${LOCK()} held for over a minute`);
+      await Bun.sleep(50);
+    }
+  }
+  try { return await fn(); } finally { rmSync(LOCK(), { recursive: true, force: true }); }
+}
+
+// ------------------------------------------------------------------ pull
+const dec = new TextDecoder("utf-8", { fatal: true });
+const text = (b: Uint8Array | null) => { if (!b) return null; try { return dec.decode(b); } catch { return null; } };
+
+/** Both sides only appended to the common base → remote + our appended tail. Journals of the same day start
+ *  with the same header even without a base. Anything else: null (remote wins). */
+export function mergeAppend(rel: string, base: Uint8Array | null, local: Uint8Array, remote: Uint8Array): Uint8Array | null {
+  const l = text(local), r = text(remote);
+  if (l == null || r == null) return null;
+  let b = text(base);
+  if (b == null) {
+    if (!rel.startsWith("journal/")) return null;
+    const head = l.split("\n")[0];
+    if (head !== r.split("\n")[0]) return null;
+    b = head + "\n";
+    while (l.startsWith(b + "\n") && r.startsWith(b + "\n")) b += "\n";
+  }
+  if (!b || !l.startsWith(b) || !r.startsWith(b)) return null;
+  const tail = l.slice(b.length);
+  return new TextEncoder().encode(r + (r.endsWith("\n") || !r ? "" : "\n") + tail);
+}
+
+type Remote = { path: string; version: number; hash: string | null; deleted: boolean; content: string | null };
+
+/** Apply one remote row. Returns "lost" when a local edit was overwritten. */
+function applyRemote(st: State, f: Remote): "ok" | "merged" | "lost" {
+  if (ignored(f.path) || f.path.includes("..")) return "ok";
+  const abs = join(D(), f.path);
+  const e = st.files[f.path];
+  if (e && e.v >= f.version) return "ok"; // our own commit echoing back (local may have moved on since)
+  const local = readLocal(f.path);
+  const lh = local ? hash(local) : null;
+  const remote = f.deleted || f.content == null ? null : unb64(f.content);
+  const modified = lh !== (e?.h ?? null);
+  let outcome: "ok" | "merged" | "lost" = "ok";
+  let write: Uint8Array | null = remote;
+  if (modified && lh !== f.hash) {
+    const merged = local && remote ? mergeAppend(f.path, getBase(f.path), local, remote) : null;
+    if (merged) { write = merged; outcome = "merged"; } else if (local || remote) outcome = "lost";
+    if (outcome === "lost") console.error(`sync: ${f.path} changed remotely and locally — keeping the remote version`);
+  }
+  if (write) { if (!local || hash(write) !== lh) writeAtomic(abs, write); } else rmSync(abs, { force: true });
+  setBase(f.path, remote);
+  if (remote) st.files[f.path] = { v: f.version, h: f.hash ?? hash(remote), ...(outcome === "merged" ? { m: -1, s: -1 } : stamp(f.path)) };
+  else delete st.files[f.path];
+  return outcome;
+}
+
+async function _pull(st: State, t: Transport): Promise<{ ok: boolean; lost: Set<string> }> {
+  const lost = new Set<string>();
+  for (let page = 0; page < 10_000; page++) {
+    const r = await t(`/api/files/changes?since=${st.rev}`);
+    if (!r || r.status !== 200) { if (r) console.error(`sync: pull failed ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`); return { ok: false, lost }; }
+    for (const f of r.json.files as Remote[]) if (applyRemote(st, f) === "lost") lost.add(f.path);
+    st.rev = r.json.rev;
+    saveState(st);
+    if (!r.json.more) break;
+  }
+  return { ok: true, lost };
+}
+
+export async function pull(): Promise<boolean> {
+  const t = await getTransport();
+  if (!t) return true;
+  return withLock(async () => (await _pull(loadState(), t)).ok);
+}
+
+// ------------------------------------------------------------------ commit
+function recordCommitted(st: State, changes: Change[], files: { path: string; version: number; hash: string | null; deleted: boolean }[]) {
+  const byPath = new Map(changes.map((c) => [c.path, c]));
+  for (const f of files) {
+    const c = byPath.get(f.path);
+    if (f.deleted) { delete st.files[f.path]; setBase(f.path, null); continue; }
+    st.files[f.path] = { v: f.version, h: f.hash ?? c?._hash ?? "", ...stamp(f.path) };
+    if (c?._bytes) setBase(f.path, c._bytes);
+    // edited again while the request was in flight → force a rehash next scan
+    if (c?._hash && f.hash !== c._hash) st.files[f.path].m = -1;
+  }
+}
+
+const wire = (c: Change[]) => c.map(({ _bytes, _hash, ...w }) => w);
+
+/** Commit all local changes. true = pushed (or nothing to do / local mode); false = lost a race or offline. */
+export async function commitPush(msg: string): Promise<boolean> {
+  const t = await getTransport();
+  if (!t) return true;
+  return withLock(async () => {
+    const st = loadState();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const changes = scan(st);
+      if (!changes.length) { saveState(st); return true; }
+      const r = await t("/api/files/commit", { method: "POST", body: { msg, changes: wire(changes) } });
+      if (!r) { saveState(st); return false; } // offline: changes stay pending locally
+      if (r.status === 200) { recordCommitted(st, changes, r.json.files); saveState(st); return true; }
+      if (r.status !== 409) { console.error(`sync: commit rejected ${r.status}: ${JSON.stringify(r.json).slice(0, 300)}`); saveState(st); return false; }
+      const conflicts: string[] = r.json.conflicts ?? [];
+      const { ok, lost } = await _pull(st, t);
+      if (!ok || conflicts.some((p) => lost.has(p))) return false; // someone else won (e.g. claimed the task)
+    }
+    return false;
+  });
+}
+
+/** Restore paths (relative to DATA) to their last-synced content (delete if they did not exist). */
+export function revertLocal(paths: string[]) {
+  for (const rel of paths) {
+    const b = getBase(rel);
+    if (b) writeAtomic(join(D(), rel), b); else rmSync(join(D(), rel), { force: true });
+  }
+}
+
+/** Discard every local edit and re-pull. */
+export async function resetToUpstream(): Promise<boolean> {
+  const t = await getTransport();
+  if (!t) return true;
+  return withLock(async () => {
+    const st = loadState();
+    revertLocal(scan(st).map((c) => c.path));
+    for (const e of Object.values(st.files)) e.m = -1;
+    return (await _pull(st, t)).ok;
+  });
+}
+
+/** One-line status for diagnostics. */
+export async function syncStatus(): Promise<string> {
+  const mode = await syncMode();
+  const st = loadState();
+  const pending = mode === "remote" ? scan(structuredClone(st)).length : 0;
+  return `${mode}${mode === "remote" ? ` → ${readHubToml().cloud?.url ?? process.env.HUB_SYNC_FAKE}` : ""} · rev ${st.rev} · ${Object.keys(st.files).length} files · ${pending} pending`;
+}
+
+// ------------------------------------------------------------------ one-time upload (hub migrate-data)
+/** Upload every local file (local wins), in batches; then the mirror state matches the Worker. */
+export async function uploadAll(msg: string, batchBytes = 8_000_000): Promise<{ files: number; bytes: number }> {
+  const t = await getTransport();
+  if (!t) throw new Error("no Worker configured (noop.toml [cloud] url + [server] token)");
+  return withLock(async () => {
+    // learn the Worker's current versions without touching local files
+    const versions: Record<string, number> = {};
+    let since = 0;
+    for (;;) {
+      const r = await t(`/api/files/changes?since=${since}`);
+      if (!r || r.status !== 200) throw new Error(`cannot reach the Worker (${r?.status ?? "offline"})`);
+      for (const f of r.json.files as Remote[]) { if (f.deleted) delete versions[f.path]; else versions[f.path] = f.version; }
+      since = r.json.rev;
+      if (!r.json.more) break;
+    }
+    const st: State = { rev: 0, files: {} };
+    const all = scan(st).filter((c) => !c.deleted);
+    let files = 0, bytes = 0;
+    for (let i = 0; i < all.length;) {
+      const batch: Change[] = [];
+      let size = 0;
+      while (i < all.length && (batch.length === 0 || (size + all[i]._bytes!.length < batchBytes && batch.length < 500))) {
+        const c = all[i++]; c.base_version = versions[c.path] ?? 0; batch.push(c); size += c._bytes!.length;
+      }
+      const r = await t("/api/files/commit", { method: "POST", body: { msg, changes: wire(batch) } });
+      if (!r || r.status !== 200) throw new Error(`upload failed (${r?.status ?? "offline"}): ${JSON.stringify(r?.json ?? {}).slice(0, 300)}`);
+      recordCommitted(st, batch, r.json.files);
+      files += batch.length; bytes += size;
+      console.log(`  uploaded ${files}/${all.length}`);
+    }
+    saveState(st); // rev 0: the next pull re-reads everything (identical files are no-ops; Worker-only files arrive)
+    return { files, bytes };
+  });
+}
+
+/** Drop machine sync state (tests / re-init). */
+export function resetSyncState() { rmSync(STATE(), { force: true }); rmSync(BASE(), { recursive: true, force: true }); }
+export const _test = { loadState };

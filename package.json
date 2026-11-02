@@ -1,0 +1,20 @@
+{
+  "name": "noop",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "noop": "src/cli.ts",
+    "hub": "src/cli.ts"
+  },
+  "scripts": {
+    "daemon": "bun src/cli.ts daemon",
+    "tick": "bun src/cli.ts tick",
+    "status": "bun src/cli.ts status",
+    "check": "bunx tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

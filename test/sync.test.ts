@@ -1,0 +1,139 @@
+// Data sync: host mirror (src/sync.ts) against the real Worker files module (cloud/src/files.ts) over bun:sqlite.
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as sync from "../src/sync";
+
+let W = "", t: sync.Transport;
+const hosts = { a: "", b: "" };
+/** Point the sync module at one host's mirror (each host has its own DATA, state and lock). */
+const as = (h: "a" | "b") => { sync.setSyncData(hosts[h]); sync.setTransport(t); return hosts[h]; };
+const put = (h: "a" | "b", rel: string, s: string | Uint8Array) => { const f = join(hosts[h], rel); mkdirSync(join(f, ".."), { recursive: true }); writeFileSync(f, s); };
+const get = (h: "a" | "b", rel: string) => readFileSync(join(hosts[h], rel), "utf8");
+const api = (path: string, body?: unknown) => t(path, body === undefined ? {} : { method: "POST", body });
+
+beforeAll(async () => {
+  W = mkdtempSync(join(tmpdir(), "hub-sync-"));
+  hosts.a = join(W, "a", "data"); hosts.b = join(W, "b", "data");
+  mkdirSync(hosts.a, { recursive: true }); mkdirSync(hosts.b, { recursive: true });
+  t = await sync.fakeTransport(join(W, "worker.sqlite"), "test");
+});
+afterAll(() => rmSync(W, { recursive: true, force: true }));
+
+test("push, pull, binary-safe, ignored paths", async () => {
+  const bin = new Uint8Array(256).map((_, i) => i);
+  as("a");
+  put("a", "tasks/inbox/T-0001.md", "---\nid: T-0001\n---\nhello\n");
+  put("a", "media/blob.bin", bin);
+  put("a", "config.local.toml", "secret = 1\n");
+  put("a", "logs/daemon.log", "x\n");
+  put("a", "agents/x/.notes.md.swp", "tmp");
+  expect(await sync.commitPush("a: seed")).toBe(true);
+  as("b");
+  expect(await sync.pull()).toBe(true);
+  expect(get("b", "tasks/inbox/T-0001.md")).toContain("hello");
+  expect(new Uint8Array(readFileSync(join(hosts.b, "media/blob.bin")))).toEqual(bin);
+  expect(existsSync(join(hosts.b, "config.local.toml"))).toBe(false);
+  expect(existsSync(join(hosts.b, "logs"))).toBe(false);
+  expect(existsSync(join(hosts.b, "agents/x/.notes.md.swp"))).toBe(false);
+  expect(await sync.commitPush("b: nothing")).toBe(true); // nothing changed
+});
+
+test("task claim race: exactly one host wins, loser gets the winner's state", async () => {
+  const claim = (h: "a" | "b") => {
+    const src = join(hosts[h], "tasks/inbox/T-0001.md");
+    put(h, "tasks/active/T-0001.md", readFileSync(src, "utf8").replace("id: T-0001", `id: T-0001\nclaimed_by: ${h}`));
+    unlinkSync(src);
+  };
+  as("a"); claim("a");
+  as("b"); claim("b");
+  as("a"); expect(await sync.commitPush("[a] claim T-0001")).toBe(true);
+  as("b"); expect(await sync.commitPush("[b] claim T-0001")).toBe(false);
+  sync.revertLocal(["tasks/active/T-0001.md", "tasks/inbox/T-0001.md"]); // what core.claim does on false
+  expect(get("b", "tasks/active/T-0001.md")).toContain("claimed_by: a");
+  expect(existsSync(join(hosts.b, "tasks/inbox/T-0001.md"))).toBe(false);
+  expect(await sync.commitPush("b: after loss")).toBe(true); // nothing left to push
+});
+
+test("non-conflicting changes in a lost commit stay pending and push later", async () => {
+  as("a"); put("a", "decisions/open/D-1.md", "a\n"); expect(await sync.commitPush("a")).toBe(true);
+  as("b"); put("b", "decisions/open/D-1.md", "b\n"); put("b", "fleet/hosts/b.json", "{}");
+  expect(await sync.commitPush("b")).toBe(false); // D-1 lost to a
+  expect(get("b", "decisions/open/D-1.md")).toBe("a\n");
+  expect(await sync.commitPush("b retry")).toBe(true); // heartbeat still goes up
+  as("a"); await sync.pull(); expect(get("a", "fleet/hosts/b.json")).toBe("{}");
+});
+
+test("concurrent appends to the same journal merge instead of losing lines", async () => {
+  as("a"); put("a", "journal/2026-11-02.md", "# Journal 2026-11-02\n\n- 09:00 a one\n"); expect(await sync.commitPush("a")).toBe(true);
+  as("b"); await sync.pull();
+  as("a"); appendFileSync(join(hosts.a, "journal/2026-11-02.md"), "- 09:01 a two\n"); expect(await sync.commitPush("a")).toBe(true);
+  as("b"); appendFileSync(join(hosts.b, "journal/2026-11-02.md"), "- 09:01 b one\n"); expect(await sync.commitPush("b")).toBe(true);
+  as("a"); await sync.pull();
+  expect(get("a", "journal/2026-11-02.md")).toBe("# Journal 2026-11-02\n\n- 09:00 a one\n- 09:01 a two\n- 09:01 b one\n");
+  // same-day journal created on both hosts without a common base: headers line up
+  as("a"); put("a", "journal/2026-11-03.md", "# Journal 2026-11-03\n\n- a\n"); expect(await sync.commitPush("a")).toBe(true);
+  as("b"); put("b", "journal/2026-11-03.md", "# Journal 2026-11-03\n\n- b\n"); expect(await sync.commitPush("b")).toBe(true);
+  expect(get("b", "journal/2026-11-03.md")).toBe("# Journal 2026-11-03\n\n- a\n- b\n");
+});
+
+test("deletes propagate; reset discards local edits", async () => {
+  as("a"); unlinkSync(join(hosts.a, "media/blob.bin")); expect(await sync.commitPush("a: rm")).toBe(true);
+  as("b"); await sync.pull(); expect(existsSync(join(hosts.b, "media/blob.bin"))).toBe(false);
+  put("b", "decisions/open/D-1.md", "scribble"); put("b", "junk.md", "x");
+  expect(await sync.resetToUpstream()).toBe(true);
+  expect(get("b", "decisions/open/D-1.md")).toBe("a\n");
+  expect(existsSync(join(hosts.b, "junk.md"))).toBe(false);
+  // recreate a deleted path (base_version 0 again)
+  put("b", "media/blob.bin", "again"); expect(await sync.commitPush("b")).toBe(true);
+  as("a"); await sync.pull(); expect(get("a", "media/blob.bin")).toBe("again");
+});
+
+test("worker API: 409 applies nothing, history, revert, pagination, size limit, path validation", async () => {
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  let r = await api("/api/files/commit", { msg: "x", changes: [{ path: "p/one.md", base_version: 0, content: b64("1") }] });
+  expect(r!.status).toBe(200);
+  const v1 = r!.json.files[0].version;
+  r = await api("/api/files/commit", { msg: "x", changes: [{ path: "p/two.md", base_version: 0, content: b64("2") }, { path: "p/one.md", base_version: 0, content: b64("bad") }] });
+  expect(r!.status).toBe(409); expect(r!.json.conflicts).toEqual(["p/one.md"]);
+  expect((await api("/api/files/history?path=p/two.md"))!.json.history).toEqual([]); // atomic: two.md not written
+  r = await api("/api/files/commit", { msg: "edit", changes: [{ path: "p/one.md", base_version: v1, content: b64("1b") }] });
+  expect(r!.status).toBe(200);
+  const h = (await api("/api/files/history?path=p/one.md&content=1"))!.json.history;
+  expect(h.map((x: any) => x.version)).toEqual([v1 + 1, v1]);
+  expect(Buffer.from(h[1].content, "base64").toString()).toBe("1");
+  r = await api("/api/files/revert", { path: "p/one.md", version: v1 });
+  expect(r!.status).toBe(200); expect(r!.json.version).toBe(v1 + 2);
+  const all: any[] = [];
+  for (let since = 0, more = true; more;) { const p = (await t(`/api/files/changes?since=${since}&limit=2`))!.json; all.push(...p.files); since = p.rev; more = p.more; }
+  expect(Buffer.from(all.find((f) => f.path === "p/one.md").content, "base64").toString()).toBe("1");
+  expect(new Set(all.map((f) => f.path)).size).toBe(all.length);
+  r = await api("/api/files/commit", { msg: "big", changes: [{ path: "big.bin", base_version: 0, content: Buffer.alloc(1_500_001).toString("base64") }] });
+  expect(r!.status).toBe(413);
+  for (const bad of ["../x", "/abs", ".git/config", "a//b", "a/./b"]) {
+    r = await api("/api/files/commit", { msg: "x", changes: [{ path: bad, base_version: 0, content: b64("x") }] });
+    expect(r!.status).toBe(400);
+  }
+});
+
+test("history pruning keeps the latest row of each path", async () => {
+  const { initFilesSchema, pruneHistory } = await import("../cloud/src/files");
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(":memory:");
+  const sql = { exec: (q: string, ...b: any[]) => { if (!b.length && q.includes(";")) { db.exec(q); return { toArray: () => [] }; } const rows = db.query(q).all(...b); return { toArray: () => rows as any[] }; } };
+  initFilesSchema(sql);
+  const old = new Date(Date.now() - 100 * 86400_000).toISOString();
+  for (const [p, v] of [["a", 1], ["a", 2], ["b", 1]] as const) sql.exec("INSERT INTO history (path, version, ts) VALUES (?, ?, ?)", p, v, old);
+  pruneHistory(sql);
+  expect(sql.exec("SELECT path, version FROM history ORDER BY path").toArray()).toEqual([{ path: "a", version: 2 }, { path: "b", version: 1 }]);
+});
+
+test("own commit echoing back on the next pull does not clobber newer local edits", async () => {
+  as("a"); put("a", "config.toml", "v1\n"); expect(await sync.commitPush("a")).toBe(true);
+  put("a", "config.toml", "v2 local\n");
+  expect(await sync.pull()).toBe(true);
+  expect(get("a", "config.toml")).toBe("v2 local\n");
+  expect(await sync.commitPush("a v2")).toBe(true);
+  as("b"); await sync.pull(); expect(get("b", "config.toml")).toBe("v2 local\n");
+});

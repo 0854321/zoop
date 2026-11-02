@@ -1,0 +1,138 @@
+// Decisions: agent asks → AI judge (owner's precedents & principles) → only unprecedented taste calls reach the owner.
+import { existsSync, unlinkSync, appendFileSync, writeFileSync } from "node:fs";
+import {
+  type Cfg, P, agentName, journal, list, newTask, nextId, now, precedents, readAll, readDoc, readIf, today, writeDoc,
+} from "./core";
+import { notify } from "./notify";
+import { ask, type Result } from "./runner";
+import { judgeMayDecide } from "./autonomy";
+
+export function openDecision(task: Record<string, string>, res: Result, host: string): string {
+  const id = nextId("D", P("decisions"));
+  const opts = res.options?.length ? res.options : ["A: approve", "B: reject"];
+  writeDoc(P("decisions", "open", `${id}.md`), {
+    id, task: task.id, agent: task.agent, host, created: now(),
+    question: res.question ?? "", recommendation: res.recommendation ?? "", options: opts.join(" | "),
+    attachments: (res.attachments ?? []).join(" | ") || undefined,
+    kind: task.kind === "menu" ? "menu" : undefined,
+  }, `## Context\n${res.summary}\n\n## Options\n${opts.map((o) => `- ${o}`).join("\n")}\n`);
+  return id;
+}
+
+type Verdict = { verdict: "decided" | "sent_back" | "hold"; answer?: string; reason: string; cite?: string };
+
+export async function judge(id: string, cfg: Cfg): Promise<Verdict | null> {
+  if (cfg.judge?.enabled === false) return { verdict: "hold", reason: "judge disabled" };
+  const { meta, body } = readDoc(P("decisions", "open", `${id}.md`));
+  if (meta.kind === "menu") return { verdict: "hold", reason: "next-steps menu is always the owner's call" };
+  const prompt = `You are the owner's JUDGE. You apply the owner's recorded taste and past rulings to questions raised by their AI agent fleet.
+Decide one of:
+- "decided": the owner has clearly answered this kind of question before (precedent or principle). Give the answer and cite where.
+- "sent_back": the question is malformed, lacks info the agent could get itself, or is covered by policy the agent should just follow. Say what to do.
+- "hold": it needs a genuinely new judgment call, is high-stakes/irreversible beyond precedent, or you are not confident. Wait for the human.
+Be conservative: when in doubt, "hold". Never decide anything involving money, credentials, production data deletion, or messages committing the owner personally.
+
+# Owner principles & profile
+${readAll(P("memory"))}
+
+# Fleet policy
+${readAll(P("policies"))}
+
+# Corrections the owner made to past judge rulings (highest priority)
+${readIf(P("memory", "judge-feedback.md"), 6000) || "(none)"}
+
+# Past decisions
+${precedents(60) || "(none)"}
+
+# Question ${id} from agent ${meta.agent} (task ${meta.task})
+${meta.question}
+Recommendation: ${meta.recommendation}
+${body}
+
+Reply with only a \`\`\`json block: {"verdict": "...", "answer": "...", "reason": "...", "cite": "D-xxxx or principle"}`;
+  return ask(prompt, cfg, P("logs", "runs", `${id}-judge.log`));
+}
+
+/** Close a decision and put its task back in the inbox with the answer appended. */
+export function closeDecision(id: string, answer: string, by: string, note = ""): boolean {
+  const src = P("decisions", "open", `${id}.md`);
+  if (!existsSync(src)) return false;
+  const { meta, body } = readDoc(src);
+  writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer, answered_by: by, answered: now() },
+    `${body}\n## Answer (${by})\n${answer}\n${note}`);
+  unlinkSync(src);
+  const t = P("tasks", "blocked", `${meta.task}.md`);
+  if (existsSync(t)) {
+    const { meta: tm, body: tb } = readDoc(t);
+    const gated = /\b(approve|merge|release|publish|yes|ok)\b|同意|批准|可以/i.test(answer) && by !== "judge";
+    writeDoc(P("tasks", "inbox", `${meta.task}.md`),
+      { ...tm, claimed_by: undefined, status: undefined, resumes: id, gate_override: gated ? id : undefined },
+      `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nA: **${answer}**\nContinue the task accordingly.\n`);
+    unlinkSync(t);
+  }
+  return true;
+}
+
+/** Send a decided-by-judge question back to the agent. */
+export function sendBack(id: string, reason: string) {
+  closeDecision(id, `SENT BACK by judge: ${reason}`, "judge");
+}
+
+export async function routeDecision(id: string, cfg: Cfg, host: string) {
+  let v = await judge(id, cfg);
+  let { meta, body } = readDoc(P("decisions", "open", `${id}.md`));
+  if (v && !judgeMayDecide(cfg, meta.agent) && v.verdict !== "hold") { // shadow mode: record, but ask the owner
+    meta = { ...meta, shadow_verdict: v.verdict, shadow_answer: v.answer ?? v.reason };
+    journal(host, `👤 shadow-judge on ${id}: would ${v.verdict} "${v.answer ?? v.reason}"`);
+    v = { verdict: "hold", reason: `学习期，judge 认为：${v.verdict === "decided" ? v.answer : "应退回: " + v.reason}` };
+  }
+  if (v?.verdict === "decided" && v.answer) {
+    closeDecision(id, v.answer, "judge", `Reason: ${v.reason} (cite: ${v.cite ?? "-"})`);
+    journal(host, `⚖️ judge decided ${id}: ${v.answer} (${v.cite ?? v.reason})`);
+    return;
+  }
+  if (v?.verdict === "sent_back") {
+    sendBack(id, v.reason);
+    journal(host, `↩️ judge sent back ${id}: ${v.reason}`);
+    return;
+  }
+  // hold → ask the human
+  const opts = (meta.options ?? "").split(" | ").filter(Boolean);
+  const menu = meta.kind === "menu";
+  const text = menu ? [
+    `📋 *${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`,
+    ...opts.map((o) => `${o}`),
+    `建议：*${meta.recommendation || "-"}*`,
+    `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
+  ].join("\n") : [
+    `🤔 *${id}* · ${agentName(meta.agent)} (${meta.agent}@${meta.host}) · task ${meta.task}`,
+    meta.question,
+    ...opts.map((o) => `• ${o}`),
+    `建议：*${meta.recommendation || "-"}*${v ? `　judge：${v.reason}` : ""}`,
+    `回复 \`${id} A\` 或 \`${id} <你的指示>\``,
+  ].join("\n");
+  const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
+    attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });
+  writeDoc(P("decisions", "open", `${id}.md`), { ...meta, held: now(), notified: ids.join(",") }, body);
+  journal(host, `📨 ${id} held for owner: ${meta.question}`);
+}
+
+/** Owner overrides a judge ruling: `D-0007 override <new answer>` → feedback memory + redo task. */
+export function overrideJudge(id: string, answer: string, src: string, host: string): boolean {
+  const f = P("decisions", "closed", `${id}.md`);
+  if (!existsSync(f)) return false;
+  const { meta, body } = readDoc(f);
+  if (meta.answered_by !== "judge") return false;
+  writeDoc(f, { ...meta, answer, answered_by: `owner-override(${src})`, overridden_judge: meta.answer }, body + `\n## Owner override\n${answer}\n`);
+  const fb = P("memory", "judge-feedback.md");
+  if (!existsSync(fb)) writeFileSync(fb, "# Owner corrections to judge rulings\n\n");
+  appendFileSync(fb, `- ${today()} ${id}: Q「${meta.question}」judge said「${meta.answer}」→ owner: **${answer}**\n`);
+  newTask(`Redo per owner override of ${id}`, `Judge answered "${meta.answer}" but the owner overrode it:\n\n**${answer}**\n\nOriginal question: ${meta.question}\nRelated task: ${meta.task}. Adjust/revert the earlier work accordingly.`,
+    { agent: meta.agent, priority: "high", source: `override:${id}` });
+  journal(host, `🔁 owner overrode judge on ${id}: ${answer}`);
+  return true;
+}
+
+export const recentJudgeIds = () =>
+  new Set(list(P("decisions", "closed")).slice(-30).map((p) => readDoc(p).meta)
+    .filter((m) => m.answered_by === "judge").map((m) => m.id));

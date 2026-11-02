@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>noop</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/32.ca30bc5e22.png">
+<link rel="apple-touch-icon" href="icons/180.9727d6c72d.png">
+<script>const fetches = new Map(["nsh.3b9d162b1c.wasm","app.6af0fbfb7e.js"].map((url) => { const response = fetch(url); response.catch(() => {}); return [url, response]; }));</script>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  html, body { background: #ffffff; color: #1c1c1e; }
+  @media (prefers-color-scheme: dark) { html, body { background: #000000; color: #f2f2f7; } }
+  #app { position: fixed; inset: 0; }
+  #status { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 10px; padding: 24px; box-sizing: border-box; text-align: center;
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; pointer-events: none; }
+  #status[hidden] { display: none; }
+  #nojs { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font: 15px system-ui, sans-serif; }
+  /* Shown only when loading takes a while: no flash on a fast load. */
+  .spinner { width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(128,128,128,.25);
+    border-top-color: rgba(128,128,128,.85); animation: spin .8s linear infinite, appear .2s .4s both; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes appear { from { opacity: 0; } }
+  #status.failed { pointer-events: auto; }
+  #status pre { margin: 0; max-width: 640px; max-height: 50vh; overflow: auto; text-align: left; white-space: pre-wrap;
+    font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; opacity: .7; -webkit-user-select: text; user-select: text; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="status" role="status" aria-live="polite"><div class="spinner" aria-label="Loading"></div></div>
+<noscript><div id="nojs">noop needs JavaScript.</div></noscript>
+<script type="module">
+  // Written by `nsh package --target web`: loads the runtime, the app's
+  // entry fonts in
+  // parallel, then imports its browser entry; a chunk's own fonts come
+  // with it. A Rust app (`app.rust`) has no code: its runtime mounts its
+  // root. The page's host (`app.host`, nsh.json `web.host`) answers the
+  // app's `nsh/host` calls: its `createHost(player)` runs once the player
+  // exists, before the app starts, so no call comes earlier.
+  import { createPlayer } from "./nsh.1676bb1c7d.js";
+
+  const app = {"id":"dev.noop.app","wasm":"nsh.3b9d162b1c.wasm","code":"app.6af0fbfb7e.js","capabilities":"{\"network\":{\"hosts\":[\"*\"],\"http\":[]},\"process\":{\"execute\":[],\"exit\":false,\"env\":[]},\"fs\":{\"read\":[],\"write\":[]},\"statusBar\":false,\"clipboard\":false,\"picker\":false,\"host\":[\"page\",\"pushState\",\"pushEnable\",\"pushDisable\",\"setSession\",\"setBadge\",\"clearNotifications\",\"vibrate\"],\"openUrl\":false}","rust":false,"assets":{},"data":{"syntaxes":"nsh-syntaxes.ea0da56d04.bin"},"fonts":[],"chunkFonts":{},"chunks":{},"entryChunks":[],"host":"host.6597385a00.js"};
+  const status = document.getElementById("status");
+  const fonts = new Map();
+  let player;
+
+  function fail(title, detail) {
+    status.hidden = false;
+    status.className = "failed";
+    status.setAttribute("role", "alert");
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const pre = document.createElement("pre");
+    pre.textContent = detail;
+    status.replaceChildren(heading, pre);
+  }
+
+  // A response the head's script requested (`fetches`) is taken once.
+  function take(url) {
+    const response = fetches.get(url) ?? fetch(url);
+    fetches.delete(url);
+    return response;
+  }
+
+  async function get(url) {
+    const response = await take(url);
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    return response;
+  }
+
+  const path = (uri) => uri.replace(/^asset:\/+/, "");
+  // Each font once: before the app starts, or with the chunk that needs it.
+  const loads = new Map();
+  const loadFont = (font) => {
+    if (!loads.has(font)) {
+      loads.set(font, get(app.assets[font]).then(async (r) => fonts.set(font, new Uint8Array(await r.arrayBuffer()))));
+    }
+    return loads.get(font);
+  };
+
+  try {
+    let host;
+    const [loaded, hostModule] = await Promise.all([
+      createPlayer(document.getElementById("app"), {
+        wasm: take(app.wasm),
+        glue: app.glue,
+        host: app.host ? { call: (name, args) => host.call(name, args) } : undefined,
+        assets: app.assets,
+        data: app.data,
+        readAsset: (uri) => fonts.get(path(uri)) ?? null,
+        prepareChunk: (id) => Promise.all((app.chunkFonts[id] ?? []).map(loadFont)),
+        // A release shows no error box; an app that could not start says so.
+        overlay: false,
+        onError: (message) => {
+          if (!player || player.views.size <= 1) fail("This app could not start.", message);
+        },
+      }),
+      app.host ? import(`./${app.host}`) : null,
+      ...app.fonts.map(loadFont),
+      // The fonts of the chunks the entry imports statically.
+      ...(app.entryChunks ?? []).flatMap(id => (app.chunkFonts[id] ?? []).map(loadFont)),
+    ]);
+    player = loaded;
+    if (hostModule) {
+      host = await hostModule.createHost(player);
+      if (typeof host?.call !== "function") throw new Error("nsh.json web.host: createHost(player) returned no call(name, args)");
+    }
+    status.hidden = true;
+    if (app.rust) player.runRust();
+    else await player.runModule(app.code, { capabilities: app.capabilities ?? "", appId: app.id ?? "", chunks: app.chunks });
+  } catch (err) {
+    fail("This app could not be loaded.", String(err?.message ?? err));
+  }
+</script>
+</body>
+</html>

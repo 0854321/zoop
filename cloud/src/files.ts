@@ -1,0 +1,175 @@
+// Shared fleet files (replaces the private git data repo). Lives in the Hub Durable Object's SQLite.
+// Each host keeps ~/.agent-hub/data as a local working mirror and syncs it through this API (src/sync.ts).
+//
+//   GET  /api/files/changes?since=<rev>[&limit=]  → {rev, more, files:[{path, version, hash, deleted, content(base64)|null, rev}]}
+//   POST /api/files/commit {msg, changes:[{path, base_version, content(base64)} | {path, base_version, deleted:true}]}
+//        → 200 {rev, files:[{path, version, hash, deleted}]} | 409 {conflicts:[path]} (nothing applied) | 400/413 {error}
+//        Compare-and-swap per path: base_version must equal the current version (0 = must not exist / be deleted).
+//        This is the distributed lock that task claims rely on (exactly one host wins a move).
+//   GET  /api/files/history?path=&limit=[&content=1] → {history:[{seq, version, hash, ts, by, msg, deleted, size, content?}]}
+//   POST /api/files/revert {path, version, msg?} → {rev, version} (writes the old content as a new version)
+//
+// Every write gets its own global `rev` (monotonic), so `changes?since=` pagination never splits a row.
+// History keeps ≤ 90 days and ≤ 20k rows, but always the latest row of each path.
+
+/** Structural subset of Cloudflare's SqlStorage (also satisfied by a bun:sqlite adapter in tests). */
+export interface FilesSql { exec(query: string, ...bindings: any[]): { toArray(): any[] } }
+
+export const MAX_FILE = 1_500_000;          // bytes per file (SQLite row limit is 2 MB)
+const PAGE_BYTES = 8_000_000;               // response budget for one changes page
+const PAGE_ROWS = 1000;
+const HISTORY_DAYS = 90, HISTORY_ROWS = 20_000;
+
+const json = (d: unknown, status = 200) => Response.json(d, { status });
+
+export function initFilesSchema(sql: FilesSql) {
+  sql.exec(`CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, content BLOB, hash TEXT, version INTEGER NOT NULL,
+      updated TEXT, by TEXT, deleted INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS files_rev ON files (rev);
+    CREATE TABLE IF NOT EXISTS history (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, version INTEGER, hash TEXT,
+      content BLOB, ts TEXT, by TEXT, msg TEXT);
+    CREATE INDEX IF NOT EXISTS history_path ON history (path, version);
+    CREATE TABLE IF NOT EXISTS files_meta (k TEXT PRIMARY KEY, v INTEGER);`);
+}
+
+// ---------------------------------------------------------------- helpers
+const b64enc = (u: Uint8Array) => { let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
+function b64dec(s: string): Uint8Array {
+  const bin = atob(s); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+const bytes = (v: unknown): Uint8Array => v instanceof Uint8Array ? v : v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(0);
+/** DO SQLite binds ArrayBuffer for BLOBs. */
+const blob = (u: Uint8Array): ArrayBuffer => u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
+export async function sha256hex(u: Uint8Array) {
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", blob(u)))].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** Relative, normalized, no traversal, no git internals. */
+export function validPath(p: unknown): p is string {
+  if (typeof p !== "string" || !p || p.length > 512 || p.startsWith("/") || p.includes("\\") || p.includes("\0")) return false;
+  return p.split("/").every((s) => s && s !== "." && s !== ".." && s !== ".git");
+}
+
+function curRev(sql: FilesSql): number { return Number(sql.exec("SELECT v FROM files_meta WHERE k = 'rev'").toArray()[0]?.v ?? 0); }
+function setRev(sql: FilesSql, r: number) { sql.exec("INSERT OR REPLACE INTO files_meta (k, v) VALUES ('rev', ?)", r); }
+
+type Row = { path: string; version: number; deleted: number; hash: string | null };
+const rowOf = (sql: FilesSql, path: string): Row | undefined =>
+  sql.exec("SELECT path, version, deleted, hash FROM files WHERE path = ?", path).toArray()[0] as Row | undefined;
+/** Version a writer must name as base: 0 when absent or deleted. */
+const liveVersion = (r?: Row) => (r && !r.deleted ? Number(r.version) : 0);
+
+type Prepared = { path: string; base: number; content: Uint8Array | null; hash: string | null };
+
+/** Synchronous check-and-apply: no awaits inside, so the DO cannot interleave another request. */
+function applyCas(sql: FilesSql, items: Prepared[], actor: string, msg: string): Response {
+  const conflicts = items.filter((it) => liveVersion(rowOf(sql, it.path)) !== it.base).map((it) => it.path);
+  if (conflicts.length) return json({ conflicts }, 409);
+  let rev = curRev(sql);
+  const ts = new Date().toISOString();
+  const out: { path: string; version: number; hash: string | null; deleted: boolean }[] = [];
+  for (const it of items) {
+    const r = rowOf(sql, it.path);
+    if (!it.content && liveVersion(r) === 0) { out.push({ path: it.path, version: Number(r?.version ?? 0), hash: null, deleted: true }); continue; } // delete of nothing
+    const version = Number(r?.version ?? 0) + 1;
+    rev++;
+    sql.exec(`INSERT INTO files (path, content, hash, version, updated, by, deleted, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET content = excluded.content, hash = excluded.hash, version = excluded.version,
+        updated = excluded.updated, by = excluded.by, deleted = excluded.deleted, rev = excluded.rev`,
+      it.path, it.content ? blob(it.content) : null, it.hash, version, ts, actor, it.content ? 0 : 1, rev);
+    sql.exec("INSERT INTO history (path, version, hash, content, ts, by, msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      it.path, version, it.hash, it.content ? blob(it.content) : null, ts, actor, msg);
+    out.push({ path: it.path, version, hash: it.hash, deleted: !it.content });
+  }
+  setRev(sql, rev);
+  pruneHistory(sql);
+  return json({ rev, files: out });
+}
+
+export function pruneHistory(sql: FilesSql, now = Date.now()) {
+  const cutoff = new Date(now - HISTORY_DAYS * 86400_000).toISOString();
+  sql.exec(`DELETE FROM history WHERE (ts < ? OR seq <= (SELECT MAX(seq) FROM history) - ?)
+    AND seq NOT IN (SELECT MAX(seq) FROM history GROUP BY path)`, cutoff, HISTORY_ROWS);
+}
+
+async function body(req: Request): Promise<any> { try { return await req.json(); } catch { return null; } }
+
+// ---------------------------------------------------------------- routes
+export async function handleFiles(sql: FilesSql, req: Request, url: URL, actor: string): Promise<Response | null> {
+  const p = url.pathname;
+  if (!p.startsWith("/api/files/")) return null;
+
+  if (p === "/api/files/changes" && req.method === "GET") {
+    const since = Math.max(0, Number(url.searchParams.get("since") ?? 0) || 0);
+    const limit = Math.min(PAGE_ROWS, Math.max(1, Number(url.searchParams.get("limit") ?? PAGE_ROWS) || PAGE_ROWS));
+    const head = curRev(sql);
+    const files: any[] = [];
+    let size = 0, last = since, more = false;
+    // one row at a time so a page never loads more than its byte budget
+    for (;;) {
+      const r = sql.exec("SELECT path, content, hash, version, deleted, rev FROM files WHERE rev > ? ORDER BY rev LIMIT 1", last).toArray()[0];
+      if (!r) break;
+      const c = r.deleted ? null : bytes(r.content);
+      if (files.length && (files.length >= limit || size + (c?.length ?? 0) > PAGE_BYTES)) { more = true; break; }
+      files.push({ path: r.path, version: Number(r.version), hash: r.hash, deleted: !!r.deleted, content: c ? b64enc(c) : null, rev: Number(r.rev) });
+      size += c?.length ?? 0;
+      last = Number(r.rev);
+    }
+    return json({ rev: more ? last : Math.max(last, head), more, files });
+  }
+
+  if (p === "/api/files/commit" && req.method === "POST") {
+    const b = await body(req);
+    const changes = b?.changes;
+    if (!Array.isArray(changes) || !changes.length) return json({ error: "changes[] required" }, 400);
+    const seen = new Set<string>();
+    const items: Prepared[] = [];
+    for (const c of changes) {
+      if (!validPath(c?.path)) return json({ error: `invalid path: ${String(c?.path).slice(0, 200)}` }, 400);
+      if (seen.has(c.path)) return json({ error: `duplicate path: ${c.path}` }, 400);
+      seen.add(c.path);
+      const base = Number(c.base_version);
+      if (!Number.isInteger(base) || base < 0) return json({ error: `bad base_version for ${c.path}` }, 400);
+      if (c.deleted === true) { items.push({ path: c.path, base, content: null, hash: null }); continue; }
+      if (typeof c.content !== "string") return json({ error: `content (base64) or deleted:true required for ${c.path}` }, 400);
+      let content: Uint8Array;
+      try { content = b64dec(c.content); } catch { return json({ error: `content is not base64: ${c.path}` }, 400); }
+      if (content.length > MAX_FILE) return json({ error: `file too large: ${c.path} is ${content.length} bytes (max ${MAX_FILE}); keep large artifacts outside the data folder` }, 413);
+      items.push({ path: c.path, base, content, hash: await sha256hex(content) });
+    }
+    return applyCas(sql, items, actor, String(b.msg ?? "").slice(0, 500));
+  }
+
+  if (p === "/api/files/history" && req.method === "GET") {
+    const path = url.searchParams.get("path");
+    if (!validPath(path)) return json({ error: "path required" }, 400);
+    const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
+    const withContent = url.searchParams.get("content") === "1";
+    const rows = sql.exec("SELECT seq, version, hash, content, ts, by, msg FROM history WHERE path = ? ORDER BY seq DESC LIMIT ?", path, limit).toArray();
+    return json({
+      history: rows.map((r) => {
+        const c = r.content == null ? null : bytes(r.content);
+        return { seq: Number(r.seq), version: Number(r.version), hash: r.hash, ts: r.ts, by: r.by, msg: r.msg, deleted: c == null, size: c?.length ?? 0,
+          ...(withContent ? { content: c ? b64enc(c) : null } : {}) };
+      }),
+    });
+  }
+
+  if (p === "/api/files/revert" && req.method === "POST") {
+    const b = await body(req);
+    if (!validPath(b?.path) || !Number.isInteger(b?.version)) return json({ error: "{path, version} required" }, 400);
+    const h = sql.exec("SELECT content, hash FROM history WHERE path = ? AND version = ? ORDER BY seq DESC LIMIT 1", b.path, b.version).toArray()[0];
+    if (!h) return json({ error: `no history for ${b.path} v${b.version} (pruned or never existed)` }, 404);
+    const content = h.content == null ? null : bytes(h.content);
+    const base = liveVersion(rowOf(sql, b.path));
+    const res = applyCas(sql, [{ path: b.path, base, content, hash: content ? String(h.hash) : null }], actor,
+      String(b.msg ?? `revert ${b.path} to v${b.version}`).slice(0, 500));
+    if (res.status !== 200) return res;
+    const r = await res.json() as any;
+    return json({ rev: r.rev, version: r.files[0].version });
+  }
+
+  return json({ error: "not found" }, 404);
+}

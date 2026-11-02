@@ -1,0 +1,13 @@
+# Test harness only (never deployed): mounts cloud/src/files.ts in a SQLite Durable Object.
+#   cd cloud/test && bunx wrangler dev --port 8799   then   bun cloud/test/run.ts http://127.0.0.1:8799
+name = "agent-hub-files-test"
+main = "harness.ts"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "FILES"
+class_name = "FilesHarness"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["FilesHarness"]

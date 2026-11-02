@@ -1,0 +1,6 @@
+config.local.toml
+*.eml
+.env
+logs/
+node_modules/
+.wrangler/

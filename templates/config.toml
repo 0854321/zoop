@@ -1,0 +1,203 @@
+# Shared fleet config (committed). Per-machine overrides & secrets → config.local.toml (gitignored).
+
+[owner]
+name = "Your Name"
+github = "your-github"
+
+[fleet]
+max_followup_depth = 4                # stop runaway follow-up chains
+primary = "__PRIMARY__"            # always-on Linux PC: runs routines, judge, Slack/Discord polling, reaping
+offline_after_minutes = 5             # no heartbeat for this long → host considered offline
+reap_after_minutes = 20               # active task on an offline host → requeued
+prefer_wait_minutes = 10              # soft 'prefer' waits at most this long for an online preferred host
+
+[update]
+check_minutes = 30                    # self-update framework code (git ff + bun test, auto-rollback)
+
+[host]
+tick_seconds = 60
+# max_parallel = 8                    # concurrent agents; default = cores/3 (min 2), then throttled by the resource governor
+caps = []                             # extra capability tags, e.g. ["gpu", "docker", "home-lan"]
+
+[resources]
+work_dirs = ["~/work"]                # where repo target/ and node_modules/ live
+disk_min_gb = 30                      # below this → tiered cleanup
+disk_min_pct = 10
+disk_hard_min_gb = 5                  # below this → stop starting new agents
+mem_min_pct = 10
+load_mid = 0.7                        # load/cores ratio → halve parallelism
+load_high = 0.9                       # → stop adding agents
+heavy_max_load = 0.5                  # heavy tasks (bench/full build) start only below this
+stale_repo_days = 7                   # target/ of repos untouched this long may be removed
+
+[clis]
+# Claude Opus = challenging work (development, debugging, architecture, UI, judge, learning, evolution).
+# Codex (ChatGPT) = routine work; these agents use Codex first and fall back to Claude. Tasks marked
+# difficulty = "hard" or weight = "heavy" always go to Claude.
+routine_agents = ["dispatcher", "ops-watcher", "reporter", "oss-triage", "reviewer", "chief-of-staff"]
+# per-agent override, e.g.  [clis.agents]  reviewer = ["codex", "claude"]
+timeout_minutes = 90
+[clis.claude]
+permission_mode = "bypassPermissions" # hard gates still apply via --disallowedTools (src/gates.ts)
+model = "claude-opus-5-5"
+[clis.codex]
+# model = "gpt-5.5-codex"
+
+[autonomy]
+level = "onboarding"                  # onboarding → assisted → autonomous. Only the owner changes this
+                                      # (the architect proposes graduation from metrics: shadow-judge accuracy, approval rate).
+batch_minutes = 15                    # onboarding: self-generated tasks are batched into one approval message (P-xxxx)
+
+[idle]
+enabled = true
+after_minutes = 20                    # queue empty this long → Chief of Staff sends you a numbered menu
+cooldown_minutes = 180                # re-offer an unanswered menu after this
+quiet_hours = "23:30-08:30"           # no menus at night (tasks keep running)
+
+# ------------------------------------------------------------------ AI accounts (put these in config.local.toml per machine)
+# Multiple accounts rotate automatically: usage limit → cooldown + next account; expired login → link sent to you.
+# [[accounts]]
+# cli = "claude"
+# name = "work"          # isolated CLAUDE_CONFIG_DIR at ~/.agent-hub/accounts/claude-work
+# [[accounts]]
+# cli = "claude"
+# name = "personal"
+# [[accounts]]
+# cli = "codex"
+# name = "chatgpt-pro"   # isolated CODEX_HOME
+
+[medic]                               # AI self-repair (hub fix; auto on install/update/daemon failures)
+enabled = true
+push = true                           # framework fixes → branch + PR on the noop repo
+timeout_minutes = 30
+
+[judge]
+enabled = true
+cli = "claude"
+model = "claude-opus-5-5"
+
+[tunnel]                              # Cloudflare Tunnel → public HTTPS for the client, no LAN/VPN needed
+mode = "quick"                        # quick (no account, URL changes on restart) | named (stable: `cloudflared tunnel login` once) | off
+# name = "agent-hub"
+# hostname = "hub.example.com"
+
+[server]                              # runs on the primary; chat API for the NSH client + built-in web chat
+enabled = true
+port = 8787
+host = "0.0.0.0"                      # reach it via Tailscale (MagicDNS name = hostname)
+# token = "__TOKEN__"
+# url = "__URL__"
+# public_url = "https://<primary>.tailnet.ts.net/" # link used in phone push
+
+[notify]
+on_failure = true
+# ntfy_url = "http://<primary>:2586/agent-hub"   # optional phone push (self-hosted ntfy or ntfy.sh topic)
+# Put tokens in config.local.toml or env (HUB_SLACK_BOT_TOKEN / HUB_DISCORD_BOT_TOKEN ...)
+# slack_channel = "C0123456"
+# discord_channel = "123456789012345678"
+# slack_owner_user_id = "U0123"       # only accept decision replies from you
+# discord_owner_user_id = "1234"
+
+[gates]
+extra = []                            # more Claude Code tool patterns to hard-block, e.g. "Bash(kubectl delete:*)"
+
+# ------------------------------------------------------------------ routines (signal → task generators)
+# every: "15m" | "hourly" | "daily HH:MM" | "weekdays HH:MM" | "weekly MON HH:MM"
+# requires = hard capability (task waits for such a host) ; prefer = soft (falls back to anyone)
+
+[[routine]]
+name = "triage-inbound"
+every = "15m"
+agent = "dispatcher"
+prompt = """Scan inbound signals since the last journal entry by dispatcher: GitHub notifications (gh api notifications),
+PRs requesting my review, issues assigned to me, CI failures on my open PRs, new uptime alerts.
+Dedupe against tasks/ and journal/, then emit follow-ups routed to the right agent. Mark handled notifications read."""
+
+[[routine]]
+name = "uptime-watch"
+every = "10m"
+agent = "ops-watcher"
+priority = "high"
+prompt = "Check the uptime alert source listed in memory/projects.md. Apply your escalation rules."
+
+[[routine]]
+name = "pr-review"
+every = "30m"
+agent = "reviewer"
+requires = "os:linux"
+prompt = """Find open PRs on the Core repos in memory/projects.md
+whose current head SHA is not in reviews/ (ledger), oldest first, PRs by others before my own. Review & verify up to 3 of them in parallel
+(one subagent + worktree + visual session each) per your profile."""
+
+[[routine]]
+name = "own-prs-ci"
+every = "30m"
+agent = "rust-maintainer"
+difficulty = "hard"
+prompt = """Keep the owner's own open PRs mergeable without asking him. List them with `gh search prs --author=@me --state=open --json repository,number,url` and, per PR, `gh pr view <n> -R <repo> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName`.
+1. mergeable == CONFLICTING (GitHub shows "This branch has conflicts", checks stuck "awaiting conflict resolution"): in a fresh worktree of the PR branch, `git merge origin/<base>` (never rebase: force-push is forbidden), resolve every conflict preserving the PR's intent and main's newer changes (read both sides' commits), run the repo's real build + tests (cargo test / bun test etc.), then push normally to the PR branch. Comment a short signed note listing the resolved files.
+2. CI red because of main drift, or a trivial failure (fmt, clippy, snapshot, lockfile): fix on the branch the same way.
+3. Unaddressed review comments with an obvious fix: fix them.
+Only if a conflict needs a product/design choice the code can't settle → needs_decision with both versions summarized and a recommendation. Skip PRs marked draft-WIP by the owner within the last hour (he is likely still pushing)."""
+
+[[routine]]
+name = "nightly-health"
+every = "daily 02:30"
+agent = "rust-maintainer"
+requires = "os:linux"
+weight = "heavy"
+prompt = "In each Core repo of memory/projects.md: git fetch, run cargo check/test on latest main. File follow-ups for regressions."
+
+[[routine]]
+name = "macos-check"
+every = "daily 10:00"
+agent = "rust-maintainer"
+prefer = "os:macos"
+prompt = "Build and run tests of the Core repos on this host's OS (prefer macOS). Report platform-specific failures as follow-ups."
+
+[[routine]]
+name = "daily-report"
+every = "weekdays 19:00"
+agent = "reporter"
+prompt = "Write today's daily report to reports/daily/<date>.md from the journal, git logs of ~/work repos and my GitHub activity. Send a 5-line summary notification."
+
+[[routine]]
+name = "weekly-report"
+every = "weekly FRI 17:00"
+agent = "reporter"
+prompt = "Draft this week's report in the report format from memory/projects.md, mapped to current OKRs. Ask before submitting anywhere official."
+
+[[routine]]
+name = "focus-check"
+every = "weekly MON 09:30"
+agent = "chief-of-staff"
+prompt = "Weekly focus check. Read memory/focus.md, last week's journal/reports and GitHub activity. Return needs_decision with a numbered list: current focus items to KEEP / likely-finished items to DROP / newly observed items to ADD (each with evidence). After the owner answers, rewrite memory/focus.md (dated) accordingly."
+
+[[routine]]
+name = "learn-ceo"
+kind = "learn"                        # runs on EVERY host over its local Claude/Codex history (incremental)
+every = "daily 04:00"
+
+[[routine]]
+name = "evolve"
+every = "daily 03:30"
+agent = "architect"
+prompt = "Run your evolve loop (see profile) on the last 7 days. fleet/metrics.json was just refreshed."
+
+[[routine]]
+name = "evolve-deep"
+every = "weekly SUN 21:00"
+agent = "architect"
+weight = "heavy"
+prompt = "Deep weekly evolution: 30-day window. Re-read every agent profile and policy end to end; rewrite for clarity and remove obsolete rules (Tier 2 for removals). Propose new agents for recurring uncovered work and any framework PR."
+
+[email]                               # SMTP. Used for: owner login codes on the cloud client (`to` = who may log in,
+                                      # comma-separated) and the token-changed notice. `hub cloud deploy` copies this
+                                      # section into Worker secrets (HUB_OWNER_EMAIL, HUB_SMTP) — rerun it after edits.
+                                      # Port 465 = implicit TLS, 587 = STARTTLS.
+# to = "you@example.com"
+# host = "smtp.example.com"
+# port = 465
+# user = ""
+# pass = ""                           # put in the private data repo only
+# from = "noop <hub@example.com>"
