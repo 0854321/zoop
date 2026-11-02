@@ -2,7 +2,7 @@
 // Accounts are per machine (credentials never enter the shared data repo):
 //   ~/.noop/accounts/<cli>-<name>/   → CLAUDE_CONFIG_DIR or CODEX_HOME for that account
 //   ~/.noop/accounts/state.json      → cooldowns, auth status, pending logins
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Cfg, hostName, journal, HOME_DIR } from "./core";
@@ -12,7 +12,7 @@ const HOME = join(HOME_DIR, "accounts");
 const STATE = join(HOME, "state.json");
 
 export type Account = { cli: string; name: string; dir: string; default?: boolean };
-type AState = { cooldown_until?: string; needs_login?: boolean; last_error?: string; login_id?: string; token?: string };
+type AState = { cooldown_until?: string; needs_login?: boolean; last_error?: string; login_id?: string; token?: string; cred?: number; told?: string };
 type State = { accounts: Record<string, AState>; seq: number; alerted?: Record<string, string> };
 
 const load = (): State => (existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { accounts: {}, seq: 0 });
@@ -26,8 +26,22 @@ export function accounts(cfg: Cfg, cli: string): Account[] {
   return list.length ? list : [{ cli, name: "default", dir: "", default: true }];
 }
 
+/** When the CLI's login was last written: a new login (another account) changes it. */
+function credStamp(a: Account): number {
+  const dir = a.default ? join(homedir(), a.cli === "claude" ? ".claude" : ".codex") : a.dir;
+  const f = join(dir, a.cli === "claude" ? ".credentials.json" : "auth.json");
+  try { return statSync(f).mtimeMs; } catch { return 0; }
+}
+
 export function usable(a: Account): boolean {
-  const s = load().accounts[key(a)] ?? {};
+  const all = load();
+  const s = all.accounts[key(a)] ?? {};
+  if ((s.needs_login || s.cooldown_until) && s.cred && credStamp(a) > s.cred) {
+    // the owner logged in again (maybe another account): try it right away instead of waiting out the old limit
+    all.accounts[key(a)] = { ...s, needs_login: false, cooldown_until: undefined, cred: undefined, told: undefined };
+    save(all);
+    return true;
+  }
   if (s.needs_login) return false;
   return !s.cooldown_until || Date.parse(s.cooldown_until) < Date.now();
 }
@@ -85,9 +99,19 @@ export async function reportFailure(a: Account, kind: Failure, output: string, c
   const st = (s.accounts[key(a)] ??= {});
   const host = hostName(cfg);
   st.last_error = output.slice(-300);
+  st.cred = credStamp(a);
   if (kind === "quota") {
     st.cooldown_until = resetTime(output).toISOString();
     journal(host, `${key(a)} hit usage limit → cooldown until ${st.cooldown_until.slice(11, 16)}Z`);
+    if (st.told !== st.cooldown_until) {
+      st.told = st.cooldown_until;
+      const others = (cfg.clis?.preference ?? ["claude", "codex"]).filter((c: string) => c !== a.cli && Bun.which(c) && accounts(cfg, c).some(usable));
+      const at = new Date(st.cooldown_until).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      void notify([`${a.cli === "claude" ? "Claude" : "Codex"}（${host}）额度用完了，约 ${at} 恢复。`,
+        others.length ? `这期间任务先交给 ${others.join("、")} 做。` : "这期间没有可用的 AI，任务会排队等着。",
+        `想马上恢复：在这台机器上运行 ${a.cli === "claude" ? "claude /login" : "codex login"} 换个账号，登录后会自动接着用，不用等。`].join("\n"),
+        cfg, { kind: "notice" });
+    }
   } else {
     st.needs_login = true;
     journal(host, `🔑 ${key(a)} needs login`);
