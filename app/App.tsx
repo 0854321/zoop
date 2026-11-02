@@ -744,6 +744,9 @@ function Message(props: {
   );
 }
 
+/** A task's state as the sidebar's dot: only what needs attention gets a color. */
+const TONE: Record<string, "on" | "run" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "off", waiting: "off" };
+
 /** A task's state: its label, color and mark. */
 const STATE_OF = (): Record<string, [string, string, string]> => ({
   active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.muted, "○"], waiting: ["等子任务", colors.muted, "○"],
@@ -821,8 +824,8 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                 {(st) => (
                   <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
                     <Text style={{ width: 44, fontSize: 13.5, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
-                    <View style={{ width: 20, height: 21, alignItems: "center", justifyContent: "center" }}>
-                      <Icon name={STEP_OF()[st().kind ?? ""]?.[0] ?? "spark"} size={15} tint={STEP_OF()[st().kind ?? ""]?.[1] ?? colors.faint} weight={1.8} />
+                    <View style={{ width: 12, height: 21, alignItems: "center", justifyContent: "center" }}>
+                      <Dot tone={st().kind === "done" ? "on" : st().kind === "fail" ? "bad" : st().kind === "decision" ? "wait" : "off"} />
                     </View>
                     <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text}</Text>
                   </View>
@@ -1071,12 +1074,24 @@ function Sidebar(props: {
             <SideEmpty text="空闲" />
           </If>
 
-          <If when={s()?.recent?.length}>
-            <SideHeading title="最近" />
-            <Each of={(s()?.recent ?? []).slice(0, 6)} key={(a) => a.id}>
+          <If when={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting").length}>
+            <SideHeading title="排队" count={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting").length} />
+            <Each of={(s()?.recent ?? []).filter((t) => t.state === "inbox" || t.state === "waiting")} key={(a) => a.id}>
               {(a) => (
-                <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={a().id}>
-                  <Text style={{ width: 14, fontSize: 13, color: STATE_OF()[a().state ?? ""]?.[1] ?? colors.faint }}>{STATE_OF()[a().state ?? ""]?.[2] ?? "·"}</Text>
+                <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
+                  <Dot tone={TONE[a().state ?? ""] ?? "off"} />
+                  <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : "排队中"}</Text>
+                </SideRow>
+              )}
+            </Each>
+          </If>
+          <If when={(s()?.recent ?? []).filter((t) => t.state !== "inbox" && t.state !== "waiting").slice(0, 6).length}>
+            <SideHeading title="最近" />
+            <Each of={(s()?.recent ?? []).filter((t) => t.state !== "inbox" && t.state !== "waiting").slice(0, 6)} key={(a) => a.id}>
+              {(a) => (
+                <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
+                  <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
                 </SideRow>

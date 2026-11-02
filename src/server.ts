@@ -99,7 +99,9 @@ const STEP_KINDS: [string[], string][] = [
 /** What the app shows for a task: its request, state, timeline and results. */
 function taskView(path: string, state: string, log: string[]) {
   const { meta: m, body } = readDoc(path);
-  const request = (body.match(/> [\s\S]*?(?=\n\n[^>]|$)/)?.[0] ?? body.split("\n## ")[0]).replace(/^> ?/gm, "").trim().slice(0, 1200);
+  // the owner's words (a quote) or the task's own first paragraph; daemon notes ("Requeued after ...") are not the request
+  const own = body.split("\n## ")[0].split(/\n\n+/).filter((p) => !/^(Requeued|Retried|Resumed)\b/i.test(p.trim()));
+  const request = (body.match(/> [\s\S]*?(?=\n\n[^>]|$)/)?.[0] ?? (own.join("\n\n") || m.title)).replace(/^> ?/gm, "").trim().slice(0, 1200);
   const runs = [...body.matchAll(/## Run (\S+) · (\S+) · (\S+)\n\*\*(\w+)\*\* — ([^\n]*)/g)]
     .map((r) => ({ ts: r[1], host: r[2], cli: r[3], status: r[4], summary: r[5] })).slice(-5);
   const steps = log.filter((l) => l.includes(` ${m.id} `) || l.endsWith(` ${m.id}`)).slice(-12)
