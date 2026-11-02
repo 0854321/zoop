@@ -25,7 +25,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "waiting_on": "waiting only: what you wait for and how to check it, e.g. CI run https://github.com/o/r/actions/runs/123 (gh run view 123)",
   "wait_minutes": 15,   // waiting only: when to wake you to check again (5-120)
   "summary": "1-3 sentences: what you did / found (links to PRs, commits, files)",
-  "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？",
+  "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？; name PRs/issues with their full URL in summary and options",
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],

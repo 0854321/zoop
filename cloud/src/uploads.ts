@@ -3,7 +3,25 @@
 
 export const MAX_UPLOAD = 10 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
-const UPLOAD_TYPES = /^image\/(png|jpeg|gif|webp|heic|heif|bmp)$/;
+const UPLOAD_TYPES = /^image\/(png|jpeg|gif|webp|heic|heif|avif|bmp)$/;
+
+/** The image's real type from its first bytes. Phone clients often send no type, "image/jpg" or
+ * "application/octet-stream" for photos; trusting the bytes is both more lenient and safer. */
+export function sniffImage(head: Uint8Array, declared = ""): string {
+  const b = (i: number) => head[i] ?? -1;
+  const ascii = (i: number, n: number) => String.fromCharCode(...head.slice(i, i + n));
+  if (b(0) === 0x89 && ascii(1, 3) === "PNG") return "image/png";
+  if (b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) return "image/jpeg";
+  if (ascii(0, 4) === "GIF8") return "image/gif";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "image/webp";
+  if (ascii(0, 2) === "BM") return "image/bmp";
+  if (ascii(4, 4) === "ftyp") {
+    const brand = ascii(8, 4);
+    if (/^(heic|heix|hevc|heim|heis|mif1|msf1)$/.test(brand)) return brand.startsWith("mif") || brand.startsWith("msf") ? "image/heif" : "image/heic";
+    if (/^avi[fs]$/.test(brand)) return "image/avif";
+  }
+  return declared === "image/jpg" ? "image/jpeg" : declared;
+}
 
 /** Why the owner's upload is refused (null: it is taken). SVG is refused: it can carry script. */
 export function uploadProblem(type: string, size: number): { error: string; status: number } | null {

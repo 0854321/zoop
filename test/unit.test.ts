@@ -129,3 +129,10 @@ test("taskView shows the original ask, not daemon requeue notes", async () => {
     "The owner (CEO) said in chat:\n\n> ship the release\n\nHandle it.\n\n> Attempt 1 failed: boom. Try a different approach.\n");
   expect(taskView(chat, "inbox", []).request).toBe("ship the release");
 });
+
+test("uploads: the real image type comes from the bytes", async () => {
+  const { sniffImage } = await import("../cloud/src/uploads");
+  expect(sniffImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]), "application/octet-stream")).toBe("image/jpeg");
+  expect(sniffImage(new TextEncoder().encode("\0\0\0\x18ftypheic"), "")).toBe("image/heic");
+  expect(sniffImage(new Uint8Array([1, 2, 3]), "image/jpg")).toBe("image/jpeg");
+});

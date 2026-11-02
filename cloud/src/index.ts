@@ -16,7 +16,7 @@
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
 import { handleFiles, handleReadFiles, initFilesSchema } from "./files";
-import { ownerAttachments, uploadId, uploadProblem } from "./uploads";
+import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
 
@@ -351,12 +351,13 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/uploads" && m === "POST") {
       const f = (await req.formData().catch(() => null))?.get("file") as File | null;
       if (!f || typeof f === "string") return json({ error: "file required" }, 400);
-      const bad = uploadProblem(f.type, f.size);
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const type = sniffImage(bytes.subarray(0, 16), f.type);
+      const bad = uploadProblem(type, f.size);
       if (bad) return json({ error: bad.error }, bad.status);
       const id = uploadId(f.name);
-      const buf = new Uint8Array(await f.arrayBuffer());
-      for (let i = 0, n = 0; i < buf.length; i += CHUNK, n++)
-        this.sql.exec("INSERT INTO media (id, n, type, data) VALUES (?, ?, ?, ?)", id, n, f.type, buf.slice(i, i + CHUNK));
+      for (let i = 0, n = 0; i < bytes.length; i += CHUNK, n++)
+        this.sql.exec("INSERT INTO media (id, n, type, data) VALUES (?, ?, ?, ?)", id, n, type, bytes.slice(i, i + CHUNK));
       return json({ url: `/media/${id}` });
     }
 

@@ -152,12 +152,10 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
     `建议：*${meta.recommendation || "-"}*`,
     `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
   ].join("\n") : [
-    `*${id}* · ${agentName(meta.agent)} (${meta.agent}@${meta.host}) · task ${meta.task}`,
-    meta.question,
-    ...opts.map((o) => `• ${o}`),
-    `建议：*${meta.recommendation || "-"}*${v ? `　judge：${v.reason}` : ""}`,
-    `回复 \`${id} A\` 或 \`${id} <你的指示>\``,
-  ].join("\n");
+    // the card already shows the id, the agent and the options as buttons: say only what to decide and why
+    linkRefs(meta.question ?? "", meta.task),
+    v?.reason ? `\n${linkRefs(v.reason, meta.task)}` : "",
+  ].filter(Boolean).join("\n");
   const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
     attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });
   writeDoc(P("decisions", "open", `${id}.md`), { ...meta, held: now(), notified: ids.join(",") }, body);
@@ -183,3 +181,23 @@ export function overrideJudge(id: string, answer: string, src: string, host: str
 export const recentJudgeIds = () =>
   new Set(list(P("decisions", "closed")).slice(-30).map((p) => readDoc(p).meta)
     .filter((m) => m.answered_by === "judge").map((m) => m.id));
+
+/** "#747" → a Markdown link to that PR/issue in the task's repository, so every reference is clickable. */
+export function linkRefs(text: string, taskId?: string): string {
+  const slug = repoSlug(taskId);
+  if (!slug) return text;
+  return text.replace(/(^|[^\w\/\[])#(\d+)\b/g, (_, pre, n) => `${pre}[#${n}](https://github.com/${slug}/pull/${n})`);
+}
+
+function repoSlug(taskId?: string): string | null {
+  if (!taskId) return null;
+  for (const st of ["active", "waiting", "inbox", "done", "blocked"]) {
+    const f = P("tasks", st, `${taskId}.md`);
+    if (!existsSync(f)) continue;
+    const repo = (readDoc(f).meta.repo ?? "").replace(/^~/, process.env.HOME ?? "");
+    if (!repo || !existsSync(repo)) return null;
+    const r = Bun.spawnSync(["git", "-C", repo, "remote", "get-url", "origin"], { stdout: "pipe" });
+    return r.stdout.toString().trim().match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(\.git)?$/)?.[1] ?? null;
+  }
+  return null;
+}

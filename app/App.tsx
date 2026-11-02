@@ -2312,8 +2312,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const attachNote = signal<string | null>(null);
   const dropping = signal(false);
   let attachSeq = 0;
-  function attach(file: Blob, name: string) {
-    const type = imageType(file.type, name);
+  function attach(file: Blob, name: string, fromPicker = false) {
+    // the photo picker only returns images, but phones often give them no type or extension; the server reads the bytes
+    const type = imageType(file.type, name) ?? (fromPicker ? "image/jpeg" : null);
     const problem = attachProblem(type, file.size, attachments().length);
     if (problem) return attachNote.set(problem);
     attachNote.set(null);
@@ -2344,7 +2345,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   async function pickImages() {
     try {
       const picked = await Picker.pickImages({ multiple: true, limit: 10 });
-      for (const p of picked) attach(p.file, p.file.name);
+      for (const p of picked) attach(p.file, p.file.name, true);
     } catch {
       attachNote.set("这台设备上不能选择图片");
     }

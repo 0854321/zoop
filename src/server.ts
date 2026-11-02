@@ -16,7 +16,7 @@ import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
 import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc } from "./core";
-import { ownerAttachments, uploadId, uploadProblem } from "../cloud/src/uploads";
+import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { readable, validPath } from "../cloud/src/files";
 
 export type Event = {
@@ -358,11 +358,13 @@ export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<str
       if (url.pathname === "/api/uploads" && req.method === "POST") { // the owner's images for a message
         const f = (await req.formData().catch(() => null))?.get("file") as File | null;
         if (!f || typeof f === "string") return json({ error: "file required" }, 400);
-        const bad = uploadProblem(f.type, f.size);
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const type = sniffImage(bytes.subarray(0, 16), f.type);
+        const bad = uploadProblem(type, f.size);
         if (bad) return json({ error: bad.error }, bad.status);
         mkdirSync(MEDIA, { recursive: true });
         const name = uploadId(f.name);
-        await Bun.write(join(MEDIA, name), f);
+        await Bun.write(join(MEDIA, name), bytes);
         return json({ url: `/media/${name}` });
       }
       if (url.pathname === "/api/events" && req.method === "POST") return json(appendEvent(await req.json() as Event));
