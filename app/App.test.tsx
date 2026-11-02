@@ -853,3 +853,63 @@ describe("rules and memory", () => {
     await app.waitFor("id:phone-settings");
   });
 });
+
+describe("commands", () => {
+  const view = (commands: unknown[]) => ({
+    current: { commands },
+    effective: { agents: [], autonomy: "onboarding", routines: [], max_parallel: 2 },
+    options: { clis: [], autonomy: [] },
+  });
+  function server(posts: { text: string; reply_to?: string }[], puts: unknown[], updates: { n: number }) {
+    let v = view([{ name: "日报", text: "把今天各项目的进展整理成日报发给我" }]);
+    return {
+      ...hub(posts),
+      [`GET ${URL}/api/settings`]: () => ({ body: v }),
+      [`PUT ${URL}/api/settings`]: (r: { body?: string | null }) => {
+        const p = JSON.parse(r.body!);
+        puts.push(p);
+        v = { ...v, current: { ...v.current, ...p } };
+        return { body: v };
+      },
+      [`POST ${URL}/api/fleet/update`]: () => { updates.n++; return { body: { ok: true } }; },
+    };
+  }
+
+  test("/ lists the commands; Return runs the first match: a saved one sends its text, the built-in updates the fleet", async () => {
+    const posts: { text: string; reply_to?: string }[] = [], puts: unknown[] = [], updates = { n: 0 };
+    const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: server(posts, puts, updates) });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "/");
+    await app.waitFor("id:command-builtin:update-fleet");
+    await app.waitFor("id:command-saved:0");
+    await app.type("id:composer", "日报");
+    await app.waitUntil(() => !app.shows("id:command-builtin:update-fleet"));
+    await app.keyboard.press("mod+enter");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "把今天各项目的进展整理成日报发给我" });
+    expect(app.value("id:composer")).toBe("");
+    expect(app.shows("id:commands")).toBe(false);
+
+    app.onDialog((d) => (d.title === "更新所有机器？" ? "更新" : null));
+    await app.type("id:composer", "/更新");
+    await app.press("id:command-builtin:update-fleet");
+    await app.waitUntil(() => updates.n === 1);
+    expect(posts.length).toBe(1);
+  });
+
+  test("settings adds and deletes saved commands", async () => {
+    const posts: { text: string; reply_to?: string }[] = [], puts: unknown[] = [], updates = { n: 0 };
+    const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: server(posts, puts, updates) });
+    await app.press("id:settings");
+    await app.waitFor("id:command-row-日报");
+    await app.type("id:command-name", "/周报");
+    await app.type("id:command-text", "整理本周进展");
+    await app.press("id:command-add");
+    await app.waitUntil(() => puts.length === 1);
+    expect(puts[0]).toEqual({ commands: [{ name: "日报", text: "把今天各项目的进展整理成日报发给我" }, { name: "周报", text: "整理本周进展" }] });
+    await app.waitFor("id:command-row-周报");
+    await app.press("id:command-delete-日报");
+    await app.waitUntil(() => puts.length === 2);
+    expect(puts[1]).toEqual({ commands: [{ name: "周报", text: "整理本周进展" }] });
+  });
+});

@@ -224,7 +224,39 @@ export const patches = {
   autonomy: (agent: string, level: string) => ({ autonomy: { agents: { [agent]: level } } }),
   routine: (name: string, change: { enabled?: boolean; every?: string }) => ({ routines: { [name]: change } }),
   maxParallel: (n: number) => ({ host: { max_parallel: n } }),
+  /** The whole list: an array replaces the saved one. */
+  commands: (list: Command[]) => ({ commands: list }),
 };
+
+// ---------------------------------------------------------------- commands (typed after "/" in the composer)
+
+/** A command the owner saved: its name, and what it sends to the team. */
+export type Command = { name: string; text: string };
+/** What a command does: a built-in action of the app, or the owner's saved message. */
+export type CommandItem = { id: string; name: string; detail: string; action?: "update-fleet"; text?: string };
+
+export const BUILTIN_COMMANDS: CommandItem[] = [
+  { id: "builtin:update-fleet", name: "更新所有机器", detail: "让所有机器拉取最新的 noop 代码并重启，主控机同时重新发布线上", action: "update-fleet" },
+];
+
+/** The owner's saved commands, as settings hold them (anything malformed is left out). */
+export function savedCommands(view: SettingsView | null): Command[] {
+  const list = (view?.current as { commands?: unknown } | undefined)?.commands;
+  return Array.isArray(list) ? list.filter((c): c is Command => !!c && typeof c.name === "string" && typeof c.text === "string" && !!c.name.trim()) : [];
+}
+
+/** Built-ins first, then the saved ones; filtered by what follows the "/" (name or text contains it). */
+export function commandItems(view: SettingsView | null, query = ""): CommandItem[] {
+  const all = [...BUILTIN_COMMANDS, ...savedCommands(view).map((c, i) => ({ id: `saved:${i}`, name: c.name, detail: c.text, text: c.text }))];
+  const q = query.trim().toLowerCase();
+  return q ? all.filter((c) => c.name.toLowerCase().includes(q) || c.detail.toLowerCase().includes(q)) : all;
+}
+
+/** The query of a draft that is a command being typed ("/更新" → "更新"), else null. */
+export function slashQuery(draft: string): string | null {
+  const m = draft.match(/^\/([^\n]*)$/);
+  return m ? m[1] : null;
+}
 
 // ---------------------------------------------------------------- notifications (Web Push; PUT /api/settings notify_prefs)
 

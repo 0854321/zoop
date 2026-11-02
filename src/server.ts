@@ -167,7 +167,7 @@ export function status() {
 }
 
 // ---------------------------------------------------------------- settings (UI-adjustable, shared via data repo)
-const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs"]; // whitelisted top-level keys
+const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs", "commands"]; // whitelisted top-level keys
 
 export function settingsView() {
   const cfg = loadConfig();

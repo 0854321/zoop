@@ -93,6 +93,11 @@ import {
   groupRules,
   stripFrontMatter,
   type HostInfo,
+  type Command,
+  type CommandItem,
+  commandItems,
+  savedCommands,
+  slashQuery,
 } from "./hub";
 
 type Config = { url: string; token: string };
@@ -1590,7 +1595,9 @@ function createSettings(hub: Hub) {
       error.set(e instanceof Error ? e.message : String(e));
     }
   }
-  return { view, error, saved, load, save };
+  // the command being added in 常用指令 (kept here: the settings page may be laid out again while typing)
+  const commandDraft = { name: signal(""), text: signal("") };
+  return { view, error, saved, load, save, commandDraft };
 }
 type Settings = ReturnType<typeof createSettings>;
 
@@ -1699,6 +1706,9 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
             </View>
           )}
         </If>
+        <Group title="常用指令" hint="在输入框里输入 / 选用。内置指令执行操作，你添加的指令把一段话发给团队。">
+          <CommandRows settings={props.settings} />
+        </Group>
         <Group title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
           <VersionRows hub={props.hub} />
         </Group>
@@ -1806,6 +1816,55 @@ async function updateAllMachines(hub: Hub) {
 }
 
 /** One row per online machine with the commit it runs, then the button that updates them all. */
+/** The commands typed after "/" in the composer: the built-ins, the saved ones (deletable), and a form to add one. */
+function CommandRows(props: { settings: Settings }) {
+  const { view, save } = props.settings;
+  const saved = () => savedCommands(view());
+  const { name, text } = props.settings.commandDraft;
+  const add = () => {
+    const n = name().trim().replace(/^\//, ""), t = text().trim();
+    if (!n || !t) return;
+    const next: Command[] = [...saved().filter((c) => c.name !== n), { name: n, text: t }];
+    name.set(""); text.set("");
+    void save({ commands: next });
+  };
+  const remove = (n: string) => void save({ commands: saved().filter((c) => c.name !== n) });
+  return (
+    <>
+      <SetRow first label="/更新所有机器" detail="内置：让所有机器拉取最新代码并重启" testID="command-row-builtin" />
+      <Each of={saved()} key={(c) => c.name}>
+        {(c) => (
+          <SetRow
+            label={`/${c().name}`}
+            detail={c().text}
+            testID={`command-row-${c().name}`}
+            trailing={
+              <View
+                role="button"
+                testID={`command-delete-${c().name}`}
+                accessibilityLabel={`删除指令 ${c().name}`}
+                onPress={() => remove(c().name)}
+                hoverStyle={hovered()}
+                style={{ width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" }}
+              >
+                <Icon name="close" size={14} tint={colors.muted} />
+              </View>
+            }
+          />
+        )}
+      </Each>
+      <View style={{ gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
+        <Hairline />
+        <Field label="名称" value={name()} onChange={(v) => name.set(v)} placeholder="例如：日报" testID="command-name" />
+        <Field label="发给团队的话" value={text()} onChange={(v) => text.set(v)} onSubmit={add} placeholder="例如：把今天各项目的进展整理成日报发给我" testID="command-text" />
+        <View style={{ flexDirection: "row" }}>
+          <Btn label="添加指令" onPress={add} testID="command-add" />
+        </View>
+      </View>
+    </>
+  );
+}
+
 function VersionRows(props: { hub: Hub }) {
   const hosts = () => props.hub.status()?.hosts ?? [];
   return (
@@ -2029,6 +2088,9 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
           </View>
         )}
       </If>
+      <Section title="常用指令" hint="在输入框里输入 / 选用。内置指令执行操作，你添加的指令把一段话发给团队。">
+        <CommandRows settings={props.settings} />
+      </Section>
       <Section title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
         <VersionRows hub={props.hub} />
       </Section>
@@ -2441,8 +2503,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       outbox.update((o) => o.map((x) => (x.id === id ? { ...x, state: "failed" } : x)));
     }
   }
+  // Commands: a draft of "/<query>" lists the built-in and saved commands; Return runs the first one.
+  const slash = () => slashQuery(draft());
+  const commands = () => { const q = slash(); return q == null ? [] : commandItems(settings.view(), q); };
+  effect(() => { if (slash() != null && !untracked(settings.view)) settings.load(); });
+  function runCommand(c: CommandItem) {
+    draft.set("");
+    inputHeight.set(28);
+    if (c.action === "update-fleet") void updateAllMachines(hub);
+    else if (c.text) void send(c.text, null);
+  }
+
   function submit() {
     if (speech() !== "off") stopDictation(true);
+    if (slash() != null && commands().length && !attachments().length) return runCommand(commands()[0]);
     const v = draft().trim();
     const files = attachments();
     if (!v && !files.length) return;
@@ -2911,6 +2985,45 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   <If when={hub.conn() === "unauthorized"}>
                     <Btn label="重新登录" kind="danger" onPress={props.onConnection} />
                   </If>
+                </View>
+              </If>
+              <If when={slash() != null}>
+                <View
+                  testID="commands"
+                  role="menu"
+                  accessibilityLabel="指令"
+                  style={{ borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, paddingVertical: 6, overflow: "hidden" }}
+                >
+                  <Each of={commands().slice(0, 8)} key={(c) => c.id}>
+                    {(c, i) => (
+                      <View
+                        testID={`command-${c().id}`}
+                        role="menuitem"
+                        accessibilityLabel={c().name}
+                        onPress={() => runCommand(c())}
+                        hoverStyle={hovered()}
+                        style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 40, paddingHorizontal: 14, backgroundColor: i() === 0 ? colors.raised : undefined }}
+                      >
+                        <Text style={{ fontSize: 15, fontWeight: "500", color: colors.text }}>{`/${c().name}`}</Text>
+                        <Text style={{ flex: 1, fontSize: 13.5, color: colors.faint, numberOfLines: 1 }}>{c().detail}</Text>
+                        <If when={i() === 0 && !touch}>
+                          <Text style={{ fontSize: 12, color: colors.faint }}>↵</Text>
+                        </If>
+                      </View>
+                    )}
+                  </Each>
+                  <If when={!commands().length}>
+                    <Text style={{ paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: colors.muted }}>没有匹配的指令</Text>
+                  </If>
+                  <View
+                    testID="manage-commands"
+                    role="button"
+                    onPress={() => { draft.set(""); openTeam(); }}
+                    hoverStyle={hovered()}
+                    style={{ minHeight: 36, justifyContent: "center", paddingHorizontal: 14 }}
+                  >
+                    <Text style={{ fontSize: 13.5, color: colors.accent }}>管理常用指令…</Text>
+                  </View>
                 </View>
               </If>
               <View
