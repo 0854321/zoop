@@ -159,7 +159,7 @@ function hostViews(active: TaskView[], finished: TaskView[]) {
     arch: h.caps.find((c) => c.startsWith("arch:"))?.slice(5),
     clis: h.caps.filter((c) => c.startsWith("cli:")).map((c) => c.slice(4)),
     accounts: cfg && h.host === me ? (() => { try { return accountsInfo(cfg!); } catch { return undefined; } })() : undefined,
-    running: active.filter((t) => t.host === h.host).map((t) => ({ id: t.id, title: t.title, agent: t.agent, started: t.started })),
+    running: active.filter((t) => t.host === h.host).map((t) => ({ id: t.id, title: t.title, agent: t.agent, started: t.started, activity: h.activity?.[t.id] })),
     recent: finished.filter((t) => ran(t, h.host)).slice(0, 8).map((t) => ({ id: t.id, title: t.title, state: t.state, finished: t.finished ?? t.updated })),
   }));
 }
@@ -167,7 +167,10 @@ function hostViews(active: TaskView[], finished: TaskView[]) {
 export function status() {
   const log = journalLines();
   const count = (f: string) => list(P("tasks", f), /^T-.*\.md$/).length;
-  const active = list(P("tasks", "active"), /^T-.*\.md$/).map((p) => taskView(p, "active", log));
+  // a running task carries its agent's latest sign of life (from the heartbeat of the machine running it)
+  const beats = (() => { try { return onlineHosts(loadConfig()); } catch { return []; } })();
+  const active = list(P("tasks", "active"), /^T-.*\.md$/).map((p) => taskView(p, "active", log))
+    .map((t) => ({ ...t, activity: beats.find((h) => h.host === t.host)?.activity?.[t.id] }));
   const others = ["done", "failed", "blocked", "waiting", "inbox"].flatMap((f) => list(P("tasks", f), /^T-.*\.md$/).map((p) => taskView(p, f, log)))
     .sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
   return {

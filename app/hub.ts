@@ -23,7 +23,7 @@ export type HostInfo = {
   arch?: string;
   clis?: string[];
   accounts?: { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string }[];
-  running?: { id: string; title: string; agent: string; started?: string }[];
+  running?: { id: string; title: string; agent: string; started?: string; activity?: Activity }[];
   recent?: { id: string; title: string; state?: string; finished?: string }[];
   /** The code the machine runs: its git commit, and that commit on GitHub. */
   rev?: string;
@@ -32,12 +32,26 @@ export type HostInfo = {
   update?: { at: string; ts: string; state: string; detail?: string; from?: string };
 };
 
+/** A running agent's latest sign of life, and (Claude) the step it took. */
+export type Activity = { at: string; step?: string; steps?: number };
+
+/** "最近：Bash · gh pr checks 814 · 2 分钟前"; quiet for 10+ minutes reads as such (the fleet stops it at 20 and runs it again). */
+export function activityLine(a: Activity | undefined, now = Date.now()): { text: string; quiet: boolean } | null {
+  if (!a?.at) return null;
+  const min = Math.max(0, Math.floor((now - Date.parse(a.at)) / 60_000));
+  const when = min < 1 ? "刚刚" : `${min} 分钟前`;
+  if (min >= 10) return { text: `已经 ${min} 分钟没有动静${a.step ? `，最后一步：${a.step}` : ""}；20 分钟没动静会自动中止并接着跑`, quiet: true };
+  return { text: a.step ? `最近：${a.step} · ${when}` : `最近有输出 · ${when}`, quiet: false };
+}
+
 export type TaskInfo = {
   id: string; title: string; agent: string; host?: string; state?: string;
   /** state "nohost": what the task needs that no online machine has ("os:windows"). */
   needs?: string;
   started?: string; created?: string; finished?: string; updated?: string; attempt?: string; decision?: string; cli?: string; model?: string;
   request?: string;
+  /** state "active": its agent's latest sign of life. */
+  activity?: Activity;
   runs?: { ts: string; host: string; cli: string; status: string; summary: string }[];
   steps?: { day?: string; time?: string; host?: string; kind?: string; text: string }[];
 };

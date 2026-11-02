@@ -76,6 +76,7 @@ import {
   cliKey,
   cliLabel,
   intervalsWith,
+  activityLine,
   everyLabel,
   patches,
   type SettingsView,
@@ -1011,6 +1012,11 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                 Number(t()!.attempt ?? 1) > 1 ? `第 ${t()!.attempt} 次` : ""].filter(Boolean).join(" · ")}
             </Text>
           </View>
+          <If when={t()!.state === "active" ? activityLine(t()!.activity) : null}>
+            {(a) => (
+              <Text testID="task-activity" style={{ marginTop: 10, fontSize: 13.5, lineHeight: 19, color: a().quiet ? colors.warn : colors.muted }}>{a().text}</Text>
+            )}
+          </If>
           <If when={t()!.state === "nohost"}>
             <View testID="task-nohost" style={{ marginTop: 16, paddingHorizontal: 14, paddingVertical: 11, borderRadius: radius.inset, backgroundColor: tints.warn }}>
               <Text style={{ fontSize: 14, lineHeight: 21, color: colors.text }}>
@@ -1145,7 +1151,7 @@ function MachineDetail(props: { hub: Hub; host: string; wide: boolean; onTask: (
           <If when={h()!.running?.length} else={<Text style={{ fontSize: 14, color: colors.faint }}>空闲</Text>}>
             <View>
               <Each of={h()!.running ?? []} key={(t) => t.id}>
-                {(t) => row(t().id, t().title, `${displayName(t().agent)} · ${since(t().started)}`, <Dot tone="run" />)}
+                {(t) => row(t().id, t().title, [displayName(t().agent), since(t().started), activityLine(t().activity)?.text].filter(Boolean).join(" · "), <Dot tone="run" />)}
               </Each>
             </View>
           </If>

@@ -217,7 +217,13 @@ export function chooseCli(meta: Record<string, string>, cfg: Cfg): string | null
 // ------------------------------------------------------------------ fleet presence (heartbeats)
 export type HostBeat = { host: string; caps: string[]; seen: string; busy: number; version: string; stats?: any;
   /** The noop code this host runs: its commit and that commit's page. */ rev?: string; rev_url?: string;
-  /** How this host is doing with the owner's latest "update every machine". */ update?: UpdateState };
+  /** How this host is doing with the owner's latest "update every machine". */ update?: UpdateState;
+  /** Per running task: when its agent last showed a sign of life and what it was doing. */ activity?: Record<string, Activity> };
+
+/** A running agent's latest sign of life: any output; for Claude also the step it took ("Bash · gh pr checks 814"). */
+export type Activity = { at: string; step?: string; steps: number };
+/** This process's running agents (written by runAgent, published in the heartbeat). */
+export const agentActivity = new Map<string, Activity>();
 
 /** One host's progress on an update request (`at` names the request), shown per machine in Settings › 版本. */
 export type UpdateState = {
@@ -263,7 +269,7 @@ export function heartbeat(cfg: Cfg, busy: number, stats?: unknown) {
   const host = hostName(cfg);
   const f = P("fleet", "hosts", `${host}.json`);
   mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify({ host, caps: hostCaps(cfg), seen: now(), busy, version: "1", stats, ...runningRev(), update: updateState() } satisfies HostBeat, null, 2));
+  writeFileSync(f, JSON.stringify({ host, caps: hostCaps(cfg), seen: now(), busy, version: "1", stats, ...runningRev(), update: updateState(), activity: agentActivity.size ? Object.fromEntries(agentActivity) : undefined } satisfies HostBeat, null, 2));
 }
 
 export function onlineHosts(cfg: Cfg): HostBeat[] {

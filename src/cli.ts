@@ -8,7 +8,7 @@ import {
 } from "./core";
 import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
-import { agentProcs, ask, buildPrompt, parseResult, runAgent } from "./runner";
+import { STALLED, agentProcs, ask, buildPrompt, parseResult, runAgent } from "./runner";
 import { writeRules } from "./rules";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
@@ -130,6 +130,24 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     out = await runAgent(cli, buildPrompt(meta, promptBody, cfg, b.note), meta.repo || P(), cfg, log, !!meta.gate_override,
       { ...b.env, ...accountEnv(acct) });
     if (cancelled.has(meta.id)) { cancelled.delete(meta.id); return; } // the owner cancelled it while it ran
+    if (out.includes(STALLED)) { // went quiet and was stopped: run it again from where it got to, up to twice
+      const why = out.slice(out.indexOf(STALLED) + STALLED.length).trim();
+      const stalls = Number(meta.stalls ?? 0) + 1;
+      if (stalls <= 2) {
+        await locked(async () => {
+          await _pull();
+          writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, stalls: String(stalls),
+            requeue_note: `Your previous run was stopped: ${why}. Continue from where it got to: first check what is already done (branch agent/${meta.id}-*, commits, PRs, comments you posted) and don't redo it. If you are waiting on something slow, return "waiting" instead of sitting idle.` },
+            body);
+          if (existsSync(path)) unlinkSync(path);
+          journal(host, `🔁 ${meta.id} 没有动静被中止（${why}），接着跑（第 ${stalls} 次）`);
+          await _commitPush(`[${host}] ${meta.id} stalled, rerun`);
+        });
+        return;
+      }
+      res = { status: "failed", summary: `连续 ${stalls} 次运行都卡住没有动静（${why}），已停止重试` };
+      break;
+    }
     res = parseResult(out);
     const failure = res.status === "failed" ? classify(out) : null;
     if (!failure) break;
@@ -169,7 +187,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     children.push(id);
     journal(host, `  ↳ ${id} → ${f.agent ?? agent}: ${f.title}`);
   }
-  const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined, requeue_note: undefined };
+  const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined, requeue_note: undefined, stalls: undefined };
   const runNote = `\n\n## Run ${now()} · ${host} · ${cli}\n**${res.status}** — ${res.summary}\n`;
   // the owner added to the request while it ran: run again with the additions instead of reporting a stale result
   const latest = existsSync(path) ? readDoc(path).body : body;
