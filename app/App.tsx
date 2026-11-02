@@ -24,9 +24,9 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token, openUrl, keyboardFrame, Picker } from "nsh";
+  windowSize, token, openUrl, keyboardFrame, Picker, Speech } from "nsh";
 import fs from "fs/promises";
-import type { InputRef, JSX, ViewStyle } from "nsh";
+import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import {
@@ -2890,12 +2890,19 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     }
     composer?.focus();
   }
-  // Dictation (语音输入): the browser's speech recognition through host.js. Its words land in the
-  // composer where the caret was (or at the end), live as they are heard; nothing is sent. Where the
-  // page has none (other browsers, the native apps) there is no button.
+  // Dictation (语音输入): nsh's Speech in the native apps, the browser's speech recognition (through
+  // host.js) on the web. Its words land in the composer where the caret was (or at the end), live as
+  // they are heard; nothing is sent. Where there is neither, there is no button.
   const canDictate = signal(false);
   const speech = signal<"off" | "on" | "stopping">("off");
-  void hostCall<{ supported: boolean }>("speechState").then((s) => canDictate.set(!!s?.supported));
+  let native = false;
+  let session: SpeechSession | null = null;
+  void Speech.available()
+    .catch(() => false)
+    .then(async (ok) => {
+      native = ok;
+      canDictate.set(ok || !!(await hostCall<{ supported: boolean }>("speechState"))?.supported);
+    });
   let caret: { start: number; end: number } | null = null;
   let before = "";
   let after = "";
@@ -2906,11 +2913,29 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     return /^zh\b/i.test(l) ? l : "zh-CN";
   };
   const speechError = (e: string) =>
-    e === "not-allowed" || e === "service-not-allowed" ? "没有麦克风权限，请在浏览器设置里允许使用麦克风"
+    e === "not-allowed" || e === "service-not-allowed" ? (native ? "没有麦克风或语音识别权限，请在系统设置里允许" : "没有麦克风权限，请在浏览器设置里允许使用麦克风")
       : e === "no-speech" ? "没有听到声音"
       : e === "audio-capture" ? "找不到麦克风"
       : e === "network" ? "语音识别需要联网"
+      : e === "language-not-supported" ? "这台设备不支持中文语音识别"
+      : e === "unavailable" ? "这台设备不能语音输入"
       : "语音输入出错了";
+  /** The whole transcript so far (final and still-being-heard words). */
+  const heard = (text: string) => {
+    if (untracked(speech) === "off") return;
+    const words = text.trim();
+    // a space between Latin words, none in Chinese
+    const gap = /[A-Za-z0-9.,!?;:]$/.test(before) && /^[A-Za-z0-9]/.test(words) ? " " : "";
+    const head = before + gap + words;
+    dictated = head + after;
+    draft.set(dictated);
+    composer?.setSelection(head.length, head.length);
+  };
+  const ended = (error?: string | null) => {
+    if (untracked(speech) === "off") return;
+    speech.set("off");
+    if (error) attachNote.set(speechError(error));
+  };
   async function startDictation() {
     const v = draft();
     const start = Math.min(caret?.start ?? v.length, v.length);
@@ -2920,6 +2945,23 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     dictated = v;
     attachNote.set(null);
     speech.set("on");
+    if (native) {
+      try {
+        const s = Speech.start({ lang: speechLang() });
+        session = s;
+        s.on("result", (r) => session === s && heard(r.text));
+        s.on("end", (e) => {
+          if (session !== s) return;
+          session = null;
+          ended(e.error);
+        });
+      } catch {
+        session = null;
+        speech.set("off");
+        attachNote.set("无法开始语音输入");
+      }
+      return;
+    }
     if (!(await hostCall("speechStart", { lang: speechLang() })) && untracked(speech) === "on") {
       speech.set("off");
       attachNote.set("无法开始语音输入");
@@ -2929,33 +2971,21 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   function stopDictation(drop = false) {
     if (drop) {
       speech.set("off");
-      void hostCall("speechAbort");
+      if (session) { const s = session; session = null; s.abort(); }
+      else void hostCall("speechAbort");
     } else {
       speech.set("stopping");
-      void hostCall("speechStop");
+      if (session) session.stop();
+      else void hostCall("speechStop");
     }
   }
   const toggleDictation = () => (speech() === "off" ? void startDictation() : speech() === "on" ? stopDictation() : undefined);
   if (host.available()) {
-    host.on("speech", (p) => {
-      if (untracked(speech) === "off") return;
-      const heard = String((p as { text?: string })?.text ?? "").trim();
-      // a space between Latin words, none in Chinese
-      const gap = /[A-Za-z0-9.,!?;:]$/.test(before) && /^[A-Za-z0-9]/.test(heard) ? " " : "";
-      const head = before + gap + heard;
-      dictated = head + after;
-      draft.set(dictated);
-      composer?.setSelection(head.length, head.length);
-    });
-    host.on("speechEnd", (p) => {
-      if (untracked(speech) === "off") return;
-      speech.set("off");
-      const error = (p as { error?: string })?.error;
-      if (error) attachNote.set(speechError(error));
-    });
+    host.on("speech", (p) => heard(String((p as { text?: string })?.text ?? "")));
+    host.on("speechEnd", (p) => ended((p as { error?: string })?.error));
   }
   cleanup(() => {
-    if (untracked(speech) !== "off") void hostCall("speechAbort");
+    if (untracked(speech) !== "off") stopDictation(true);
   });
 
   const canSend = () => !!draft().trim() || attachments().length > 0;

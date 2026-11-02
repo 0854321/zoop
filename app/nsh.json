@@ -29,6 +29,7 @@
       "speechAbort"
     ],
     "picker": true,
+    "speech": true,
     "fs": {
       "read": [
         "${homeDir}"
