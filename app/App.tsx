@@ -472,6 +472,26 @@ function ghBlocks(blocks: TextViewBlock[]): TextViewBlock[] {
   });
 }
 
+/**
+ * "nsh #747" → a link to that PR when the message (or `context`, a decision's options) links a PR of a repository
+ * named "nsh"; a bare "#747" only on a decision card whose links name one repository. Code spans are left alone.
+ */
+function linkRepoRefs(text: string, context = ""): string {
+  const seen = new Map<string, string>();
+  for (const m of `${text}\n${context}`.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/\d+/g)) seen.set(m[2].toLowerCase(), `${m[1]}/${m[2]}`);
+  if (!seen.size) return text;
+  const only = context && seen.size === 1 ? [...seen.values()][0] : null;
+  return text.split(/(`[^`\n]*`)/).map((part, i) => (i % 2 ? part : part.replace(
+    /(^|[^\w\/\[#])(?:([\w.-]+)( ?))?#(\d+)\b/g,
+    (all, pre: string, name: string | undefined, sp: string, n: string) => {
+      const slug = name && seen.get(name.toLowerCase());
+      if (slug) return `${pre}[${name}#${n}](https://github.com/${slug}/pull/${n})`;
+      if (!only || (name && !sp && !/^(pr|issue)s?$/i.test(name))) return all;
+      return `${pre}${name ? name + sp : ""}[#${n}](https://github.com/${only}/pull/${n})`;
+    },
+  ))).join("");
+}
+
 /** Hub text keeps its line breaks: single newlines become hard breaks, outside code fences. */
 function hubMarkdown(text: string): string {
   return text
@@ -526,12 +546,12 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
 }
 
 /** Message text: the hub's Markdown through `TextView` (selectable across paragraphs), links opened by the system, the app's chips inline. */
-function Rich(props: { text: string; muted?: boolean; quiet?: boolean }) {
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string }) {
   const small = !!(props.muted || props.quiet);
   const fontSize = props.quiet ? 14 : props.muted ? size.small : size.text;
   const lineHeight = small ? 21 : size.line;
   const doc = () => {
-    const d = TextView.parse(hubMarkdown(props.text), { math: false, html: false }, EXTENSIONS);
+    const d = TextView.parse(hubMarkdown(linkRepoRefs(props.text, props.context)), { math: false, html: false }, EXTENSIONS);
     return { ...d, blocks: ghBlocks(d.blocks) };
   };
   return (
@@ -795,7 +815,7 @@ function Message(props: {
   const tag = TAGS[e.kind];
   const body = (
     <View selectable style={{ gap: 10 }}>
-      <Rich text={e.text} muted={e.kind === "system"} />
+      <Rich text={e.text} muted={e.kind === "system"} context={(e.options ?? []).join("\n")} />
       <If when={e.attachments?.length}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>

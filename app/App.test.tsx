@@ -34,7 +34,7 @@ const status = {
 
 const prDecision = {
   id: "e7", ts: ts(7), from: "hub", kind: "decision", ref: "D-H0003",
-  text: "合并 [nsh#747](https://github.com/acme/nsh/pull/747) 吗？按 D-H0002 的反馈改好了",
+  text: "合并 nsh #747 吗？按 D-H0002 的反馈改好了，见 `nsh#1` 和 other#3",
   options: ["A: squash 合并 https://github.com/acme/nsh/pull/747 — 进入发布", "B: 继续修改"],
 };
 
@@ -193,6 +193,9 @@ describe("channel", () => {
     expect(app.shows("text:/D-H0002/")).toBe(true);
     expect(app.shows("text:/A: squash 合并 nsh#747 — 进入发布/")).toBe(true);
     expect(app.shows("text:/github\\.com\\/acme\\/nsh/")).toBe(false);
+    // code spans and repositories no link names stay text
+    expect(app.shows("id:gh-chip-nsh-1")).toBe(false);
+    expect(app.shows("text:/other#3/")).toBe(true);
   });
 
   test("answers a decision with one tap", async () => {
