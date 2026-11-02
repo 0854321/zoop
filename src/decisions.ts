@@ -87,7 +87,9 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   const t = P("tasks", "blocked", `${meta.task}.md`);
   if (existsSync(t)) {
     const { meta: tm, body: tb } = readDoc(t);
-    const gated = /\b(approve|merge|release|publish|yes|ok)\b|同意|批准|可以/i.test(answer) && by !== "judge";
+    // the owner answered the question the gate raised: unlock it for that run; the agent reads the answer and
+    // only acts if the answer says so (no keyword matching on the owner's words)
+    const gated = /^owner/.test(by);
     writeDoc(P("tasks", "inbox", `${meta.task}.md`),
       { ...tm, claimed_by: undefined, status: undefined, resumes: id, gate_override: gated ? id : undefined },
       `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nA: **${answer}**\nContinue the task accordingly.\n`);

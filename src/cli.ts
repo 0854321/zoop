@@ -315,8 +315,9 @@ async function drainAndExit(why: string, host: string) {
  *  tell the owner — in one plain sentence, and only for work the owner actually cares about. */
 async function handleFailure(meta: Record<string, string>, body: string, summary: string, out: string, cfg: Cfg, host: string) {
   const attempt = Number(meta.attempt ?? 1);
-  const tooling = /unexpected argument|command not found|No such file|ENOENT|usage:|panicked|exit 12[67]|not logged in|SyntaxError/i.test(out.slice(-3000));
-  if (tooling) void medic(`Agent run for ${meta.id} failed because of a tooling problem on ${host} (not the task itself):\n${out.slice(-2500)}`,
+  // no keyword matching: when the agent could not even report a result, the medic (AI) decides whether the tooling broke
+  const tooling = /agent returned no result block/.test(summary);
+  if (tooling) void medic(`Agent run for ${meta.id} on ${host} ended without a result. Decide whether the tooling (CLI, auth, environment) is at fault and fix it; ignore it if the task itself failed:\n${out.slice(-2500)}`,
     cfg, { auto: true, kind: `tool-${meta.cli_used ?? "agent"}` });
   if (attempt < (cfg.fleet?.max_attempts ?? 2)) {
     await locked(async () => {
@@ -414,6 +415,7 @@ export async function tick(cfg: Cfg, background = false) {
   });
   await retryLogins(cfg);
   if (primary || pendingLoginIds().size) await handleReplies(cfg, host);
+  if (primary) await planInbox(cfg, host);
   if (primary) {
     const toRoute = [...pendingRoute.splice(0), ...list(P("decisions", "open")).map((p) => readDoc(p).meta)
       .filter((m) => !m.held && m.kind !== "proposals").map((m) => m.id)];
@@ -448,6 +450,43 @@ export async function tick(cfg: Cfg, background = false) {
     jobs.push(job);
   }
   if (!background) await Promise.all(jobs);
+}
+
+/** AI placement for new tasks: which host capabilities a task needs (e.g. os:macos for iOS screenshots), which CLI
+ *  fits it (Claude for hard engineering, Codex for routine work), and how hard it is. One call for the whole batch. */
+async function planInbox(cfg: Cfg, host: string) {
+  const todo = list(P("tasks", "inbox"), /^T-.*\.md$/).map((p) => ({ p, ...readDoc(p) })).filter((t) => !t.meta.planned).slice(0, 12);
+  if (!todo.length) return;
+  const hosts = onlineHosts(cfg).map((h) => `- ${h.host}: ${h.caps.join(",")}`).join("\n");
+  const r = await ask(`You place tasks for an AI agent fleet running on several machines.
+For each task decide:
+- requires: host capabilities it truly needs, comma-separated, from the hosts' caps below (e.g. "os:macos" for iOS/macOS builds,
+  simulators or screenshots; "os:windows"; "" when any host will do). Only require what the work cannot be done without.
+- cli: "claude" for engineering, debugging, design, UI or judgement; "codex" for routine triage, monitoring, reports, first-pass reviews.
+- difficulty: "hard" or "normal".
+
+Online hosts:
+${hosts || "(unknown)"}
+
+Tasks:
+${todo.map((t) => `- ${t.meta.id} [agent ${t.meta.agent}${t.meta.requires ? `, already requires ${t.meta.requires}` : ""}]: ${t.meta.title} — ${t.body.slice(0, 500).replace(/\s+/g, " ")}`).join("\n")}
+
+Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": "claude", "difficulty": "normal"}, ...}`,
+    cfg, P("logs", "runs", `plan-${Date.now()}.log`));
+  if (!r || typeof r !== "object") return; // planner unavailable: tasks run unplanned after plan_wait_minutes
+  await locked(async () => {
+    await _pull();
+    for (const t of todo) {
+      const v = r[t.meta.id];
+      if (!v || !existsSync(t.p)) continue;
+      const req = [...new Set([...(t.meta.requires ?? "").split(","), ...String(v.requires ?? "").split(",")].map((x) => x.trim()).filter(Boolean))].join(",");
+      const pinned = t.meta.cli && t.meta.cli !== "auto";
+      writeDoc(t.p, { ...t.meta, requires: req, ...(pinned ? {} : { cli: v.cli === "codex" ? "codex" : "claude" }),
+        ...(v.difficulty === "hard" ? { difficulty: "hard" } : {}), planned: now() }, t.body);
+      journal(host, `🧭 ${t.meta.id} planned: ${req || "any host"} · ${pinned ? t.meta.cli : v.cli}`);
+    }
+    await _commitPush(`[${host}] plan ${todo.length} tasks`);
+  });
 }
 
 /** The open task (queued, running or waiting on sub-tasks) an owner message continues, if any: one short judge call. */

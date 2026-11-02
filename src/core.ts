@@ -204,35 +204,21 @@ export function newTask(title: string, body = "", o: TaskOpts = {}): string {
   writeDoc(P("tasks", folder, `${id}.md`), {
     id, title, agent: o.agent ?? "lead", cli: o.cli ?? "auto", host: o.host ?? "any",
     // stored at creation so hosts without the repo checked out still know what it needs
-    requires: [...new Set([...(o.requires ?? "").split(","), ...repoRequires(o.repo), ...(o.host && o.host !== "any" ? [] : platformRequires(title))].map((x) => x.trim()).filter(Boolean))].join(","), prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
+    requires: [...new Set([...(o.requires ?? "").split(","), ...repoRequires(o.repo)].map((x) => x.trim()).filter(Boolean))].join(","), prefer: o.prefer ?? "", weight: o.weight ?? "normal", repo: o.repo ?? "", priority: o.priority ?? "normal", source: o.source ?? "owner",
     created: now(), ...(o.extra ?? {}),
   }, body || title);
   return id;
 }
 
-/** Work that can only run on one OS, read from the task title (a macOS screenshot cannot be taken on Linux). */
-export function platformRequires(title: string): string[] {
-  const act = /截图|录屏|构建|编译|测试|验证|运行|跑|screenshot|record|build|test|verify|run/i;
-  if (!act.test(title)) return [];
-  if (/\b(iOS|macOS|Xcode|Mac Catalyst|AppKit|UIKit)\b|iOS ?模拟器|苹果/i.test(title)) return ["os:macos"];
-  if (/\bWindows\b/i.test(title) && !/\b(iOS|macOS|Linux)\b/i.test(title)) return ["os:windows"];
-  return [];
-}
-
 export const which = (bin: string) => Bun.which(bin) !== null;
 
-/** Claude Opus does the challenging work (development, debugging, architecture, UI, judgement);
- *  Codex (ChatGPT) does routine work: triage, monitoring, reports, first-pass review, everyday planning. */
-const ROUTINE = ["dispatcher", "ops-watcher", "reporter", "oss-triage", "reviewer", "chief-of-staff"];
-
+/** Which CLI runs a task: the owner's per-agent config wins, else what the planner (an AI call, see planInbox) chose.
+ *  Unplanned tasks may use either, Claude first. */
 export function allowedClis(meta: Record<string, string>, cfg: Cfg): string[] {
   if (meta.cli && meta.cli !== "auto") return [meta.cli];
-  if (meta.difficulty === "hard" || meta.weight === "heavy") return ["claude"];
-  const agent = meta.agent || "lead";
-  const per = cfg.clis?.agents?.[agent] as string[] | undefined;
+  const per = cfg.clis?.agents?.[meta.agent || "lead"] as string[] | undefined;
   if (per) return per;
-  const routine: string[] = cfg.clis?.routine_agents ?? cfg.clis?.codex_agents ?? ROUTINE;
-  return routine.includes(agent) ? ["codex", "claude"] : ["claude"]; // routine: Codex first, Claude as fallback
+  return ["claude", "codex"];
 }
 
 export function chooseCli(meta: Record<string, string>, cfg: Cfg): string | null {
@@ -280,7 +266,8 @@ export function pickTask(cfg: Cfg, myLoad = 0, heavyOk = true): string | null {
   const rank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
   const cands = list(P("tasks", "inbox"), /^T-.*\.md$/)
     .map((p) => ({ p, m: readDoc(p).meta }))
-    .filter(({ m }) => matches(m, caps) && chooseCli(m, cfg) && !yieldToPreferred(m, caps, cfg) && !yieldHeavy(m, cfg, myLoad, heavyOk))
+    // the planner decides where a task runs first; unplanned tasks wait for it (at most plan_wait_minutes)
+    .filter(({ m }) => (m.planned || Date.now() - Date.parse(m.created ?? "") > (cfg.fleet?.plan_wait_minutes ?? 3) * 60_000) && matches(m, caps) && chooseCli(m, cfg) && !yieldToPreferred(m, caps, cfg) && !yieldHeavy(m, cfg, myLoad, heavyOk))
     .sort((a, b) => (rank[a.m.priority] ?? 2) - (rank[b.m.priority] ?? 2) || a.p.localeCompare(b.p));
   return cands[0]?.p ?? null;
 }

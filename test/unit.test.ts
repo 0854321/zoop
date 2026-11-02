@@ -137,9 +137,3 @@ test("uploads: the real image type comes from the bytes", async () => {
   expect(sniffImage(new Uint8Array([1, 2, 3]), "image/jpg")).toBe("image/jpeg");
 });
 
-test("platform work is pinned to that OS", async () => {
-  const { platformRequires } = await import("../src/core");
-  expect(platformRequires("nsh #810: 补 iOS/macOS 修复前后对比截图并贴到 PR")).toEqual(["os:macos"]);
-  expect(platformRequires("在 Windows 上验证 gpui-kit 构建")).toEqual(["os:windows"]);
-  expect(platformRequires("复核 nsh #747 的修订")).toEqual([]);
-});
