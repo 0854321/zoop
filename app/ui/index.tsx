@@ -570,16 +570,15 @@ export function switchLook(on: () => boolean, size: "small" | "regular" = "regul
         height,
         borderRadius: height / 2,
         padding: inset,
-        backgroundColor: t.interpolate({ inputRange: [0, 1], outputRange: [colors.track, colors.accentFill] }),
+        backgroundColor: t.interpolate({ inputRange: [0, 1], outputRange: [colors.track, colors.up] }),
         borderWidth: 1,
-        borderColor: on() ? finish.fill.borderColor : finish.track.borderColor,
-        boxShadow: on() ? finish.fill.boxShadow : finish.track.boxShadow,
+        borderColor: on() ? colors.up : finish.track.borderColor,
+        boxShadow: on() ? "none" : finish.track.boxShadow,
         transitionProperty: "border-color, box-shadow",
         transitionDuration: 150,
       };
     },
     get thumbStyle(): ViewStyle {
-      const edge = on() ? (isDark() ? "#8db536" : "#8fb536") : undefined;
       return {
         width: knob,
         height: knob,
@@ -589,9 +588,9 @@ export function switchLook(on: () => boolean, size: "small" | "regular" = "regul
         ...(on()
           ? {
               backgroundColor: "#ffffff",
-              backgroundImage: "linear-gradient(180deg, #ffffff 0%, #f7f9f2 100%)",
-              borderColor: edge,
-              boxShadow: "0 1px 0 rgba(60,90,0,0.18)",
+              backgroundImage: "none",
+              borderColor: "transparent",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
             }
           : {}),
         transform: [{ translateX: x }],
