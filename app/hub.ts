@@ -85,17 +85,37 @@ export const initials = (from: string) => (from || "?").replace(/@.*/, "").slice
 export const isVideo = (url: string) => /\.(mp4|webm|mov)(\?|$)/i.test(url);
 
 /** Inline markup of the hub's messages: `code` and *bold*. */
-export type Span = { text: string; code?: boolean; bold?: boolean };
+export type Span = { text: string; code?: boolean; bold?: boolean; href?: string; gh?: "PR" | "Issue"; task?: string };
+const LINK = /(https?:\/\/[^\s<>()（）"'`，。、；]+[^\s<>()（）"'`，。、；.,:;!?])|\b(T-\d{4})\b|([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/g;
+const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/;
+
+/** Plain text into links: GitHub PRs and issues, URLs, task ids, email addresses. */
+function links(text: string): Span[] {
+  const out: Span[] = [];
+  let at = 0;
+  for (const m of text.matchAll(LINK)) {
+    if (m.index! > at) out.push({ text: text.slice(at, m.index) });
+    const gh = m[1]?.match(GH);
+    if (gh) out.push({ text: `${gh[2]}#${gh[4]}`, href: m[1], gh: gh[3] === "pull" ? "PR" : "Issue" });
+    else if (m[1]) out.push({ text: m[1].replace(/^https?:\/\//, ""), href: m[1] });
+    else if (m[2]) out.push({ text: m[2], task: m[2] });
+    else out.push({ text: m[3], href: `mailto:${m[3]}` });
+    at = m.index! + m[0].length;
+  }
+  if (at < text.length) out.push({ text: text.slice(at) });
+  return out;
+}
+
 export function spans(text: string): Span[] {
   const out: Span[] = [];
   const re = /`([^`]+)`|\*([^*\n]+)\*/g;
   let at = 0;
   for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > at) out.push({ text: text.slice(at, m.index) });
+    if (m.index > at) out.push(...links(text.slice(at, m.index)));
     out.push(m[1] !== undefined ? { text: m[1], code: true } : { text: m[2], bold: true });
     at = m.index + m[0].length;
   }
-  if (at < text.length) out.push({ text: text.slice(at) });
+  if (at < text.length) out.push(...links(text.slice(at)));
   return out;
 }
 

@@ -22,7 +22,7 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token } from "nsh";
+  windowSize, token, openUrl } from "nsh";
 import type { InputRef, JSX, ViewStyle } from "nsh";
 import { Input, Scrollbar } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
@@ -413,6 +413,9 @@ function Mark(props: { size?: number }) {
   );
 }
 
+/** Opens a task's page from a T-0000 in any text (set by the channel). */
+let taskLink: (id: string) => void = () => {};
+
 function Rich(props: { text: string; muted?: boolean }) {
   return (
     <Text style={{ fontSize: props.muted ? size.small : size.text, lineHeight: props.muted ? 21 : size.line, color: props.muted ? colors.muted : colors.text }}>
@@ -422,6 +425,23 @@ function Rich(props: { text: string; muted?: boolean }) {
             <Text style={{ fontFamily: MONO, fontSize: props.muted ? 13 : 14.5, backgroundColor: alpha(colors.text, 0.07), color: colors.text }}>{` ${s().text} `}</Text>
           ) : s().bold ? (
             <Text style={{ fontWeight: "600" }}>{s().text}</Text>
+          ) : s().gh ? (
+            <View role="link" accessibilityLabel={`GitHub ${s().gh} ${s().text}`} onPress={() => void openUrl(s().href!).catch(() => {})}
+              hoverStyle={{ borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.09) }}
+              style={{ cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2, paddingHorizontal: 7, paddingVertical: 1,
+                borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05) }}>
+              <Icon name="github" size={14} tint={colors.text} />
+              <Text style={{ fontSize: 13, color: colors.muted }}>{s().gh === "PR" ? "PR" : "Issue"}</Text>
+              <Text style={{ fontSize: 13.5, fontWeight: "600", color: colors.text }}>{s().text}</Text>
+            </View>
+          ) : s().href ? (
+            <View role="link" onPress={() => void openUrl(s().href!).catch(() => {})} style={{ cursor: "pointer", verticalAlign: "middle" }}>
+              <Text style={{ fontSize: props.muted ? size.small : size.text, color: colors.info, textDecorationLine: "underline" }}>{s().text}</Text>
+            </View>
+          ) : s().task ? (
+            <View role="link" onPress={() => taskLink(s().task!)} style={{ cursor: "pointer", verticalAlign: "middle" }}>
+              <Text style={{ fontSize: props.muted ? size.small : size.text, color: colors.info }}>{s().text}</Text>
+            </View>
           ) : (
             <Text>{s().text}</Text>
           )
@@ -762,6 +782,9 @@ function Sidebar(props: {
   onHelp: () => void;
   onClose?: () => void;
   chrome?: boolean;
+  onCollapse?: () => void;
+  home: () => boolean;
+  onHome: () => void;
 }) {
   const s = () => props.hub.status();
   const waits = computed(() => waiting(s()));
@@ -787,9 +810,21 @@ function Sidebar(props: {
         <If when={props.onClose}>
           <ToolButton icon="close" label="收起菜单" onPress={() => props.onClose?.()} />
         </If>
+        <If when={props.onCollapse}>
+          <ToolButton icon="sidebar" label="隐藏侧栏" shortcut={keymap.label("mod+b")} onPress={() => props.onCollapse?.()} />
+        </If>
       </View>
       <Scroll style={{ flex: 1 }}>
         <View style={{ paddingBottom: 16, gap: 1 }}>
+          <View style={{ paddingTop: 8 }}>
+            <SideRow onPress={props.onHome} selected={props.home()} title="团队频道">
+              <Icon name="chat" size={17} tint={props.home() ? colors.text : colors.muted} />
+              <Text style={{ ...rowText(), fontWeight: "600" }}>团队频道</Text>
+              <If when={waits().length}>
+                <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${waits().length} 待决定`}</Text>
+              </If>
+            </SideRow>
+          </View>
           <SideHeading title="待你决定" count={waits().length || undefined} accent />
           <Each of={waits()} key={(d) => d.id}>
             {(d) => (
@@ -1332,6 +1367,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const page = signal<"channel" | "team" | "task">("channel");
   const taskId = signal<string | null>(null);
   const openTask = (id: string) => { taskId.set(id); page.set("task"); drawer.set(false); };
+  taskLink = openTask;
+  // Entering the channel (first load, back from a task or settings) shows the latest messages.
+  effect(() => { if (page() === "channel") { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
   const replyTo = signal<string | null>(null);
   const focused = signal(false);
@@ -1571,6 +1609,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
+      onCollapse={inDrawer ? undefined : () => sidebarOpen.set(false)}
+      home={() => page() === "channel"}
+      onHome={() => { page.set("channel"); drawer.set(false); }}
     />
   );
   const gutter = () => (wide() ? 32 : 16);
@@ -1590,7 +1631,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             alignItems: "center",
             gap: 6,
             paddingLeft: (wide() && sidebarOpen() ? 0 : hasWindow ? titleBar().left : 0) + (wide() ? 24 : 8),
-            paddingRight: wide() ? 16 : 8,
+            paddingRight: (hasWindow ? titleBar().right : 0) + (wide() ? 16 : 8),
             borderBottomWidth: 1,
             borderBottomColor: colors.line,
           }}
@@ -1629,9 +1670,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
             </If>
           </View>
-          <If when={wide() && sidebarOpen()}>
-            <ToolButton icon="sidebar" label="隐藏侧栏" shortcut={keymap.label("mod+b")} on onPress={() => sidebarOpen.set(false)} />
-          </If>
           <If when={!wide()}>
             <ToolButton icon="sliders" label="设置" onPress={openTeam} testID="settings-top" />
           </If>

@@ -1,4 +1,4 @@
-import { Canvas, Image, type CanvasRenderingContext2D } from "nsh";
+import { Canvas, Image, type CanvasRenderingContext2D, Path2D } from "nsh";
 
 /** Line glyphs drawn in a 20 × 20 box with the tint as stroke. */
 export type IconName =
@@ -23,6 +23,7 @@ export type IconName =
   | "storage"
   | "stocks"
   | "chat"
+  | "github"
   | "chevron"
   | "pipette"
   | "chevron-up"
@@ -189,6 +190,13 @@ const glyphs: Record<IconName, Draw> = {
     rect(c, 2.5, 5.5, 15, 9, 2.5);
     line(c, [12, 9, 13.75, 7.5, 15.5, 9]);
     line(c, [12, 11, 13.75, 12.5, 15.5, 11]);
+  },
+  github: (c) => {
+    // GitHub's mark (Octicons mark-github, 16 × 16), filled.
+    c.save();
+    c.scale(20 / 16, 20 / 16);
+    c.fill(GITHUB);
+    c.restore();
   },
   collapsible: (c) => {
     line(c, [4, 5, 16, 5]);
@@ -597,6 +605,10 @@ const glyphs: Record<IconName, Draw> = {
 };
 
 /** A glyph, stroked with `tint`; `weight` is the stroke in the glyphs' 20-unit box (1.6 by default). */
+const GITHUB = new Path2D(
+  "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z",
+);
+
 export function Icon(props: { name: IconName; size?: number; tint: string; weight?: number }) {
   const size = props.size ?? 20;
   return (

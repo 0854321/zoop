@@ -23,7 +23,13 @@
       "setBadge",
       "clearNotifications",
       "vibrate"
-    ]
+    ],
+    "openUrl": {
+      "schemes": [
+        "https",
+        "mailto"
+      ]
+    }
   },
   "icon": "icon.png"
 }
