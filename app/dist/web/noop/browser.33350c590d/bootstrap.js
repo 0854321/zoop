@@ -1,1 +1,0 @@
-import*as e from"./scope.js";globalThis.__nsh_browser_bootstrap(e);

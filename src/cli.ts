@@ -171,6 +171,12 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   if (delegated && children.length) { // wait for children, then wake up to consolidate
     writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, children: children.join(",") }, body + runNote);
     journal(host, `🧩 ${meta.id} delegated to ${children.join(", ")}`);
+  } else if (res.status === "waiting") { // parked: the slot is free until the wait is over
+    const mins = Math.min(120, Math.max(5, Number(res.wait_minutes) || 15));
+    const wake = new Date(Date.now() + mins * 60_000).toISOString();
+    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, wake_at: wake, waiting_on: res.waiting_on ?? "" },
+      body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (check again ${wake})\n`);
+    journal(host, `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${mins} 分钟后再看`);
   } else if (res.status === "needs_decision") {
     const did = openDecision(meta, res, host);
     writeDoc(P("tasks", "blocked", `${meta.id}.md`), { ...done, decision: did }, body + runNote);
@@ -318,6 +324,14 @@ const GH_HEAVY = new Set(["dispatcher", "reviewer", "ops-watcher", "oss-triage",
 function wakeParents(host: string) {
   for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
     const { meta, body } = readDoc(p);
+    if (meta.wake_at) { // parked on something slow: back to the queue once the time is up
+      if (Date.parse(meta.wake_at) > Date.now()) continue;
+      writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, wake_at: undefined, status: undefined, claimed_by: undefined, resumed: "yes" },
+        `${body}\nResumed after waiting on: ${meta.waiting_on ?? "?"}. Check it now; if still not ready, return "waiting" again.\n`);
+      unlinkSync(p);
+      journal(host, `⏰ ${meta.id} 等待结束，重新排队检查`);
+      continue;
+    }
     const kids = (meta.children ?? "").split(",").filter(Boolean);
     const where = (id: string) => ["done", "failed", "rejected"].find((f) => existsSync(P("tasks", f, `${id}.md`)));
     if (!kids.every(where)) continue;

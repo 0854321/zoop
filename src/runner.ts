@@ -7,7 +7,9 @@ import {
 import { claudeDisallowed } from "./gates";
 
 export type Result = {
-  status: "done" | "needs_decision" | "failed" | "delegated";
+  status: "done" | "needs_decision" | "failed" | "delegated" | "waiting";
+  wait_minutes?: number;
+  waiting_on?: string;
   summary: string;
   question?: string;
   options?: string[];
@@ -19,7 +21,9 @@ export type Result = {
 
 const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one fenced \`\`\`json block:
 {
-  "status": "done" | "needs_decision" | "failed" | "delegated",   // delegated = you split the work into followups and want to be woken up to consolidate when they finish
+  "status": "done" | "needs_decision" | "failed" | "delegated" | "waiting",   // delegated = you split the work into followups and want to be woken up to consolidate when they finish; waiting = see below
+  "waiting_on": "waiting only: what you wait for and how to check it, e.g. CI run https://github.com/o/r/actions/runs/123 (gh run view 123)",
+  "wait_minutes": 15,   // waiting only: when to wake you to check again (5-120)
   "summary": "1-3 sentences: what you did / found (links to PRs, commits, files)",
   "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？",
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
@@ -29,7 +33,9 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work"}]
 }
 Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
-Only use needs_decision after doing all preparation that does not depend on the answer.`;
+Only use needs_decision after doing all preparation that does not depend on the answer.
+Never sit idle waiting on something slow (GitHub Actions/CI, a release, a review, a deploy): if the next step needs it, return "waiting" with waiting_on and wait_minutes.
+The machine then runs other work and wakes you later with your notes; check the condition first, then continue from where you left off.`;
 
 export function buildPrompt(meta: Record<string, string>, body: string, cfg: Cfg, resourceNote = ""): string {
   const agent = meta.agent || "lead";
