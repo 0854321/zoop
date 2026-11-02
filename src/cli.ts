@@ -238,6 +238,17 @@ function noteUnservable(cfg: Cfg, host: string) {
 }
 
 let running = 0;
+/** Set when the daemon is asked to stop or restart: running agents finish first instead of being killed and redone. */
+let draining = false;
+const RESTART_FLAG = () => P("..", "restart-requested");
+async function drainAndExit(why: string, host: string) {
+  if (draining) return;
+  draining = true;
+  if (running) console.log(`${why}: waiting for ${running} running task(s) to finish`);
+  while (running > 0) await Bun.sleep(3000);
+  try { await commitPush(`[${host}] ${why}`); } catch {}
+  process.exit(0);
+}
 
 /** A good report doesn't forward raw errors. Retry, call the medic for tooling problems, and only after that
  *  tell the owner — in one plain sentence, and only for work the owner actually cares about. */
@@ -348,6 +359,7 @@ export async function tick(cfg: Cfg, background = false) {
   const jobs: Promise<void>[] = [];
   const tried = new Set<string>();
   for (;;) {
+    if (draining) break; // stopping: finish what runs, start nothing new
     const s = sample(cfg);
     const max = allowedParallel(s, cfg, running);
     if (running >= max) break;
@@ -412,9 +424,11 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] recover`);
   });
   await locked(async () => { await _pull(); journal(host, `🟢 daemon started (${hostCaps(cfg).join(", ")})`); await _commitPush(`[${host}] up`); });
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => void drainAndExit("stop", host));
   let lastUpdate = 0, failures = 0;
   for (;;) {
     const c = loadConfig();
+    if (existsSync(RESTART_FLAG())) { unlinkSync(RESTART_FLAG()); void drainAndExit("restart", host); }
     try { await tick(c, true); failures = 0; } catch (e) {
       console.error("tick failed", e);
       if (++failures >= 3) void medic(`noop daemon: ${failures} consecutive tick failures on ${host}.\n${(e as Error)?.stack ?? e}`, c, { auto: true, kind: "daemon" });
@@ -504,6 +518,10 @@ async function main() {
       const r = await medic(what, cfg, { kind: "manual" });
       if (!r?.fixed) process.exitCode = 1;
       return;
+    }
+    case "restart": { // restart once running tasks finish (the service manager starts the new code)
+      writeFileSync(P("..", "restart-requested"), new Date().toISOString());
+      return void console.log("noop restarts as soon as its running tasks finish");
     }
     case "update": return void console.log((await selfUpdate()) ? "updated" : "up to date");
     case "daemon": return daemon(cfg);

@@ -177,6 +177,9 @@ Wants=network-online.target
 ExecStart=${bun} ${cli} daemon
 Restart=always
 RestartSec=10
+# stopping lets running agents finish (the daemon drains), so a restart never throws work away
+KillMode=mixed
+TimeoutStopSec=45min
 Environment=PATH=${path}
 Environment=HUB_DATA=${DATA}
 Nice=5
