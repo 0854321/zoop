@@ -4,7 +4,8 @@
 // API (Bearer token = [server].token in config.local.toml):
 //   GET  /api/feed?since=<iso>            → { events: Event[] }        chat timeline (newest last)
 //   GET  /api/stream                      → WebSocket, pushes Event JSON as it happens
-//   POST /api/messages {text, reply_to?}  → owner message: answers D-/P-/L- ids, otherwise becomes a task for `lead`
+//   POST /api/messages {text, reply_to?, attachments?}  → owner message: answers D-/P-/L- ids, otherwise becomes a task for `lead`
+//   POST /api/uploads (multipart file)    → { url }   (the owner's images for a message: image/*, ≤ 10 MB)
 //   GET  /api/status                      → queue, decisions, hosts, accounts
 //   POST /api/media (multipart file)      → { url }   (workers upload screenshots/recordings here)
 //   GET  /media/<file>                    → attachment
@@ -14,6 +15,7 @@ import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
 import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc } from "./core";
+import { ownerAttachments, uploadId, uploadProblem } from "../cloud/src/uploads";
 
 export type Event = {
   id: string; ts: string; from: string; kind: "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
@@ -193,7 +195,48 @@ let appendToTask: ((tid: string, text: string) => Promise<boolean>) | null = nul
 export const setAppendToTask = (fn: (tid: string, text: string) => Promise<boolean>) => { appendToTask = fn; };
 const AMEND_MS = 5 * 60_000;
 
-export async function handleOwnerMessage(text: string, reply_to?: string, noAmend = false) {
+// ---------------------------------------------------------------- the owner's images (attachments of a chat message)
+// Downloaded next to the data repo (not into it: the repo syncs through git / the Worker's files API, which is no place
+// for screenshots), one directory per message, and named by absolute path in the task so Claude / Codex can open them.
+export const ATTACH_DIR = join(DATA, "..", "attachments");
+export type FetchAttachment = (path: string) => Promise<Uint8Array | null>;
+/** The local server's own media ("/media/<file>" in MEDIA). */
+export const localMedia: FetchAttachment = async (p) => {
+  const f = join(MEDIA, basename(p));
+  return existsSync(f) && statSync(f).isFile() ? new Uint8Array(readFileSync(f)) : null;
+};
+
+/** Download a message's attachments into ATTACH_DIR/<key>/; returns the absolute paths saved (failures are skipped). */
+export async function saveAttachments(key: string, paths: string[], fetchOne: FetchAttachment = localMedia, root = ATTACH_DIR): Promise<string[]> {
+  const dir = join(root, key.replace(/[^\w.\-]/g, "_"));
+  const out: string[] = [];
+  for (const p of paths) {
+    const bytes = await fetchOne(p).catch(() => null);
+    if (!bytes) { console.error(`attachment ${p}: download failed`); continue; }
+    mkdirSync(dir, { recursive: true });
+    const f = join(dir, basename(p).replace(/[^\w.\-]/g, "_") || `image-${out.length + 1}`);
+    writeFileSync(f, bytes);
+    out.push(f);
+  }
+  return out;
+}
+
+/** The owner's text with the saved images listed for the agent (a message of images only gets a placeholder text). */
+export function withAttachments(text: string, files: string[], missing = 0): string {
+  if (!files.length && !missing) return text;
+  const lines = files.map((f) => `- ${f}`);
+  if (missing) lines.push(`- (${missing} more image(s) could not be downloaded)`);
+  return `${text.trim() || "(see the attached images)"}\n\nAttached images from the owner (absolute paths on the primary host; open them to see):\n${lines.join("\n")}`;
+}
+
+export async function handleOwnerMessage(
+  text: string, reply_to?: string, noAmend = false,
+  att: { paths?: string[]; key?: string; fetch?: FetchAttachment } = {},
+) {
+  if (att.paths?.length) {
+    const files = await saveAttachments(att.key ?? crypto.randomUUID(), att.paths, att.fetch);
+    text = withAttachments(text, files, att.paths.length - files.length);
+  }
   const m = text.match(ID);
   const id = m?.[1] ?? (reply_to && /^[DLP]-[A-Z]?\d{4}$/.test(reply_to) ? reply_to : null);
   if (id) {
@@ -260,12 +303,25 @@ export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<str
         await Bun.write(join(MEDIA, name), f);
         return json({ url: `/media/${name}` });
       }
+      if (url.pathname === "/api/uploads" && req.method === "POST") { // the owner's images for a message
+        const f = (await req.formData().catch(() => null))?.get("file") as File | null;
+        if (!f || typeof f === "string") return json({ error: "file required" }, 400);
+        const bad = uploadProblem(f.type, f.size);
+        if (bad) return json({ error: bad.error }, bad.status);
+        mkdirSync(MEDIA, { recursive: true });
+        const name = uploadId(f.name);
+        await Bun.write(join(MEDIA, name), f);
+        return json({ url: `/media/${name}` });
+      }
       if (url.pathname === "/api/events" && req.method === "POST") return json(appendEvent(await req.json() as Event));
       if (url.pathname === "/api/messages" && req.method === "POST") {
-        const { text, reply_to } = (await req.json()) as { text: string; reply_to?: string };
-        if (!text?.trim()) return json({ error: "text required" }, 400);
-        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to });
-        await handleOwnerMessage(text, reply_to);
+        const { text = "", reply_to, attachments } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown };
+        const files = ownerAttachments(attachments);
+        if (files === null) return json({ error: "bad attachments" }, 400);
+        if (files.some((p) => !existsSync(join(MEDIA, basename(p))))) return json({ error: "attachment not found" }, 400);
+        if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
+        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to, ...(files.length ? { attachments: files } : {}) });
+        await handleOwnerMessage(text, reply_to, false, { paths: files, key: ev.id });
         return json(ev);
       }
       return json({ error: "not found" }, 404);

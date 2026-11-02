@@ -188,7 +188,40 @@ export const wsUrl = (base: string, token: string) =>
   `${base.replace(/^http/i, "ws")}/api/stream?token=${encodeURIComponent(token)}`;
 
 export const mediaUrl = (base: string, token: string, path: string) =>
-  `${/^https?:/i.test(path) ? path : base + path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+  /^(blob|data):/i.test(path)
+    ? path // a local preview of an image not sent yet
+    : `${/^https?:/i.test(path) ? path : base + path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
+
+// ---------------------------------------------------------------- attachments (images the owner sends with a message)
+
+/** An image waiting in the composer (or in a held message): its bytes and a local URL that shows it. */
+export type Attachment = { id: string; name: string; type: string; size: number; file: Blob; preview: string };
+
+export const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+export const ATTACH_MAX_COUNT = 10;
+const IMAGE_EXT: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", heic: "image/heic", heif: "image/heif", bmp: "image/bmp",
+};
+
+/** The image type of a file, from its media type or else its name's extension; null when it is not an image (SVG is not taken). */
+export function imageType(type: string | undefined, name: string): string | null {
+  if (type && /^image\/[\w.+-]+$/i.test(type) && !/svg/i.test(type)) return type.toLowerCase();
+  return IMAGE_EXT[(name.match(/\.(\w+)$/)?.[1] ?? "").toLowerCase()] ?? null;
+}
+
+/** Why a file cannot be attached ("" when it can). */
+export function attachProblem(type: string | null, size: number, count: number): string {
+  if (!type) return "只能发送图片";
+  if (size > ATTACH_MAX_BYTES) return "图片不能超过 10 MB";
+  if (count >= ATTACH_MAX_COUNT) return `一次最多发送 ${ATTACH_MAX_COUNT} 张图片`;
+  return "";
+}
+
+/** A `file:` URL as a local path ("file:///Users/a/My%20Shot.png" → "/Users/a/My Shot.png"; Windows drive paths too). */
+export function filePath(uri: string): string {
+  const p = decodeURIComponent(uri.replace(/^file:\/\/[^/]*/i, ""));
+  return /^\/[A-Za-z]:\//.test(p) ? p.slice(1) : p;
+}
 
 // ---------------------------------------------------------------- team settings (GET / PUT /api/settings)
 

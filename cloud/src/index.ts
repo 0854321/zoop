@@ -3,8 +3,9 @@
 // The machines (which run Claude/Codex) only make outbound HTTPS calls here; nothing needs to reach them.
 //
 // Client API (same shape as the local hub server):
-//   GET /api/feed?since=  · WS /api/stream?token=  · POST /api/messages {text, reply_to?}
+//   GET /api/feed?since=  · WS /api/stream?token=  · POST /api/messages {text, reply_to?, attachments?: ["/media/<id>"]}
 //   GET /api/status  · GET|PUT /api/settings  · POST /api/media (multipart) · GET /media/<id>
+//   POST /api/uploads (multipart `file`; the owner's images for a message: image/*, ≤ 10 MB) → {url: "/media/<id>"}
 // Fleet API (primary host):
 //   POST /api/events (event)  · PUT /api/host/state {status, settings}  · GET /api/host/inbox?after=<seq>
 //   POST /api/host/revoke-sessions (HUB_TOKEN only)
@@ -15,6 +16,7 @@
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
 import { handleFiles, initFilesSchema } from "./files";
+import { ownerAttachments, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
 
@@ -114,8 +116,8 @@ export class Hub extends DurableObject<Env> {
     return ev;
   }
 
-  ownerMessage(text: string, ref?: string): Ev {
-    const ev = this.append({ from: "owner", kind: "owner", text, ref });
+  ownerMessage(text: string, ref?: string, attachments?: string[]): Ev {
+    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(attachments?.length ? { attachments } : {}) });
     this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "message", event: ev }));
     if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id });
     return ev;
@@ -331,9 +333,26 @@ export class Hub extends DurableObject<Env> {
     }
 
     if (p === "/api/messages" && m === "POST") {
-      const { text, reply_to } = (await req.json()) as { text?: string; reply_to?: string };
-      if (!text?.trim()) return json({ error: "text required" }, 400);
-      return json(this.ownerMessage(text, reply_to));
+      const { text = "", reply_to, attachments } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown };
+      const files = ownerAttachments(attachments);
+      if (files === null) return json({ error: "bad attachments" }, 400);
+      if (files.some((f) => !this.sql.exec("SELECT 1 FROM media WHERE id = ? LIMIT 1", f.slice(7)).toArray().length))
+        return json({ error: "attachment not found" }, 400);
+      if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
+      return json(this.ownerMessage(text, reply_to, files));
+    }
+
+    // The owner's images for a message (paste / drop / pick in the app): images only, ≤ 10 MB, kept with the media.
+    if (p === "/api/uploads" && m === "POST") {
+      const f = (await req.formData().catch(() => null))?.get("file") as File | null;
+      if (!f || typeof f === "string") return json({ error: "file required" }, 400);
+      const bad = uploadProblem(f.type, f.size);
+      if (bad) return json({ error: bad.error }, bad.status);
+      const id = uploadId(f.name);
+      const buf = new Uint8Array(await f.arrayBuffer());
+      for (let i = 0, n = 0; i < buf.length; i += CHUNK, n++)
+        this.sql.exec("INSERT INTO media (id, n, type, data) VALUES (?, ?, ?, ?)", id, n, f.type, buf.slice(i, i + CHUNK));
+      return json({ url: `/media/${id}` });
     }
 
     if (p === "/api/status") {

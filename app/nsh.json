@@ -24,6 +24,12 @@
       "clearNotifications",
       "vibrate"
     ],
+    "picker": true,
+    "fs": {
+      "read": [
+        "${homeDir}"
+      ]
+    },
     "openUrl": {
       "schemes": [
         "https",
