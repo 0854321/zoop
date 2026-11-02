@@ -430,17 +430,17 @@ function Rich(props: { text: string; muted?: boolean }) {
               hoverStyle={{ borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.09) }}
               style={{ cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2, paddingHorizontal: 7, paddingVertical: 1,
                 borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05) }}>
-              <Icon name="github" size={14} tint={colors.text} />
-              <Text style={{ fontSize: 13, color: colors.muted }}>{s().gh === "PR" ? "PR" : "Issue"}</Text>
-              <Text style={{ fontSize: 13.5, fontWeight: "600", color: colors.text }}>{s().text}</Text>
+              <Icon name="github" size={16} tint={colors.text} />
+              <Text style={{ cursor: "pointer", userSelect: "none", fontSize: 13, color: colors.muted }}>{s().gh === "PR" ? "PR" : "Issue"}</Text>
+              <Text style={{ cursor: "pointer", userSelect: "none", fontSize: 13.5, fontWeight: "600", color: colors.text }}>{s().text}</Text>
             </View>
           ) : s().href ? (
             <View role="link" onPress={() => void openUrl(s().href!).catch(() => {})} style={{ cursor: "pointer", verticalAlign: "middle" }}>
-              <Text style={{ fontSize: props.muted ? size.small : size.text, color: colors.info, textDecorationLine: "underline" }}>{s().text}</Text>
+              <Text style={{ cursor: "pointer", fontSize: props.muted ? size.small : size.text, color: colors.info, textDecorationLine: "underline" }}>{s().text}</Text>
             </View>
           ) : s().task ? (
             <View role="link" onPress={() => taskLink(s().task!)} style={{ cursor: "pointer", verticalAlign: "middle" }}>
-              <Text style={{ fontSize: props.muted ? size.small : size.text, color: colors.info }}>{s().text}</Text>
+              <Text style={{ cursor: "pointer", fontSize: props.muted ? size.small : size.text, color: colors.info }}>{s().text}</Text>
             </View>
           ) : (
             <Text>{s().text}</Text>
