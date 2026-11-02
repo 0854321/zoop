@@ -180,11 +180,14 @@ test("pickTask: a task no machine here can run (needs another OS) never holds ba
 });
 
 test("a reply to an agent's message goes to that message's task, not to the last answered decision", async () => {
-  const { handleOwnerMessage, setOwnerTask, feed } = await import("../src/server");
-  const calls: [string, string | undefined][] = [];
-  setOwnerTask(async (text, reply) => { calls.push([text, reply]); return { id: "T-0200", title: "" }; });
-  await handleOwnerMessage("D-0001 A"); // just answered a decision: a plain message right after would amend it
-  await handleOwnerMessage("为何我看图片不清晰呢", "T-0125");
-  expect(calls).toEqual([["为何我看图片不清晰呢", "T-0125"]]);
-  expect(feed("", 50).at(-1)?.text).toBe("收到，接着 T-0125 处理（T-0200）。");
+  const { handleOwnerMessage, setOwnerTask, feed, drainInbound } = await import("../src/server");
+  const calls: [string, { reply?: string; answered?: string }][] = [];
+  setOwnerTask(async (text, o) => { calls.push([text, o]); return o.answered ? { amend: o.answered } : { id: "T-0200", follows: o.reply }; });
+  await handleOwnerMessage("D-0001 A"); // just answered a decision: the router may take the next message as amending it
+  await handleOwnerMessage("为何我看图片不清晰呢", "T-0125"); // a reply names its task: never an amendment
+  expect(calls).toEqual([["为何我看图片不清晰呢", { reply: "T-0125", answered: undefined }]]);
+  expect(feed("", 50).at(-1)?.text).toBe("收到，接着 T-0125 处理（T-0200），会结合前面的对话。");
+  await handleOwnerMessage("等等，选 B");
+  expect(calls.at(-1)).toEqual(["等等，选 B", { reply: undefined, answered: "D-0001" }]);
+  expect(drainInbound()).toEqual([{ id: "D-0001", answer: "A", source: "chat" }, { id: "D-0001", answer: "等等，选 B", source: "chat-amend" }]);
 });

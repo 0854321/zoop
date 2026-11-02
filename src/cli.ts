@@ -8,7 +8,7 @@ import {
 } from "./core";
 import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
-import { STALLED, agentProcs, ask, buildPrompt, parseResult, runAgent } from "./runner";
+import { STALLED, agentProcs, ask, buildPrompt, parseResult, quickAsk, runAgent } from "./runner";
 import { writeRules } from "./rules";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
@@ -19,7 +19,7 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, recentChat, setAppendToTask, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, recentChat, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
@@ -569,19 +569,26 @@ Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": 
   });
 }
 
-/** What an owner message continues, in one short judge call: `same`, an open task (queued, running or waiting on sub-tasks)
- * to add it to; else `follows`, a task the channel just talked about (often finished) that it corrects or builds on. */
-async function relatedTask(text: string, cfg: Cfg, chat: string[] = []): Promise<{ same: string | null; follows: string | null }> {
+/** Where an owner message in the team channel goes, decided by a quick model (seconds, not a judgement):
+ * - "same": an OPEN task (queued, running, waiting) it is part of → add it there
+ * - "follows": a task from the channel it refers to (often finished) → a new task that continues it
+ * - "amend": a change to the decision the owner just answered
+ * - "new": new, unrelated work */
+export async function routeMessage(text: string, cfg: Cfg, chat: string[] = [], answered?: string):
+  Promise<{ action: "same" | "follows" | "amend" | "new"; id?: string }> {
   const open = ["inbox", "active", "waiting"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
-    .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: meta.id, title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
+    .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: String(meta.id), title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
   const recent = [...new Set(chat.join("\n").match(/\bT-\d{4}\b/g) ?? [])];
-  if (!open.length && !recent.length) return { same: null, follows: null };
-  const r = await ask(`The owner sent a new chat message to their AI team. Decide what it continues.
-- "same": one of the team's OPEN tasks when it is clearly the same work (same goal, same repo/release/PR — e.g. "keep following up
-  the gpui-kit release" while a task is releasing gpui-kit). A different repo, goal or an unrelated question is not.
-- "follows": otherwise, a task from the channel below that the message refers to — corrects its result ("不行，…"), asks for more
-  of it, or asks to remember how it was done ("这个细节记录下来，以后都这样"). The owner writes tersely; read the channel.
-  null when the message is new, unrelated work.
+  const decision = answered && existsSync(P("decisions", "closed", `${answered}.md`)) ? readDoc(P("decisions", "closed", `${answered}.md`)).meta : null;
+  if (!open.length && !recent.length && !decision) return { action: "new" };
+  const r = await quickAsk(`You route the owner's chat messages for their AI team. The team channel is the main conversation;
+each task is its own conversation. Decide where this new message belongs:
+- "same": one of the OPEN tasks below when it is clearly about the same work (same goal, same repo/PR/release). Two messages
+  sent close together are NOT the same task just for that: "Review NSH#743" and "nsh#812 为何图片不清晰" are different PRs.
+- "follows": a task from the channel that the message refers to — corrects its result ("不行，…"), asks about it or for more
+  of it, or asks to remember how it was done. The owner writes tersely: read the channel.
+- "amend": ${decision ? `the owner just answered ${answered} ("${decision.question}" → ${decision.answer}); the message changes or qualifies that answer ("等等，选错了", "B 但是先…").` : "(not possible now)"}
+- "new": new, unrelated work.
 
 Message:
 ${text.slice(0, 1500)}
@@ -589,10 +596,13 @@ ${chat.length ? `\nThe channel just before it (oldest first):\n${chat.join("\n")
 Open tasks:
 ${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n") || "(none)"}
 
-Reply with exactly one fenced json block: {"same": "<open task id>" | null, "follows": "<task id from the channel>" | null, "why": "<short reason>"}`, cfg, P("logs", "runs", `dedupe-${Date.now()}.log`));
-  const same = typeof r?.same === "string" && open.some((t) => t.id === r.same) ? r.same : null;
-  const follows = !same && typeof r?.follows === "string" && recent.includes(r.follows) ? r.follows : null;
-  return { same, follows };
+Reply with exactly one fenced json block: {"action": "same" | "follows" | "amend" | "new", "id": "<task id for same/follows>" | null}`,
+    cfg, P("logs", "runs", `route-${Date.now()}.log`));
+  const action = r?.action;
+  if (action === "same" && open.some((t) => t.id === r.id)) return { action, id: r.id };
+  if (action === "follows" && (recent.includes(r.id) || open.some((t) => t.id === r.id))) return { action, id: r.id };
+  if (action === "amend" && decision) return { action, id: answered };
+  return { action: "new" };
 }
 
 async function daemon(cfg: Cfg) {
@@ -624,7 +634,6 @@ async function daemon(cfg: Cfg) {
     }
     return "";
   });
-  setAppendToTask(async (tid, text) => !!(await appendFollowUp(tid, text)));
   setUpdateFleet(() => locked(async () => {
     await _pull();
     mkdirSync(P("fleet"), { recursive: true });
@@ -656,19 +665,23 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] cancel ${tid}`);
     return "cancelled";
   }));
-  if (isPrimary(cfg, host)) startServer(cfg, async (text, reply) => {
-    // Same work as an open task? Add the message to it instead of opening a duplicate. A reply names the task itself.
+  if (isPrimary(cfg, host)) startServer(cfg, async (text, { reply, answered }) => {
+    // A reply (or a message on a task's page) names its task; anything else is routed by a quick model.
     const chat = recentChat(text);
-    const { same, follows } = reply
-      ? (["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${reply}.md`))) ? { same: reply, follows: null } : { same: null, follows: reply })
-      : await relatedTask(text, cfg, chat).catch(() => ({ same: null, follows: null }));
+    const isOpen = (t: string) => ["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${t}.md`)));
+    const route = reply
+      ? { action: isOpen(reply) ? "same" : "follows", id: reply }
+      : await routeMessage(text, cfg, chat, answered).catch(() => ({ action: "new" as const, id: undefined }));
+    if (route.action === "amend" && route.id) return { amend: route.id };
+    const same = route.action === "same" ? route.id! : null;
+    const follows = route.action === "follows" ? route.id! : null;
     const title = same ? await appendFollowUp(same, text) : "";
     if (same && title) return { id: same, title };
     return locked(async () => {
     await _pull();
     // A short reply ("不行，…", "这个细节记下来") only makes sense with what came before it: the new task carries the
     // channel's recent conversation and the task it most likely continues (finished tasks included).
-    const prev = follows;
+    const prev = follows ?? same; // `same` here: it finished meanwhile, so the new task continues it
     const prevFile = prev ? ["done", "failed", "rejected", "blocked", "inbox", "active", "waiting"].map((d) => P("tasks", d, `${prev}.md`)).find(existsSync) : undefined;
     const context = chat.length || reply
       ? (reply ? `\n\nThe owner wrote this as a reply to the team's message about ${reply}.` : "") +

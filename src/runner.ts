@@ -209,6 +209,31 @@ export function parseResult(out: string): Result {
   return { status: "failed", summary: `agent returned no result block. tail: ${out.slice(-300)}` };
 }
 
+/** The models that route each owner message, fastest first: a choice made within seconds, not a judgement.
+ * `[router] cli/model` in config.toml puts one first; the others are fallbacks when its CLI is missing or fails. */
+const ROUTERS = [{ cli: "claude", model: "claude-haiku-5-5" }, { cli: "codex", model: "gpt-6-luna" }];
+
+/** One quick structured call for routing (the fastest model available); null when none answered. */
+export async function quickAsk(prompt: string, cfg: Cfg, logFile: string): Promise<any> {
+  const own = cfg.router?.cli ? [{ cli: String(cfg.router.cli), model: String(cfg.router.model ?? "") }] : [];
+  for (const r of [...own, ...ROUTERS.filter((x) => x.cli !== own[0]?.cli)]) {
+    if (!Bun.which(r.cli)) continue;
+    const cmd = r.cli === "claude"
+      ? ["claude", "-p", "--output-format", "text", "--tools", "", "--strict-mcp-config", ...(r.model ? ["--model", r.model] : [])]
+      : ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", ...(r.model ? ["-m", r.model] : []), "-c", 'model_reasoning_effort="low"', "-"];
+    const proc = Bun.spawn(cmd, { cwd: ROOT, stdin: new Blob([prompt]), stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => proc.kill("SIGKILL"), (cfg.router?.timeout_seconds ?? 45) * 1000);
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    clearTimeout(timer);
+    mkdirSync(P("logs", "runs"), { recursive: true });
+    writeFileSync(logFile, `${r.cli} ${r.model}\n${out}`);
+    const m = [...out.matchAll(/```json\s*(\{[\s\S]*?\})\s*```/g)].pop() ?? out.match(/(\{[\s\S]*\})/);
+    try { return JSON.parse(m![1]); } catch {}
+  }
+  return null;
+}
+
 /** One-shot structured call (used by the judge). */
 export async function ask(prompt: string, cfg: Cfg, logFile: string): Promise<any> {
   const cli = cfg.judge?.cli ?? "claude";

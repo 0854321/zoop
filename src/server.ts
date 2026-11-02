@@ -32,8 +32,10 @@ const sockets = new Set<ServerWebSocket<unknown>>();
 type Inbound = { id: string; answer: string; source: string };
 const inbound: Inbound[] = [];
 /** The owner's chat request becomes a task: a new one, or (with its title) the open task it continues. */
-/** A chat message becomes work; `reply` is the task whose message the owner replied to ("T-0125"). */
-type OwnerTask = (text: string, reply?: string) => Promise<{ id: string; title?: string; follows?: string }>;
+/** A chat message becomes work. `reply`: the task whose message the owner replied to ("T-0125"), or whose page they wrote on;
+ * `answered`: the decision the owner answered moments ago (the message may change that answer). The result: added to an open
+ * task (`title`), a new task continuing one (`follows`), a new task, or `amend`: a change to the answered decision. */
+type OwnerTask = (text: string, o: { reply?: string; answered?: string }) => Promise<{ id: string; title?: string; follows?: string } | { amend: string }>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -279,8 +281,6 @@ const ID = /^\s*([DLP]-[A-Z]?\d{4})\b[\s:：,，\-]*([\s\S]*)$/;
 
 /** Owner said something (local chat or via the cloud inbox): answer an open D-/P-/L- item, or hand it to lead. */
 let lastAnswer: { id: string; at: number } | null = null;
-let followUp: { tid: string; at: number } | null = null;
-const FOLLOW_MS = 3 * 60_000;
 let cancelHook: ((tid: string) => Promise<string>) | null = null;
 export const setCancelTask = (fn: (tid: string) => Promise<string>) => { cancelHook = fn; };
 /** The owner cancels a task (queued, waiting, blocked, proposed or running). */
@@ -294,8 +294,6 @@ export async function updateFleet(): Promise<string> {
   appendEvent({ from: "hub", kind: "system", text: `已通知 ${n} 台机器更新到最新代码：空闲的马上更新，有任务在跑的等跑完再重启；主控机同时重新发布线上。` });
   return "ok";
 }
-let appendToTask: ((tid: string, text: string) => Promise<boolean>) | null = null;
-export const setAppendToTask = (fn: (tid: string, text: string) => Promise<boolean>) => { appendToTask = fn; };
 const AMEND_MS = 5 * 60_000;
 
 // ---------------------------------------------------------------- the owner's images (attachments of a chat message)
@@ -342,29 +340,22 @@ export async function handleOwnerMessage(
   }
   const m = text.match(ID);
   const id = m?.[1] ?? (reply_to && /^[DLP]-[A-Z]?\d{4}$/.test(reply_to) ? reply_to : null);
-  // a reply to an agent's message about a task: it goes to that task, whatever came just before
+  // a reply to an agent's message about a task (or a message on its page): it goes to that task, whatever came just before
   const replyTask = !id && reply_to && /^T-\d{4,}$/.test(reply_to) ? reply_to : undefined;
-  if (replyTask && ownerTask) {
-    const { id: tid, title } = await ownerTask(text, replyTask);
-    followUp = { tid, at: Date.now() };
-    appendEvent(title
-      ? { from: "hub", kind: "system", text: `收到，已补充到 ${tid}「${title}」，接着处理。`, ref: tid }
-      : { from: "hub", kind: "system", text: `收到，接着 ${replyTask} 处理（${tid}）。`, ref: tid });
-  } else if (id) {
+  if (id) {
     inbound.push({ id, answer: (m ? m[2] : text).trim(), source: "chat" });
     if (id.startsWith("D-")) lastAnswer = { id, at: Date.now() };
-  } else if (!noAmend && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS) {
-    // a plain message right after answering a decision is about that decision ("wait, I clicked the wrong one")
-    inbound.push({ id: lastAnswer.id, answer: text.trim(), source: "chat-amend" });
-  } else if (followUp && Date.now() - followUp.at < FOLLOW_MS && (await appendToTask?.(followUp.tid, text))) {
-    // messages sent in a row are one request: add to the task just created instead of opening another
-    followUp.at = Date.now();
-    appendEvent({ from: "hub", kind: "system", text: `已补充到 ${followUp.tid}`, ref: followUp.tid });
   } else if (ownerTask) {
-    const { id: tid, title, follows } = await ownerTask(text);
-    followUp = { tid, at: Date.now() };
+    // everything else is routed by a quick model: which task it belongs to, or new work
+    const answered = !noAmend && !replyTask && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS ? lastAnswer.id : undefined;
+    const r = await ownerTask(text, { reply: replyTask, answered });
+    if ("amend" in r) {
+      inbound.push({ id: r.amend, answer: text.trim(), source: "chat-amend" }); // "wait, I clicked the wrong one"
+      return;
+    }
+    const { id: tid, title, follows } = r;
     appendEvent(title
-      ? { from: "hub", kind: "system", text: `收到，这是 ${tid}「${title}」的后续，已补充进去，Kai 接着处理。`, ref: tid }
+      ? { from: "hub", kind: "system", text: `收到，已补充到 ${tid}「${title}」，接着处理。`, ref: tid }
       : follows
         ? { from: "hub", kind: "system", text: `收到，接着 ${follows} 处理（${tid}），会结合前面的对话。`, ref: tid }
         : { from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
