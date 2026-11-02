@@ -65,7 +65,7 @@ ${recentJournal() || "(empty)"}
 ${rosterLine()}
 
 # External signature (MANDATORY)
-Anything you post outside the hub — GitHub PR/issue/review comments, PR descriptions, Slack, Discord, email, OKR entries — must end with:
+Anything you post outside the hub — GitHub PR/issue/review comments, PR descriptions, Slack, Discord, email, OKR entries — must end with this exact line, after a blank line:
 ${signature(agent, host, cfg)}
 Git commits you create must carry the trailer:  Agent: ${agent}
 

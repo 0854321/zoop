@@ -347,8 +347,7 @@ export function precedents(n = 30): string {
 }
 
 export function signature(agent: string, host: string, cfg: Cfg) {
-  const name = agentName(agent);
-  return `— 🤖 ${name} (${agent}) · AI agent acting for @${cfg.owner?.github ?? "owner"}`;
+  return `🤖 Noop (${agent}) · AI agent acting for @${cfg.owner?.github ?? "owner"}`;
 }
 
 export function agentName(agent: string): string {
