@@ -62,6 +62,7 @@ export type IconName =
   | "eye"
   | "eye-off"
   | "mail"
+  | "mic"
   | "lock"
   | "merge"
   | "checkbox"
@@ -565,6 +566,14 @@ const glyphs: Record<IconName, Draw> = {
   mail: (c) => {
     rect(c, 2.5, 4.5, 15, 11, 2.5);
     line(c, [3.5, 6, 10, 11, 16.5, 6]);
+  },
+  mic: (c) => {
+    // A capsule on a stand.
+    rect(c, 7, 2.5, 6, 10, 3);
+    c.beginPath();
+    c.arc(10, 9.5, 5.5, 0, Math.PI);
+    c.stroke();
+    line(c, [10, 15, 10, 17.5]);
   },
   lock: (c) => {
     rect(c, 4, 9, 12, 8.5, 2);

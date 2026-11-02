@@ -3,7 +3,10 @@
 //   (a notification opened the app on an event).
 // - Web Push: the service worker (sw.js, next to index.html), the permission, the subscription,
 //   the login session kept in IndexedDB for the worker, the app badge and the document title.
-// Events to the app: `open` { ref } when a notification is clicked while the app is open.
+// - Dictation: the browser's speech recognition (SpeechRecognition / webkitSpeechRecognition).
+// Events to the app: `open` { ref } when a notification is clicked while the app is open;
+// `speech` { text } with the whole transcript of the dictation so far (final and interim results)
+// and `speechEnd` { error? } when it stops.
 
 const DB = "noop";
 const STORE = "kv";
@@ -74,6 +77,33 @@ async function pushState() {
   return state;
 }
 
+const Recognition = () =>
+  typeof window === "undefined" ? null : window.SpeechRecognition || window.webkitSpeechRecognition || null;
+
+let recognition = null;
+function speechStart(player, lang) {
+  const R = Recognition();
+  if (!R) throw new Error("unsupported");
+  if (recognition) recognition.abort();
+  const r = new R();
+  recognition = r;
+  r.lang = lang || "zh-CN";
+  r.continuous = true;
+  r.interimResults = true;
+  let error = null;
+  r.onresult = (e) => {
+    let text = "";
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    player.hostEvent("speech", { text });
+  };
+  r.onerror = (e) => (error = e.error || "error");
+  r.onend = () => {
+    if (recognition === r) recognition = null;
+    player.hostEvent("speechEnd", error && error !== "aborted" ? { error } : {});
+  };
+  r.start();
+}
+
 export function createHost(player) {
   const title = typeof document === "undefined" ? "" : document.title || "noop";
   if (supported()) {
@@ -134,6 +164,19 @@ export function createHost(player) {
           try {
             navigator.vibrate?.(args.pattern ?? [40, 60, 40]);
           } catch {}
+          return {};
+        case "speechState":
+          return { supported: !!Recognition() };
+        case "speechStart":
+          // Called from the microphone button's press: the permission prompt needs the user's gesture.
+          speechStart(player, args.lang);
+          return {};
+        case "speechStop":
+          // The words still being heard come as a last `speech`, then `speechEnd`.
+          recognition?.stop();
+          return {};
+        case "speechAbort":
+          recognition?.abort();
           return {};
         default:
           throw new Error(`unknown host function ${name}`);

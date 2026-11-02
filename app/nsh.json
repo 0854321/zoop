@@ -22,7 +22,11 @@
       "setSession",
       "setBadge",
       "clearNotifications",
-      "vibrate"
+      "vibrate",
+      "speechState",
+      "speechStart",
+      "speechStop",
+      "speechAbort"
     ],
     "picker": true,
     "fs": {

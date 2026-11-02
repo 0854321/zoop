@@ -10,6 +10,7 @@ import {
   host,
   Image,
   keymap,
+  locale,
   mount,
   platform,
   safeArea,
@@ -2441,6 +2442,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     }
   }
   function submit() {
+    if (speech() !== "off") stopDictation(true);
     const v = draft().trim();
     const files = attachments();
     if (!v && !files.length) return;
@@ -2498,6 +2500,74 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     }
     composer?.focus();
   }
+  // Dictation (语音输入): the browser's speech recognition through host.js. Its words land in the
+  // composer where the caret was (or at the end), live as they are heard; nothing is sent. Where the
+  // page has none (other browsers, the native apps) there is no button.
+  const canDictate = signal(false);
+  const speech = signal<"off" | "on" | "stopping">("off");
+  void hostCall<{ supported: boolean }>("speechState").then((s) => canDictate.set(!!s?.supported));
+  let caret: { start: number; end: number } | null = null;
+  let before = "";
+  let after = "";
+  let dictated = ""; // the draft as dictation last left it: anything else is the owner typing
+  /** The recognizer's language: the device's Chinese, else Mandarin (the team is written to in Chinese). */
+  const speechLang = () => {
+    const l = String(locale() ?? "");
+    return /^zh\b/i.test(l) ? l : "zh-CN";
+  };
+  const speechError = (e: string) =>
+    e === "not-allowed" || e === "service-not-allowed" ? "没有麦克风权限，请在浏览器设置里允许使用麦克风"
+      : e === "no-speech" ? "没有听到声音"
+      : e === "audio-capture" ? "找不到麦克风"
+      : e === "network" ? "语音识别需要联网"
+      : "语音输入出错了";
+  async function startDictation() {
+    const v = draft();
+    const start = Math.min(caret?.start ?? v.length, v.length);
+    const end = Math.min(Math.max(caret?.end ?? v.length, start), v.length);
+    before = v.slice(0, start);
+    after = v.slice(end);
+    dictated = v;
+    attachNote.set(null);
+    speech.set("on");
+    if (!(await hostCall("speechStart", { lang: speechLang() })) && untracked(speech) === "on") {
+      speech.set("off");
+      attachNote.set("无法开始语音输入");
+    }
+  }
+  /** Stop listening: the words still being heard arrive first, unless `drop` (the draft was sent or edited). */
+  function stopDictation(drop = false) {
+    if (drop) {
+      speech.set("off");
+      void hostCall("speechAbort");
+    } else {
+      speech.set("stopping");
+      void hostCall("speechStop");
+    }
+  }
+  const toggleDictation = () => (speech() === "off" ? void startDictation() : speech() === "on" ? stopDictation() : undefined);
+  if (host.available()) {
+    host.on("speech", (p) => {
+      if (untracked(speech) === "off") return;
+      const heard = String((p as { text?: string })?.text ?? "").trim();
+      // a space between Latin words, none in Chinese
+      const gap = /[A-Za-z0-9.,!?;:]$/.test(before) && /^[A-Za-z0-9]/.test(heard) ? " " : "";
+      const head = before + gap + heard;
+      dictated = head + after;
+      draft.set(dictated);
+      composer?.setSelection(head.length, head.length);
+    });
+    host.on("speechEnd", (p) => {
+      if (untracked(speech) === "off") return;
+      speech.set("off");
+      const error = (p as { error?: string })?.error;
+      if (error) attachNote.set(speechError(error));
+    });
+  }
+  cleanup(() => {
+    if (untracked(speech) !== "off") void hostCall("speechAbort");
+  });
+
   const canSend = () => !!draft().trim() || attachments().length > 0;
   const answer = (ref: string, c: string) => {
     hostCall("clearNotifications", { ref });
@@ -2917,7 +2987,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   submitBehavior={touch ? "newline" : "submit"}
                   onSubmit={submit}
                   value={draft()}
-                  onChange={({ value }) => draft.set(value)}
+                  onChange={({ value }) => {
+                    draft.set(value);
+                    if (untracked(speech) !== "off" && value !== dictated) stopDictation(true);
+                  }}
+                  onSelectionChange={({ start, end }) => (caret = { start, end })}
                   onPaste={({ files, uris }) => {
                     for (const f of files) attach(f, f.name);
                     if (uris.length) void attachUris(uris);
@@ -2942,6 +3016,34 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     >
                       <Icon name="image" size={18} tint={colors.muted} />
                     </View>
+                    <If when={canDictate()}>
+                      <View
+                        testID="dictate"
+                        role="button"
+                        accessibilityLabel={speech() === "off" ? "语音输入" : "停止语音输入"}
+                        accessibilityState={{ selected: speech() !== "off" }}
+                        tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
+                        onPress={toggleDictation}
+                        hoverStyle={speech() === "off" ? hovered() : { opacity: 0.85 }}
+                        style={{
+                          width: touch ? 40 : 32,
+                          height: touch ? 40 : 32,
+                          borderRadius: radius.control,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: speech() === "off" ? undefined : tints.danger,
+                          transitionProperty: "background-color",
+                          transitionDuration: 120,
+                        }}
+                      >
+                        <Icon name="mic" size={18} tint={speech() === "off" ? colors.muted : colors.danger} />
+                      </View>
+                    </If>
+                    <If when={speech() !== "off"}>
+                      <Text testID="dictating" style={{ fontSize: 13, color: colors.danger, numberOfLines: 1 }}>
+                        {speech() === "on" ? "正在听…" : "正在识别…"}
+                      </Text>
+                    </If>
                   </View>
                   <View
                     testID="send"

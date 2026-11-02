@@ -616,6 +616,81 @@ describe("notifications", () => {
   });
 });
 
+describe("voice input", () => {
+  /** The browser's speech recognition host.js wraps, played by the test: it answers, the test sends what it hears. */
+  const recognizer = (supported = true) => ({
+    page: { origin: URL },
+    setSession: {},
+    setBadge: {},
+    clearNotifications: {},
+    speechState: { supported },
+    speechStart: {},
+    speechStop: {},
+    speechAbort: {},
+  });
+  const called = (app: Awaited<ReturnType<typeof open>>, name: string) => app.host.calls().filter((c) => c.name === name);
+
+  test("the microphone dictates into the composer until pressed again; nothing is sent", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const app = await open("./App.tsx", { storage: STORAGE, host: { handlers: recognizer() }, network: hub(posts), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("label:语音输入");
+    await app.type("id:composer", "提醒我：");
+    await app.press("label:语音输入");
+    await app.waitUntil(() => called(app, "speechStart").length === 1);
+    expect(called(app, "speechStart")[0].data).toEqual({ lang: "zh-CN" });
+    await app.waitFor("label:停止语音输入");
+    expect(app.shows("text:正在听…")).toBe(true);
+
+    // interim results replace each other; the words land after what was typed
+    await app.host.send("speech", { text: "明天" });
+    await app.waitUntil(() => app.value("id:composer") === "提醒我：明天");
+    await app.host.send("speech", { text: "明天上午开会" });
+    await app.waitUntil(() => app.value("id:composer") === "提醒我：明天上午开会");
+
+    await app.press("label:停止语音输入");
+    await app.waitUntil(() => called(app, "speechStop").length === 1);
+    await app.host.send("speech", { text: "明天上午开会。" }); // the last words, heard as it stops
+    await app.host.send("speechEnd", {});
+    await app.waitFor("label:语音输入");
+    expect(app.value("id:composer")).toBe("提醒我：明天上午开会。");
+    expect(app.shows("id:dictating")).toBe(false);
+    expect(posts).toEqual([]);
+
+    // a later result of no dictation changes nothing
+    await app.host.send("speech", { text: "别的" });
+    expect(app.value("id:composer")).toBe("提醒我：明天上午开会。");
+  });
+
+  test("sending while listening stops it; a refused microphone is explained", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, host: { handlers: recognizer() }, network: hub([]), width: 1200, height: 800, platform: "macos" });
+    await app.press("label:语音输入");
+    await app.host.send("speech", { text: "看一下日志" });
+    await app.waitUntil(() => app.value("id:composer") === "看一下日志");
+    await app.press("id:send");
+    await app.waitUntil(() => called(app, "speechAbort").length === 1);
+    await app.waitFor("label:语音输入");
+    await app.host.send("speech", { text: "看一下日志吧" });
+    expect(app.value("id:composer")).toBe("");
+
+    await app.press("label:语音输入");
+    await app.host.send("speechEnd", { error: "not-allowed" });
+    await app.waitFor("id:attach-note");
+    expect(app.shows("text:/没有麦克风权限/")).toBe(true);
+    expect(app.shows("label:停止语音输入")).toBe(false);
+  });
+
+  test("no microphone button where the page cannot recognize speech", async () => {
+    const unsupported = await open("./App.tsx", { storage: STORAGE, host: { handlers: recognizer(false) }, network: hub([]) });
+    await unsupported.waitFor("id:composer");
+    await unsupported.waitUntil(() => called(unsupported, "speechState").length === 1);
+    expect(unsupported.shows("id:dictate")).toBe(false);
+
+    const native = await open("./App.tsx", { storage: STORAGE, network: hub([]) });
+    await native.waitFor("id:composer");
+    expect(native.shows("id:dictate")).toBe(false);
+  });
+});
+
 describe("phones", () => {
   const view = () => ({
     current: {},
