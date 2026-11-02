@@ -26,7 +26,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ViewStyle } from "nsh";
-import { AlertDialog, Dialog, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, ContextMenu, Dialog, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import {
   alpha,
@@ -734,6 +734,9 @@ function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: s
 }
 
 /** An answer to a card, as plain words: "P-0002 6,7,8" → "批准 6、7、8". */
+/** The answer that sets a question aside (the hub's decisions.IGNORE). */
+const IGNORE = "忽略";
+
 function answerText(t: string): string {
   const [, ref, rest] = t.match(/^([DLP]-[A-Z]?\d{4}) (.+)$/) ?? [, "", t];
   const a = rest.trim();
@@ -742,7 +745,7 @@ function answerText(t: string): string {
     if (/^(none|都不要)$/i.test(a)) return "都不要";
     if (/^\d+(\s*[,，]\s*\d+)*$/.test(a)) return `批准 ${a.split(/\s*[,，]\s*/).join("、")}`;
   }
-  return `选 ${a}`;
+  return a === IGNORE ? IGNORE : `选 ${a}`;
 }
 
 /** The first line of a card's text, as plain words: what an answer replies to. */
@@ -898,6 +901,9 @@ function Message(props: {
                 )}
               </Each>
               <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+              <If when={e.ref!.startsWith("D-") && !done()}>
+                <Btn testID={`ignore-${e.ref}`} label="忽略" kind="dashed" onPress={() => props.onAnswer(e.ref!, IGNORE)} />
+              </If>
             </View>
             </>
             )}
@@ -1188,6 +1194,8 @@ function Sidebar(props: {
   hub: Hub;
   target: () => string | null;
   onPick: (ref: string) => void;
+  /** Set a question aside: it leaves 待你决定 and is not asked again. */
+  onIgnore: (ref: string) => void;
   task: () => string | null;
   onTask: (id: string) => void;
   machine: () => string | null;
@@ -1249,11 +1257,26 @@ function Sidebar(props: {
           <SideHeading title="待你决定" count={waits().length || undefined} accent />
           <Each of={waits()} key={(d) => d.id}>
             {(d) => (
-              <SideRow onPress={() => props.onPick(d().id)} title={d().id}>
-                <Dot tone="wait" />
-                <Text style={rowText()}>{d().question || d().id}</Text>
-                <Text style={{ fontFamily: MONO, fontSize: 12, color: colors.faint }}>{d().id}</Text>
-              </SideRow>
+              <ContextMenu
+                margin={8}
+                popupStyle={{ minWidth: 160, padding: 4, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}
+                trigger={
+                  <SideRow onPress={() => props.onPick(d().id)} title={d().id}>
+                    <Dot tone="wait" />
+                    <Text style={rowText()}>{d().question || d().id}</Text>
+                    <Text style={{ fontFamily: MONO, fontSize: 12, color: colors.faint }}>{d().id}</Text>
+                  </SideRow>
+                }
+              >
+                <MenuItem
+                  testID={`side-ignore-${d().id}`}
+                  onSelect={() => props.onIgnore(d().id)}
+                  hoverStyle={hovered()}
+                  style={{ height: 32, justifyContent: "center", paddingHorizontal: 10, borderRadius: 6 }}
+                >
+                  <Text style={{ fontSize: 14, color: colors.text }}>忽略，不用处理</Text>
+                </MenuItem>
+              </ContextMenu>
             )}
           </Each>
           <If when={!waits().length}>
@@ -2637,6 +2660,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       hub={hub}
       target={target}
       onPick={pick}
+      onIgnore={(ref) => void answer(ref, IGNORE)}
       task={() => { const t = top(); return t.name === "task" ? t.id : null; }}
       onTask={openTask}
       machine={() => { const t = top(); return t.name === "host" ? t.host : null; }}

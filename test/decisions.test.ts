@@ -100,3 +100,17 @@ test("linkRefs links PR references using the repositories the decision mentions"
   expect(dec.linkRefs("见 other#3 与 [#9](u)", undefined, opts)).toBe("见 other#3 与 [#9](u)");
   expect(dec.linkRefs("见 #5", undefined, "")).toBe("见 #5");
 });
+
+test("ignoring a question closes it without a lesson and drops its task", async () => {
+  judgeReply = { verdict: "hold", reason: "owner call" };
+  const before = lessons();
+  const id = open("A");
+  core.writeDoc(core.P("tasks", "blocked", "T-0001.md"), { id: "T-0001", title: "t" }, "body");
+  expect(dec.ignoreDecision(id, "owner(chat)")).toBe(true);
+  expect(closed(id).ignored).toBe("yes");
+  expect(closed(id).overrode_recommendation).toBeUndefined();
+  expect(lessons()).toBe(before);
+  expect(existsSync(core.P("tasks", "blocked", "T-0001.md"))).toBe(false);
+  expect(readFileSync(core.P("tasks", "rejected", "T-0001.md"), "utf8")).toContain("ignored");
+  expect(dec.ignoreDecision(id, "owner(chat)")).toBe(false);
+});

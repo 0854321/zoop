@@ -6,7 +6,7 @@ import {
   type Cfg, P, ROOT, _commitPush, _pull, agentName, chooseCli, claim, commitPush, heartbeat, hostCaps, hostName, journal,
   list, loadConfig, locked, newTask, now, onlineHosts, pickTask, pull, readDoc, remember, writeDoc,
 } from "./core";
-import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
+import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
 import { agentProcs, ask, buildPrompt, parseResult, runAgent } from "./runner";
 import { writeRules } from "./rules";
@@ -239,7 +239,11 @@ async function handleReplies(cfg: Cfg, host: string) {
       } else await handleOwnerMessage(r.answer, undefined, true);
       continue;
     }
-    if (open.has(r.id)) {
+    if (open.has(r.id) && r.answer.trim() === IGNORE) {
+      ignoreDecision(r.id, `owner(${r.source})`);
+      journal(host, `🙈 ${r.id} owner ignored it`);
+      await notify(`已忽略 ${r.id}，不再追问`, cfg);
+    } else if (open.has(r.id)) {
       closeDecision(r.id, r.answer, `owner(${r.source})`);
       journal(host, `✔ ${r.id} owner answered via ${r.source}: ${r.answer}`);
       await notify(`收到 ${r.id}：${r.answer} — 任务已重新排队`, cfg);

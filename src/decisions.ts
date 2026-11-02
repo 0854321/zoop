@@ -98,6 +98,27 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   return true;
 }
 
+/** The answer that sets a question aside: the owner does not want to deal with it. */
+export const IGNORE = "忽略";
+
+/** Owner set the question aside: close it (no lesson: not a choice between the options) and drop its task. */
+export function ignoreDecision(id: string, by: string): boolean {
+  const src = P("decisions", "open", `${id}.md`);
+  if (!existsSync(src)) return false;
+  const { meta, body } = readDoc(src);
+  writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer: IGNORE, answered_by: by, answered: now(), ignored: "yes" },
+    `${body}\n## Answer (${by})\n${IGNORE}: the owner set this aside. Do not ask it again.\n`);
+  unlinkSync(src);
+  const t = P("tasks", "blocked", `${meta.task}.md`);
+  if (existsSync(t)) {
+    const { meta: tm, body: tb } = readDoc(t);
+    writeDoc(P("tasks", "rejected", `${meta.task}.md`), { ...tm, claimed_by: undefined, status: "ignored" },
+      `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nThe owner ignored it: the task stops here.\n`);
+    unlinkSync(t);
+  }
+  return true;
+}
+
 /** Owner corrected an answer they just gave: put the task back in the queue with the correction on top. */
 export function amendDecision(id: string, text: string, by: string): string | null {
   const d = P("decisions", "closed", `${id}.md`);

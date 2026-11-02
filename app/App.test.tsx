@@ -222,6 +222,21 @@ describe("channel", () => {
     await app.waitUntil(() => !app.shows("text:要不要升级依赖？"));
   });
 
+  test("a question can be ignored from its card or from the sidebar", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts, [prDecision]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("id:ignore-D-H0003");
+    await app.press("id:ignore-D-H0003");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "D-H0003 忽略" });
+    await app.waitFor("text:/^忽略$/");
+    await app.rightClick("text:要不要升级依赖？ >> nth=0");
+    await app.press("id:side-ignore-D-0001");
+    await app.waitUntil(() => posts.length === 2);
+    expect(posts[1]).toEqual({ text: "D-0001 忽略" });
+    await app.waitUntil(() => !app.shows("id:ignore-D-0001"));
+  });
+
   test("其他指示 replies to the item from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
