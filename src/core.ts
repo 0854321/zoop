@@ -1,5 +1,4 @@
 // noop core — shared files as the world (stigmergy; synced via the owner's Worker, src/sync.ts), task queue, agent runner, journal, memory.
-import { $ } from "bun";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -73,38 +72,18 @@ export function locked<T>(fn: () => Promise<T> | T): Promise<T> {
   return run;
 }
 
-// Machines installed before the Worker store still hold DATA as a git clone; until they run `noop migrate-data`
-// (primary) or `noop init --worker` (others) they keep syncing through git so an update never cuts them off.
-const legacyGit = async () => existsSync(join(DATA, ".git")) && (await sync.syncMode()) === "local" && process.env.HUB_SYNC !== "local" && !process.env.HUB_SYNC_FAKE;
-const git = (...args: string[]) => $`git ${args}`.cwd(DATA).quiet().nothrow();
-async function gitPull() {
-  if ((await git("remote")).stdout.toString().trim() && (await git("pull", "--rebase", "--autostash", "-q")).exitCode !== 0) await git("rebase", "--abort");
-  return true;
-}
-async function gitCommitPush(msg: string): Promise<boolean> {
-  await git("add", "-A");
-  if ((await git("diff", "--cached", "--quiet")).exitCode === 0) return true;
-  await git("commit", "-q", "-m", msg);
-  if (!(await git("remote")).stdout.toString().trim()) return true;
-  for (let i = 0; i < 3; i++) {
-    if ((await git("push", "-q")).exitCode === 0) return true;
-    if ((await git("pull", "--rebase", "-q")).exitCode !== 0) { await git("rebase", "--abort"); return false; }
-  }
-  return false;
-}
-
-export const hasRemote = async () => (await legacyGit()) || (await sync.syncMode()) === "remote";
+export const hasRemote = async () => (await sync.syncMode()) === "remote";
 
 export const pull = () => locked(_pull);
 /** Apply remote changes to DATA (remote wins on paths edited on both sides, except mergeable appends). */
-export async function _pull(): Promise<boolean> { return (await legacyGit()) ? gitPull() : sync.pull(); }
+export const _pull = (): Promise<boolean> => sync.pull();
 
 /** Commit every local change via the Worker's compare-and-swap; false if we lost a race (or are offline). */
 export const commitPush = (msg: string) => locked(() => _commitPush(msg));
-export const _commitPush = async (msg: string): Promise<boolean> => (await legacyGit()) ? gitCommitPush(msg) : sync.commitPush(msg);
+export const _commitPush = (msg: string): Promise<boolean> => sync.commitPush(msg);
 
 /** Discard local edits and re-pull. */
-export const resetToUpstream = async () => (await legacyGit()) ? git("reset", "--hard", "-q", "@{u}") : sync.resetToUpstream();
+export const resetToUpstream = () => sync.resetToUpstream();
 
 // ------------------------------------------------------------------ markdown docs w/ front-matter
 export type Doc = { meta: Record<string, string>; body: string };
@@ -306,8 +285,7 @@ async function _claim(path: string, host: string): Promise<string | null> {
   unlinkSync(path);
   if (await _commitPush(`[${host}] claim ${meta.id}: ${meta.title}`)) return dest;
   // undo only our claim (other pending local results stay queued); after a lost race the pull already applied the winner
-  if (await legacyGit()) await git("reset", "--hard", "-q", "HEAD~1");
-  else sync.revertLocal([relative(DATA, dest), relative(DATA, path)]);
+  sync.revertLocal([relative(DATA, dest), relative(DATA, path)]);
   return null;
 }
 

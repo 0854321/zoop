@@ -13,13 +13,13 @@ import { writeRules } from "./rules";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { init, install, migrateData, selfUpdate } from "./setup";
+import { init, install, selfUpdate } from "./setup";
 import { computeMetrics } from "./metrics";
 import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, setAppendToTask, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
+import { drainInbound, handleOwnerMessage, recentChat, setAppendToTask, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
@@ -518,24 +518,30 @@ Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": 
   });
 }
 
-/** The open task (queued, running or waiting on sub-tasks) an owner message continues, if any: one short judge call. */
-async function sameOpenTask(text: string, cfg: Cfg): Promise<string | null> {
+/** What an owner message continues, in one short judge call: `same`, an open task (queued, running or waiting on sub-tasks)
+ * to add it to; else `follows`, a task the channel just talked about (often finished) that it corrects or builds on. */
+async function relatedTask(text: string, cfg: Cfg, chat: string[] = []): Promise<{ same: string | null; follows: string | null }> {
   const open = ["inbox", "active", "waiting"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
     .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: meta.id, title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
-  if (!open.length) return null;
-  const r = await ask(`The owner sent a new chat message to their AI team. Decide whether it continues one of the team's open tasks
-(same goal, same repo/release/PR — e.g. "keep following up the gpui-kit release" while a task is releasing gpui-kit) or is new work.
-Only match when it is clearly the same work; a different repo, a different goal or an unrelated question is new work.
+  const recent = [...new Set(chat.join("\n").match(/\bT-\d{4}\b/g) ?? [])];
+  if (!open.length && !recent.length) return { same: null, follows: null };
+  const r = await ask(`The owner sent a new chat message to their AI team. Decide what it continues.
+- "same": one of the team's OPEN tasks when it is clearly the same work (same goal, same repo/release/PR — e.g. "keep following up
+  the gpui-kit release" while a task is releasing gpui-kit). A different repo, goal or an unrelated question is not.
+- "follows": otherwise, a task from the channel below that the message refers to — corrects its result ("不行，…"), asks for more
+  of it, or asks to remember how it was done ("这个细节记录下来，以后都这样"). The owner writes tersely; read the channel.
+  null when the message is new, unrelated work.
 
 Message:
 ${text.slice(0, 1500)}
-
+${chat.length ? `\nThe channel just before it (oldest first):\n${chat.join("\n")}\n` : ""}
 Open tasks:
-${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n")}
+${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n") || "(none)"}
 
-Reply with exactly one fenced json block: {"same": "<task id>" | null, "why": "<short reason>"}`, cfg, P("logs", "runs", `dedupe-${Date.now()}.log`));
-  const id = typeof r?.same === "string" ? r.same : null;
-  return id && open.some((t) => t.id === id) ? id : null;
+Reply with exactly one fenced json block: {"same": "<open task id>" | null, "follows": "<task id from the channel>" | null, "why": "<short reason>"}`, cfg, P("logs", "runs", `dedupe-${Date.now()}.log`));
+  const same = typeof r?.same === "string" && open.some((t) => t.id === r.same) ? r.same : null;
+  const follows = !same && typeof r?.follows === "string" && recent.includes(r.follows) ? r.follows : null;
+  return { same, follows };
 }
 
 async function daemon(cfg: Cfg) {
@@ -601,16 +607,25 @@ async function daemon(cfg: Cfg) {
   }));
   if (isPrimary(cfg, host)) startServer(cfg, async (text) => {
     // Same work as an open task? Add the message to it instead of opening a duplicate.
-    const same = await sameOpenTask(text, cfg).catch(() => null);
+    const chat = recentChat(text);
+    const { same, follows } = await relatedTask(text, cfg, chat).catch(() => ({ same: null, follows: null }));
     const title = same ? await appendFollowUp(same, text) : "";
     if (same && title) return { id: same, title };
     return locked(async () => {
     await _pull();
-    const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}\n\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
-      { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner" } });
-    journal(host, `💬 ${id} from owner chat: ${text.slice(0, 80)}`);
+    // A short reply ("不行，…", "这个细节记下来") only makes sense with what came before it: the new task carries the
+    // channel's recent conversation and the task it most likely continues (finished tasks included).
+    const prev = follows;
+    const prevFile = prev ? ["done", "failed", "rejected", "blocked", "inbox", "active", "waiting"].map((d) => P("tasks", d, `${prev}.md`)).find(existsSync) : undefined;
+    const context = chat.length
+      ? `\n\n## The channel just before this message\nThe owner writes tersely: words like "this", "不行", "这个细节", "以后都这样" refer to what was just said here.\n\n${chat.map((l) => `- ${l}`).join("\n")}\n` +
+        (prevFile ? `\nThis continues ${prev} (${prevFile.split("/").slice(-2, -1)[0]}): read tasks/${prevFile.split("/").slice(-2).join("/")} for what was done and how. If the owner is correcting that result, fix it; if they say to remember something ("记录下来", "以后都这样"), write it as a durable rule/memory for the agent and kind of work it concerns, not just in this task.\n` : "")
+      : "";
+    const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}${context}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
+      { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner", ...(prevFile && prev ? { follows: prev } : {}) } });
+    journal(host, `💬 ${id} from owner chat${prevFile ? ` (follows ${prev})` : ""}: ${text.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
-    return { id };
+    return { id, ...(prevFile ? { follows: prev! } : {}) };
     });
   });
   await locked(async () => { // recover tasks this host was running when it died/restarted
@@ -688,7 +703,6 @@ const HELP = `noop — your own AI team
 
   noop init [<hub-url>] [--token <machine-token>]   join your hub (owner email login, or a machine token); asks for the URL if not given
   noop init --primary         the first machine, once: deploy your own Cloudflare Worker (holds the fleet data), seed ~/.noop/data
-  noop migrate-data           one-time: upload the old git data repo to your Worker, retire its .git
   noop install                run as a service (systemd / launchd / Task Scheduler)
   noop update                 self-update framework now (also automatic in daemon)
   noop fix ["what is wrong"]  AI medic: diagnose & repair this install (auto-runs on install/update/daemon failures)
@@ -720,7 +734,6 @@ async function main() {
         options: { worker: { type: "string" }, token: { type: "string" }, primary: { type: "boolean" } } });
       return init({ ...values, worker: values.worker ?? positionals[0] });
     }
-    case "migrate-data": return migrateData();
     case "install": return install();
     case "visual": return visual(rest);
     case "doctor": return doctor();

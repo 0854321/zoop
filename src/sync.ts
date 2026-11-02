@@ -347,42 +347,6 @@ export async function syncStatus(): Promise<string> {
   return `${mode}${mode === "remote" ? ` → ${readHubToml().cloud?.url ?? process.env.HUB_SYNC_FAKE}` : ""} · rev ${st.rev} · ${Object.keys(st.files).length} files · ${pending} pending`;
 }
 
-// ------------------------------------------------------------------ one-time upload (hub migrate-data)
-/** Upload every local file (local wins), in batches; then the mirror state matches the Worker. */
-export async function uploadAll(msg: string, batchBytes = 8_000_000): Promise<{ files: number; bytes: number }> {
-  const t = await getTransport();
-  if (!t) throw new Error("no Worker configured (noop.toml [cloud] url + [server] token)");
-  return withLock(async () => {
-    // learn the Worker's current versions without touching local files
-    const versions: Record<string, number> = {};
-    let since = 0;
-    for (;;) {
-      const r = await t(`/api/files/changes?since=${since}`);
-      if (!r || r.status !== 200) throw new Error(`cannot reach the Worker (${r?.status ?? "offline"})`);
-      for (const f of r.json.files as Remote[]) { if (f.deleted) delete versions[f.path]; else versions[f.path] = f.version; }
-      since = r.json.rev;
-      if (!r.json.more) break;
-    }
-    const st: State = { rev: 0, files: {} };
-    const all = scan(st).filter((c) => !c.deleted);
-    let files = 0, bytes = 0;
-    for (let i = 0; i < all.length;) {
-      const batch: Change[] = [];
-      let size = 0;
-      while (i < all.length && (batch.length === 0 || (size + all[i]._bytes!.length < batchBytes && batch.length < 500))) {
-        const c = all[i++]; c.base_version = versions[c.path] ?? 0; batch.push(c); size += c._bytes!.length;
-      }
-      const r = await t("/api/files/commit", { method: "POST", body: { msg, changes: wire(batch) } });
-      if (!r || r.status !== 200) throw new Error(`upload failed (${r?.status ?? "offline"}): ${JSON.stringify(r?.json ?? {}).slice(0, 300)}`);
-      recordCommitted(st, batch, r.json.files);
-      files += batch.length; bytes += size;
-      console.log(`  uploaded ${files}/${all.length}`);
-    }
-    saveState(st); // rev 0: the next pull re-reads everything (identical files are no-ops; Worker-only files arrive)
-    return { files, bytes };
-  });
-}
-
 /** Drop machine sync state (tests / re-init). */
 export function resetSyncState() { rmSync(STATE(), { force: true }); rmSync(BASE(), { recursive: true, force: true }); }
 export const _test = { loadState };

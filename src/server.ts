@@ -32,7 +32,7 @@ const sockets = new Set<ServerWebSocket<unknown>>();
 type Inbound = { id: string; answer: string; source: string };
 const inbound: Inbound[] = [];
 /** The owner's chat request becomes a task: a new one, or (with its title) the open task it continues. */
-type OwnerTask = (text: string) => Promise<{ id: string; title?: string }>;
+type OwnerTask = (text: string) => Promise<{ id: string; title?: string; follows?: string }>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -55,6 +55,21 @@ export function feed(since?: string, limit = 300): Event[] {
   const evs = files.flatMap((f) => readFileSync(join(FEED_DIR, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Event));
   return evs.filter((e) => !since || e.ts > since).slice(-limit);
 }
+
+/** The channel's last few hours as plain lines, oldest first: what a new chat message ("不行", "这个细节记下来") refers to.
+ * The message being handled (the owner's last event, `text`) is left out. */
+export function recentChat(text = "", opts: { limit?: number; hours?: number } = {}): string[] {
+  const since = new Date(Date.now() - (opts.hours ?? 6) * 3600_000).toISOString();
+  let evs = feed(since, 200).filter((e) => e.kind !== "login" && e.text?.trim());
+  const last = evs.at(-1);
+  if (last?.from === "owner" && last.text.trim() === text.trim()) evs = evs.slice(0, -1);
+  return evs.slice(-(opts.limit ?? 12)).map((e) => {
+    const who = e.from === "owner" ? "owner" : e.from;
+    const t = e.text.length > 700 ? `${e.text.slice(0, 700)}…` : e.text;
+    return `[${e.ts.slice(11, 16)}] ${who}${e.ref ? ` (${e.ref})` : ""}: ${t.replace(/\n+/g, " ⏎ ")}`;
+  });
+}
+
 
 /** Replies the daemon should process (same shape as Slack/Discord replies). */
 export const drainInbound = () => inbound.splice(0);
@@ -288,11 +303,13 @@ export async function handleOwnerMessage(
     followUp.at = Date.now();
     appendEvent({ from: "hub", kind: "system", text: `已补充到 ${followUp.tid}`, ref: followUp.tid });
   } else if (ownerTask) {
-    const { id: tid, title } = await ownerTask(text);
+    const { id: tid, title, follows } = await ownerTask(text);
     followUp = { tid, at: Date.now() };
     appendEvent(title
       ? { from: "hub", kind: "system", text: `收到，这是 ${tid}「${title}」的后续，已补充进去，Kai 接着处理。`, ref: tid }
-      : { from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
+      : follows
+        ? { from: "hub", kind: "system", text: `收到，接着 ${follows} 处理（${tid}），会结合前面的对话。`, ref: tid }
+        : { from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
   }
 }
 

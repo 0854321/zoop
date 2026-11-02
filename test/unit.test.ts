@@ -155,3 +155,14 @@ test("heartbeat carries the running code version, linked to its commit", async (
   expect(r.rev).toMatch(/^[0-9a-f]{40}$/);
   if (r.rev_url) expect(r.rev_url).toEndWith(`/commit/${r.rev}`);
 });
+
+test("recentChat: the channel before an owner message, without the message itself", async () => {
+  const { appendEvent, recentChat } = await import("../src/server");
+  appendEvent({ from: "Kai", kind: "notice", text: "已补写 gpui-kit v0.9.0 的更新日志", ref: "T-0115" });
+  appendEvent({ from: "owner", kind: "owner", text: "不行，得留下贡献者名单" });
+  appendEvent({ from: "hub", kind: "system", text: "收到，接着 T-0115 处理（T-0116）", ref: "T-0116" });
+  appendEvent({ from: "owner", kind: "owner", text: "这个细节记录下来，以后都这样" });
+  const lines = recentChat("这个细节记录下来，以后都这样");
+  expect(lines.slice(-3).map((l) => l.slice(8))).toEqual(["Kai (T-0115): 已补写 gpui-kit v0.9.0 的更新日志", "owner: 不行，得留下贡献者名单", "hub (T-0116): 收到，接着 T-0115 处理（T-0116）"]);
+  expect(recentChat("x", { limit: 1 }).length).toBe(1);
+});

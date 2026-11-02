@@ -1,6 +1,6 @@
 // hub init / install / update — out-of-the-box setup and self-update.
 import { $ } from "bun";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { CODE, DATA, P } from "./core";
@@ -49,10 +49,6 @@ async function joinViaLogin(url: string, host: string): Promise<string | null> {
 export async function init(opts: { worker?: string; token?: string; primary?: boolean } = {}) {
   const { commitPush, pull, loadConfig, hostName } = await import("./core");
   const { readHubToml, syncMode, writeHubToml } = await import("./sync");
-  if (existsSync(join(DATA, ".git"))) {
-    console.log(`${DATA} is still a git clone of the old data repo; move it to your Worker with: hub migrate-data`);
-    return;
-  }
   mkdirSync(DATA, { recursive: true });
   const me = hostname().split(".")[0];
   const joined = readHubToml().cloud?.url;
@@ -94,27 +90,6 @@ export async function init(opts: { worker?: string; token?: string; primary?: bo
 function writeLocalConfig(me: string) {
   if (!existsSync(P("config.local.toml")))
     writeFileSync(P("config.local.toml"), `# per-machine overrides & secrets (never synced)\n[host]\n# name = "${me}"\n# caps = []\n# max_parallel = 3\n\n[notify]\n# slack_bot_token = ""\n# discord_bot_token = ""\n`);
-}
-
-/** One-time: upload the old git data repo to the Worker, then retire its .git (renamed, not deleted). */
-export async function migrateData() {
-  const { loadConfig } = await import("./core");
-  const { readHubToml, writeHubToml, uploadAll, pull } = await import("./sync");
-  if (!existsSync(join(DATA, ".git"))) return void console.log(`${DATA} is not a git clone; nothing to migrate`);
-  const c = loadConfig();
-  const h = readHubToml();
-  const url = h.cloud?.url ?? c.cloud?.url, token = h.server?.token ?? c.server?.token;
-  if (!url || !token) { console.error("no Worker yet: run hub cloud deploy first (needs [cloud] url and [server] token)"); process.exitCode = 1; return; }
-  writeHubToml({ cloud: { url: String(url) }, server: { token: String(token) } });
-  console.log("stop the hub daemon on every host before migrating (systemctl --user stop ${SERVICE})");
-  const p = await $`git pull --rebase -q`.cwd(DATA).quiet().nothrow(); // last chance to collect other hosts' pushes
-  if (p.exitCode !== 0) console.log("warning: git pull failed; uploading the local copy as is");
-  const r = await uploadAll(`migrate from git (${hostname().split(".")[0]})`);
-  const bak = `.git.bak-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
-  renameSync(join(DATA, ".git"), join(DATA, bak));
-  await pull();
-  console.log(`✔ uploaded ${r.files} files (${(r.bytes / 1e6).toFixed(1)} MB) to ${url}; old git history kept in ${join(DATA, bak)}
-  on each worker host: mv ~/.noop/data ~/.noop/data.git-old && hub init --worker ${url}`);
 }
 
 // ------------------------------------------------------------------ self-update
