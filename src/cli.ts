@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
-  type Cfg, P, _commitPush, _pull, agentName, chooseCli, claim, commitPush, heartbeat, hostCaps, hostName, journal,
+  type Cfg, P, ROOT, _commitPush, _pull, agentName, chooseCli, claim, commitPush, heartbeat, hostCaps, hostName, journal,
   list, loadConfig, locked, newTask, now, onlineHosts, pickTask, pull, readDoc, remember, writeDoc,
 } from "./core";
 import { amendDecision, closeDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
@@ -46,6 +46,18 @@ export function due(every: string, last: string | undefined, t = new Date()): bo
   return lastT < target;
 }
 
+/** Cheap pre-check: run the routine's `signal` shell command; only an output change wakes an agent.
+ * A failing command counts as changed (the agent then looks). */
+export function signalChanged(r: { name: string; signal?: string }, state: Record<string, string>): boolean {
+  const key = `${r.name}#signal`;
+  const res = Bun.spawnSync(["bash", "-lc", r.signal!], { cwd: existsSync(ROOT) ? ROOT : undefined, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  if (res.exitCode !== 0) return true;
+  const hash = new Bun.CryptoHasher("sha1").update(res.stdout).digest("hex");
+  if (state[key] === hash) return false;
+  state[key] = hash;
+  return true;
+}
+
 function runRoutines(cfg: Cfg, host: string, primary: boolean) {
   const state: Record<string, string> = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : {};
   maybeProposeNext(cfg, host, state);
@@ -65,6 +77,7 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
     }
     const queued = routineQueued(r.name); // a copy queued or running → this run is redundant
     if (queued) { state[r.name] = new Date().toISOString(); journal(host, `⏰ routine \`${r.name}\` skipped: ${queued} still queued/running`); continue; }
+    if (r.signal && !signalChanged(r, state)) { state[r.name] = new Date().toISOString(); continue; } // nothing new → no AI run
     if (r.agent === "architect") computeMetrics(r.name === "evolve-deep" ? 30 : 7);
     const prompt = r.readonly ? `${r.prompt}\n\nRead-only routine: observe and report only. Do not change code, PRs, issues or settings; propose any change as a follow-up.` : r.prompt;
     const id = newTask(`${r.name} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, prompt, {
