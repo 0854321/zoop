@@ -511,6 +511,13 @@ async function main() {
         if (existsSync(prof)) console.log(`${p.split("/").pop()!.padEnd(16)} ${readFileSync(prof, "utf8").split("\n")[0].replace(/^# /, "")}`);
       }
       return;
+    case "login": { // show the pending sign-in code (used when email isn't configured)
+      const url = String(cfg.cloud?.url ?? "").replace(/\/$/, "");
+      const r = url ? await fetch(`${url}/api/host/login-code`, { headers: { Authorization: `Bearer ${cfg.server?.token}` } }).catch(() => null) : null;
+      if (!r?.ok) return void console.log("没有待使用的验证码：先在 app 里输入邮箱，点「发送验证码」，再运行 noop login");
+      const c = (await r.json()) as { email: string; code: string; expires: number };
+      return void console.log(`\n  ${c.email} 的验证码：${c.code}  （${Math.max(1, Math.round((c.expires - Date.now()) / 60000))} 分钟内有效）\n`);
+    }
     case "cloud": {
       if (rest[0] !== "deploy") return void console.log("usage: hub cloud deploy");
       return void (await cloudDeploy(cfg));

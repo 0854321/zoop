@@ -216,19 +216,22 @@ export class Hub extends DurableObject<Env> {
       if (!validEmail(email)) return json({ error: "invalid email" }, 400);
       let smtp: SmtpCfg | null = null;
       try { smtp = this.env.HUB_SMTP ? JSON.parse(this.env.HUB_SMTP) : null; } catch {}
-      if (!smtp?.host || !this.env.HUB_OWNER_EMAIL) return json({ error: "email not configured" }, 503);
+      // No email set up yet: the code is shown on the owner's own machine instead (`noop login`, needs the machine key).
+      const cli = !smtp?.host;
       this.sql.exec("DELETE FROM auth_sends WHERE ts < ?", now - 3600_000);
       // Per-email throttle applies to every address alike, so it reveals nothing about the allow-list.
       const recent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE email = ? AND ts > ?", email, now - RESEND_MS).one().n as number;
       if (recent) return json({ error: "请稍等一分钟再重新获取验证码" }, 429);
       const sent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE sent = 1").one().n as number;
       if (sent >= SENDS_PER_HOUR) return json({ error: "验证码发送太频繁，请一小时后再试" }, 429);
-      const owners = this.env.HUB_OWNER_EMAIL.split(",").map(normEmail).filter(Boolean);
-      const isOwner = owners.includes(email);
+      const owners = (this.env.HUB_OWNER_EMAIL ?? "").split(",").map(normEmail).filter(Boolean);
+      const isOwner = owners.includes(email) || (cli && !owners.length);
       this.sql.exec("INSERT INTO auth_sends (email, ts, sent) VALUES (?, ?, ?)", email, now, isOwner ? 1 : 0);
-      if (!isOwner) return json({ ok: true });
+      if (!isOwner) return json(cli ? { ok: true, delivery: "cli" } : { ok: true });
       const code = sixDigits();
       this.sql.exec("INSERT OR REPLACE INTO auth_codes (email, hash, expires, attempts) VALUES (?, ?, ?, 0)", email, await sha256(`${email}:${code}`), now + CODE_TTL);
+      if (cli) { this.set("cli_code", { email, code, expires: now + CODE_TTL }); return json({ ok: true, delivery: "cli" }); }
+      if (!isOwner) return json({ ok: true });
       try {
         await sendMail(smtp, email, `noop 登录验证码：${code}`,
           `你的 noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`);
@@ -248,6 +251,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("UPDATE auth_codes SET attempts = attempts + 1 WHERE email = ?", email);
       if (!sameStr(await sha256(`${email}:${code}`), r.hash as string)) return json({ error: "验证码不对" }, 401);
       this.sql.exec("DELETE FROM auth_codes WHERE email = ?", email);
+      this.sql.exec("DELETE FROM kv WHERE k = 'cli_code'");
       const session = hex(crypto.getRandomValues(new Uint8Array(32)));
       this.sql.exec("INSERT INTO sessions (id, email, created, last_seen, ua) VALUES (?, ?, ?, ?, ?)",
         await sha256(session), email, now, now, (req.headers.get("user-agent") ?? "").slice(0, 300));
@@ -278,6 +282,11 @@ export class Hub extends DurableObject<Env> {
       const actor = who === "machine" ? (req.headers.get("x-noop-host") ?? "machine") : "owner";
       const r = await handleFiles(this.sql, req, url, actor);
       if (r) return r;
+    }
+    if (p === "/api/host/login-code") { // `noop login` on the owner's machine, when email isn't configured
+      if (who !== "machine") return json({ error: "forbidden" }, 403);
+      const c = this.get("cli_code");
+      return c && c.expires > Date.now() ? json(c) : json({ error: "no pending code" }, 404);
     }
     if (p === "/api/host/join" && m === "POST") { // a new machine, approved by the owner's login, gets the machine key
       if (who === "machine") return json({ error: "forbidden" }, 403);

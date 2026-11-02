@@ -1927,6 +1927,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
   const server = () => normalizeUrl(url());
   const unreachable = () => `连不上服务器 ${server()}，请检查地址和网络`;
 
+  const viaCli = signal(false); // email not set up yet: the code is shown by `noop login` on the owner's machine
   async function sendCode() {
     const e = email().trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return error.set("请填写有效的邮箱地址");
@@ -1939,6 +1940,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
       if (r.status === 503) throw new Error("服务器还没有配置发信，暂时无法用邮箱登录");
       if (r.status >= 400) throw new Error(`服务器返回 ${r.status}，这个地址可能不是 noop`);
       await Storage.setItem(KEYS.email, e);
+      viaCli.set(r.data.delivery === "cli");
       code.set("");
       step.set("code");
       wait.set(RESEND);
@@ -1988,7 +1990,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
             <Mark size={48} />
             <Text style={{ fontSize: 28, fontWeight: "600", color: colors.text, letterSpacing: -0.3 }}>登录 noop</Text>
             <Text style={{ fontSize: 15.5, lineHeight: 23, color: colors.muted, textAlign: "center" }}>
-              {step() === "email" ? "用邮箱登录：我们会发一个 6 位验证码给你。" : `验证码已发到 ${email().trim()}，请查收邮件。`}
+              {step() === "email" ? "用邮箱登录：我们会发一个 6 位验证码给你。" : viaCli() ? "还没配置发信邮箱：在你的主机终端运行 noop login 查看验证码。" : `验证码已发到 ${email().trim()}，请查收邮件。`}
             </Text>
           </View>
           <View style={{ gap: 18, padding: 22, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}>
