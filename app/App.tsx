@@ -719,7 +719,7 @@ function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: s
         </Each>
       </View>
       <If when={!props.done}>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 16 }}>
           <Btn testID={`approve-${e.ref}`} label={picked().size ? `批准所选（${picked().size}）` : "批准所选"} kind="primary" disabled={!picked().size}
             onPress={() => answer([...picked()].sort((a, b) => +a - +b).join(","))} />
           <Btn testID={`opt-${e.ref}-all`} label="全部批准" kind="secondary" onPress={() => answer("all")} />
@@ -744,11 +744,32 @@ function answerText(t: string): string {
   return `选 ${a}`;
 }
 
-function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void }) {
+/** The first line of a card's text, as plain words: what an answer replies to. */
+function askLine(text: string): string {
+  return (text.split("\n").find((l) => l.trim()) ?? "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*`_]/g, "").replace(/\\$/, "").trim();
+}
+
+function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
+  const asked = () => (e.ref ? askLine(props.hub.events().find((x) => x.ref === e.ref && isAsk(x))?.text ?? "") : "");
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
+        {/* what this answers, quoted above the bubble (press: back to the card) */}
+        <If when={e.ref}>
+          <View
+            role="link"
+            testID={`reply-to-${e.ref}`}
+            onPress={() => props.onRef?.(e.ref!)}
+            hoverStyle={{ opacity: 1 }}
+            style={{ cursor: "pointer", opacity: 0.85, flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%", paddingLeft: 8, paddingRight: 4, borderLeftWidth: 2, borderLeftColor: colors.fieldBorder }}
+          >
+            <Text style={{ ...chipText, fontFamily: MONO, fontSize: 12, color: colors.muted }}>{e.ref}</Text>
+            <If when={asked()}>
+              <Text style={{ ...chipText, flexShrink: 1, numberOfLines: 1, fontSize: 13, color: colors.faint }}>{asked()}</Text>
+            </If>
+          </View>
+        </If>
         <If when={e.attachments?.length}>
           <View testID="owner-images" style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6, opacity: props.out ? 0.65 : 1 }}>
             <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
@@ -762,15 +783,10 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             borderRadius: 18,
             borderBottomRightRadius: 6,
             backgroundColor: tints.accent,
-            borderWidth: 1,
-            borderColor: alpha(colors.accent, 0.18),
             opacity: props.out ? 0.65 : 1,
             gap: 4,
           }}
         >
-          <If when={e.ref}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: colors.accent }}>↳ {e.ref}</Text>
-          </If>
           {/^[DLP]-[A-Z]?\d{4} \S/.test(e.text) && !e.text.includes("\n")
             ? <Text style={{ fontSize: size.text, lineHeight: size.line, color: colors.text, userSelect: "text" }}>{answerText(e.text)}</Text>
             : <Rich text={e.text} />}
@@ -847,12 +863,10 @@ function Message(props: {
             style={{
               marginTop: 6,
               borderRadius: radius.card,
-              borderWidth: 1,
-              borderColor: colors.border,
               backgroundColor: colors.surface,
               opacity: done() ? 0.62 : 1,
               overflow: "hidden",
-              transitionProperty: "border-color, opacity",
+              transitionProperty: "opacity",
               transitionDuration: 160,
             }}
           >
@@ -870,7 +884,7 @@ function Message(props: {
             <>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
             {/* one option per line: options are sentences, side by side they read as a jumble */}
-            <View style={{ alignItems: "flex-start", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
+            <View style={{ alignItems: "flex-start", gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 16 }}>
               <Each of={choicesOf(e).slice(0, 12)}>
                 {(c, i) => (
                   <Btn
@@ -2232,8 +2246,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   };
   taskLink = openTask;
   taskState = (id) => { const s = props.hub.status(); return [...(s?.active ?? []), ...(s?.recent ?? [])].find((t) => t.id === id)?.state ?? (s?.active.some((t) => t.id === id) ? "active" : undefined); };
+  /** A card being scrolled to (picked from the sidebar, a notification): entering the channel leaves the scroll to it. */
+  let jumping: string | null = null;
   // Entering the channel (first load, back from a task or settings) shows the latest messages.
-  effect(() => { if (onChannel()) { atEnd.set(true); unseen.set(0); toEnd(); } });
+  effect(() => { if (onChannel() && !jumping) { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
   const replyTo = signal<string | null>(null);
   const focused = signal(false);
@@ -2403,19 +2419,30 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   function pick(ref: string) {
     drawer.set(false);
+    // set before the channel comes back: entering it would otherwise scroll to the latest messages, over this card
+    jumping = ref;
+    atEnd.set(false);
+    const back = !untracked(onChannel);
     nav.popToRoot();
     chosen.set(ref);
     hostCall("clearNotifications", { ref });
-    const card = cards.get(ref);
-    if (card && scroller) {
-      // measured now, not a frame cached at layout: what loaded above it since (images, older history) moved it
-      const sc = scroller;
-      void Promise.all([card.measure(), sc.measure()]).then(([c, v]) => {
-        if (!c || !v) return;
-        atEnd.set(false);
-        sc.scrollTo({ y: Math.max(0, scrollY + c.pagePosition.y - v.pagePosition.y - 24), animated: true });
-      });
-    } else if (pending().some((e) => e.ref === ref)) reply(ref);
+    // back from another page the channel lays out first
+    setTimeout(() => toCard(ref, 4), back ? 120 : 0);
+  }
+  /** Scrolls to a card, measured now (what loaded above it since moved it), retrying while it is still being laid out. */
+  function toCard(ref: string, tries: number) {
+    const card = cards.get(ref), sc = scroller;
+    const done = () => { if (jumping === ref) jumping = null; };
+    if (!card || !sc) {
+      done();
+      if (pending().some((e) => e.ref === ref)) reply(ref);
+      return;
+    }
+    void Promise.all([card.measure(), sc.measure()]).then(([c, v]) => {
+      if (!c || !v) return tries > 0 ? void setTimeout(() => toCard(ref, tries - 1), 80) : done();
+      sc.scrollTo({ y: Math.max(0, scrollY + c.pagePosition.y - v.pagePosition.y - 24), animated: true });
+      done();
+    });
   }
 
   // Opened from a notification (`?ref=`), or one clicked while the app is open: show that event.
@@ -2566,7 +2593,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       <View style={{ flex: 1, backgroundColor: colors.background }}>
           <View style={{ flex: 1 }}>
             <Scroll
-              ref={(r) => (scroller = r)}
+              ref={(r) => { scroller = r; scrollY = 0; }}
               style={{ flex: 1 }}
               scrollEventThrottle={100}
               keyboardShouldPersistTaps="handled"
@@ -2649,7 +2676,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id, o.files); }} onUndo={() => undo(row.event.id)} />;
+                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id, o.files); }} onUndo={() => undo(row.event.id)} onRef={pick} />;
                     }
                     return (
                       <Message
@@ -2926,9 +2953,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       </If>
       <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
         <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{titleOf(p.route)}</Text>
-        <If when={pending().length && p.route === CHANNEL}>
-          <Badge label={`${pending().length} 项待决定`} tone="warn" />
-        </If>
       </View>
       {connPill()}
       <If when={!wide() && p.route === CHANNEL}>
@@ -2964,9 +2988,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         <View style={{ width: size.sidebar, borderRightWidth: 1, borderRightColor: colors.sidebarBorder }}>{sidebar(false)}</View>
       </If>
       <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
-        {(route) => (
+        {(route, index) => (
           <NavPage
             testID={`page-${route.name}`}
+            // with the sidebar beside it, a page picked there replaces the view at once; only a page opened from a page slides in
+            animation={wide() && index() <= 1 ? "none" : "default"}
             title={titleOf(route)}
             header={systemHeader ? undefined : <Bar route={route} />}
             headerBackTitle={backTitle(route)}
