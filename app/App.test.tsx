@@ -650,7 +650,7 @@ describe("rules and memory", () => {
     "agents/dev/profile.md": "# dev 的档案\n\n负责前端",
   };
   function rulesServer(reads: string[]) {
-    const routes: Record<string, unknown> = { ...hub([]) };
+    const routes: Record<string, any> = { ...hub([]) };
     for (const [pre, list] of Object.entries(files)) routes[`GET ${URL}/api/files/list?prefix=${enc(pre)}`] = { body: { files: list } };
     for (const [p, content] of Object.entries(docs)) {
       routes[`GET ${URL}/api/files/read?path=${enc(p)}`] = () => {

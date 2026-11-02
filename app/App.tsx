@@ -475,7 +475,8 @@ function hubMarkdown(text: string): string {
   return text
     .split(/(^```[\s\S]*?^```)/m)
     .map((part, i) => (i % 2 ? part : part
-      .replace(/([^\n])\n(?!\n)/g, "$1\\\n")
+      // single newlines are hard breaks, except around list items (a "\\" there shows up literally)
+      .replace(/([^\n])\n(?!\n|\s*(?:[-*+]|\d+[.)])\s)/g, (m0, c, off, all) => /^\s*(?:[-*+]|\d+[.)])\s/.test(all.slice(all.lastIndexOf("\n", off) + 1, off + 1)) ? `${c}\n` : `${c}\\\n`)
       // Bare URLs stop at CJK / full-width punctuation and spaces ("pull/1：让" links pull/1 only).
       .replace(/(?<![(<\[`])\bhttps?:\/\/[^\s<>()\[\]`\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]+[^\s<>()\[\]`.,;:!?'"\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]/g, "<$&>")))
     .join("");
@@ -613,6 +614,95 @@ function optionText(e: HubEvent, c: string): string {
   return full ? full.trim() : choiceLabel(c);
 }
 
+type Proposal = { n: string; title: string; agent: string; note: string };
+/** The items of an approval batch, from either message format ("1. [agent] title (source)" or "1. 标题（agent）"). */
+function proposalsOf(text: string): Proposal[] {
+  const out: Proposal[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\\\s*$/, "").replace(/\*\*/g, "").trim();
+    const m = line.match(/^(\d+)[.、]\s*(.+)$/);
+    if (!m) continue;
+    let rest = m[2], agent = "", note = "";
+    const a = rest.match(/^\[([\w-]+)\]\s*/);
+    if (a) { agent = a[1]; rest = rest.slice(a[0].length); }
+    const src = rest.match(/\s*[(（]((?:routine|followup|approved)[^)）]*)[)）]\s*$/);
+    if (src) {
+      rest = rest.slice(0, src.index);
+      const [kind, ref] = src[1].split(":");
+      note = kind === "routine" ? "例行任务" : kind === "followup" && ref ? `接着 ${ref}` : "";
+    }
+    const who = rest.match(/\s*[(（]([\w-]+)[)）]\s*$/);
+    if (!agent && who) { agent = who[1]; rest = rest.slice(0, who.index); }
+    rest = rest.replace(/\s*·\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*$/, "").trim();
+    out.push({ n: m[1], title: rest, agent, note });
+  }
+  return out;
+}
+
+/** An approval batch as a checklist: tick what may start, then approve. */
+function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: string, choice: string) => void; onReply: (ref: string) => void }) {
+  const e = props.event;
+  const items = proposalsOf(e.text);
+  const picked = signal<Set<string>>(new Set());
+  const toggle = (n: string) => picked.update((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x; });
+  const answer = (c: string) => props.onAnswer(e.ref!, c);
+  return (
+    <>
+      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 }}>
+        <Text style={{ fontSize: size.small, color: colors.muted }}>{`团队想做这 ${items.length} 件事，勾选同意开始的：`}</Text>
+      </View>
+      <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
+        <Each of={items}>
+          {(it) => {
+            const on = () => picked().has(it().n);
+            return (
+              <View
+                role="checkbox"
+                accessibilityState={{ checked: on() }}
+                accessibilityLabel={it().title}
+                testID={`proposal-${e.ref}-${it().n}`}
+                onPress={props.done ? undefined : () => toggle(it().n)}
+                hoverStyle={props.done ? undefined : { backgroundColor: alpha(colors.text, 0.04) }}
+                style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 8, paddingVertical: 8, borderRadius: 8, cursor: props.done ? "default" : "pointer" }}
+              >
+                <View style={{ width: 20, height: 20, borderRadius: 6, borderWidth: on() ? 0 : 1.5, borderColor: colors.fieldBorder, backgroundColor: on() ? colors.accentFill : "transparent", alignItems: "center", justifyContent: "center" }}>
+                  <If when={on()}><Icon name="check" size={14} tint={colors.onAccent} /></If>
+                </View>
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text style={{ numberOfLines: 2, fontSize: size.text, lineHeight: 22, color: colors.text, cursor: "pointer" }}>{it().title}</Text>
+                  <Text style={{ fontSize: size.tiny, color: colors.faint, cursor: "pointer" }}>{[it().agent && displayName(it().agent), it().note].filter(Boolean).join(" · ")}</Text>
+                </View>
+              </View>
+            );
+          }}
+        </Each>
+      </View>
+      <If when={!props.done}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
+          <Btn testID={`approve-${e.ref}`} label={picked().size ? `批准所选（${picked().size}）` : "批准所选"} kind="primary" disabled={!picked().size}
+            onPress={() => answer([...picked()].sort((a, b) => +a - +b).join(","))} />
+          <Btn testID={`opt-${e.ref}-all`} label="全部批准" kind="secondary" onPress={() => answer("all")} />
+          <Btn testID={`opt-${e.ref}-none`} label="都不要" kind="ghost" onPress={() => answer("none")} />
+          <View style={{ flex: 1 }} />
+          <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+        </View>
+      </If>
+    </>
+  );
+}
+
+/** An answer to a card, as plain words: "P-0002 6,7,8" → "批准 6、7、8". */
+function answerText(t: string): string {
+  const [, ref, rest] = t.match(/^([DLP]-[A-Z]?\d{4}) (.+)$/) ?? [, "", t];
+  const a = rest.trim();
+  if (ref.startsWith("P-")) {
+    if (/^(all|全部)$/i.test(a)) return "全部批准";
+    if (/^(none|都不要)$/i.test(a)) return "都不要";
+    if (/^\d+(\s*[,，]\s*\d+)*$/.test(a)) return `批准 ${a.split(/\s*[,，]\s*/).join("、")}`;
+  }
+  return `选 ${a}`;
+}
+
 function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void }) {
   const e = props.event;
   return (
@@ -640,7 +730,9 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
           <If when={e.ref}>
             <Text style={{ fontSize: 13, fontWeight: "600", color: colors.accent }}>↳ {e.ref}</Text>
           </If>
-          <Rich text={e.text} />
+          {/^[DLP]-[A-Z]?\d{4} \S/.test(e.text) && !e.text.includes("\n")
+            ? <Text style={{ fontSize: size.text, lineHeight: size.line, color: colors.text, userSelect: "text" }}>{answerText(e.text)}</Text>
+            : <Rich text={e.text} />}
         </View>
         </If>
         <If
@@ -731,6 +823,10 @@ function Message(props: {
                 <Text style={{ fontSize: 13, color: colors.up }}>✓ 已回复</Text>
               </If>
             </View>
+            {e.kind === "proposals" && proposalsOf(e.text).length ? (
+              <ProposalList event={e} done={done()} onAnswer={props.onAnswer} onReply={props.onReply} />
+            ) : (
+            <>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.inset }}>
               <Each of={choicesOf(e).slice(0, 12)}>
@@ -746,6 +842,8 @@ function Message(props: {
               </Each>
               <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
             </View>
+            </>
+            )}
           </View>
         ) : (
           body
