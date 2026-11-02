@@ -15,7 +15,7 @@
 //   · POST /api/push/unsubscribe {endpoint} · POST /api/push/test · POST /api/push/answer {ref, answer}
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
-import { handleFiles, initFilesSchema } from "./files";
+import { handleFiles, handleReadFiles, initFilesSchema } from "./files";
 import { ownerAttachments, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
@@ -293,6 +293,10 @@ export class Hub extends DurableObject<Env> {
     const who = await this.who(req, url);
     if (!who) return json({ error: "unauthorized" }, 401);
     if (p.startsWith("/api/push/")) return this.push(p, req, who);
+    if ((p === "/api/files/list" || p === "/api/files/read") && m === "GET") { // owner (and machine) read of READABLE prefixes
+      const r = handleReadFiles(this.sql, url);
+      if (r) return r;
+    }
     if (p.startsWith("/api/files/")) {
       const ownerOnly = p === "/api/files/history" || p === "/api/files/revert";
       if (ownerOnly ? who === "machine" : who !== "machine") return json({ error: "forbidden" }, 403);

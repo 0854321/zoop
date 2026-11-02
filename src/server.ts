@@ -9,6 +9,7 @@
 //   GET  /api/status                      → queue, decisions, hosts, accounts
 //   POST /api/media (multipart file)      → { url }   (workers upload screenshots/recordings here)
 //   GET  /media/<file>                    → attachment
+//   GET  /api/files/list?prefix=  · GET /api/files/read?path=   → read-only rules & memory (same shape as the Worker)
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -16,6 +17,7 @@ import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
 import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc } from "./core";
 import { ownerAttachments, uploadId, uploadProblem } from "../cloud/src/uploads";
+import { readable, validPath } from "../cloud/src/files";
 
 export type Event = {
   id: string; ts: string; from: string; kind: "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
@@ -263,6 +265,33 @@ export async function handleOwnerMessage(
 
 export const setOwnerTask = (fn: (text: string) => Promise<string>) => { ownerTask = fn; };
 
+// ---------------------------------------------------------------- read-only rules & memory (mirrors the Worker's /api/files/list|read)
+export function listDataFiles(prefix: string, root = DATA) {
+  if (prefix && !prefix.endsWith("/")) prefix += "/";
+  if (!readable(prefix)) return null;
+  const out: { path: string; size: number; updated: string; version: number }[] = [];
+  const walk = (rel: string) => {
+    let names: string[] = [];
+    try { names = readdirSync(join(root, rel)).sort(); } catch { return; }
+    for (const n of names) {
+      if (n.startsWith(".")) continue;
+      const r = rel + n, st = statSync(join(root, r));
+      if (st.isDirectory()) walk(r + "/");
+      else if (out.length < 2000) out.push({ path: r, size: st.size, updated: st.mtime.toISOString(), version: 0 });
+    }
+  };
+  walk(prefix);
+  return out.sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+export function readDataFile(path: string, root = DATA) {
+  if (!validPath(path) || !readable(path)) return null;
+  try {
+    const st = statSync(join(root, path));
+    if (!st.isFile()) return undefined;
+    return { path, content: readFileSync(join(root, path), "utf8"), size: st.size, updated: st.mtime.toISOString(), version: 0 };
+  } catch { return undefined; }
+}
+
 export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<string>) {
   const s = cfg.server ?? {};
   if (s.enabled === false) return;
@@ -298,6 +327,14 @@ export function startServer(cfg: Cfg, onOwnerTask: (text: string) => Promise<str
       }
       if (url.pathname === "/api/feed") return json({ events: feed(url.searchParams.get("since") ?? undefined) });
       if (url.pathname === "/api/status") return json(status());
+      if (url.pathname === "/api/files/list" && req.method === "GET") {
+        const files = listDataFiles(url.searchParams.get("prefix") ?? "");
+        return files ? json({ files }) : json({ error: "prefix not readable" }, 403);
+      }
+      if (url.pathname === "/api/files/read" && req.method === "GET") {
+        const f = readDataFile(url.searchParams.get("path") ?? "");
+        return f ? json(f) : f === null ? json({ error: "path not readable" }, 403) : json({ error: "not found" }, 404);
+      }
       if (url.pathname === "/api/settings" && req.method === "GET") return json(settingsView());
       if (url.pathname === "/api/settings" && req.method === "PUT") return json(await saveSettings((await req.json()) as Record<string, unknown>));
       if (url.pathname === "/api/media" && req.method === "POST") {

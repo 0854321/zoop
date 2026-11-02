@@ -258,3 +258,34 @@ export function firstUnread(events: HubEvent[], seenTs: string | null): string |
   const e = events.find((x) => x.ts > seenTs && x.kind !== "owner");
   return e ? e.id : null;
 }
+
+// ---------------------------------------------------------------- the team's rules and memory (read-only views)
+
+export type DataFile = { path: string; size: number; updated?: string; version?: number };
+export type RuleItem = { path: string; title: string; detail: string };
+export type RuleGroup = { key: string; title: string; hint: string; items: RuleItem[] };
+
+/** The prefixes listed, in the order shown. */
+export const RULE_PREFIXES = ["policies/", "memory/", "agents/", "decisions/closed/"] as const;
+
+const stem = (p: string) => p.slice(p.lastIndexOf("/") + 1).replace(/\.md$/i, "");
+
+/** The four groups of the 团队规则与记忆 list, from what /api/files/list returned for each prefix. */
+export function groupRules(lists: Record<string, DataFile[]>): RuleGroup[] {
+  const md = (pre: string) => (lists[pre] ?? []).filter((f) => /\.md$/i.test(f.path));
+  const day = (f: DataFile) => (f.updated ?? "").slice(0, 10);
+  const plain = (f: DataFile, title = stem(f.path)) => ({ path: f.path, title, detail: day(f) });
+  const agents = md("agents/")
+    .map((f) => f.path.match(/^agents\/([^/]+)\/(profile|memory)\.md$/i))
+    .filter((m): m is RegExpMatchArray => !!m)
+    .map((m) => ({ path: m[0], title: `${m[1]} · ${m[2].toLowerCase() === "profile" ? "档案" : "记忆"}`, detail: day(lists["agents/"]!.find((f) => f.path === m[0])!) }));
+  return [
+    { key: "policies", title: "规则", hint: "全队遵守的规则，包括你为各项目定的规则。", items: md("policies/").map((f) => plain(f, f.path.slice("policies/".length).replace(/\.md$/i, ""))) },
+    { key: "memory", title: "我的偏好", hint: "团队记下的你的偏好、原则和教训。", items: md("memory/").map((f) => plain(f, f.path.slice("memory/".length).replace(/\.md$/i, ""))) },
+    { key: "agents", title: "Agents", hint: "每个成员的档案和记忆。", items: agents },
+    { key: "decisions", title: "决策先例", hint: "已经拍板的决策，之后同类问题照此处理。", items: md("decisions/closed/").map((f) => plain(f)).sort((a, b) => (a.title < b.title ? 1 : -1)) },
+  ];
+}
+
+/** The markdown body without its YAML front matter. */
+export const stripFrontMatter = (s: string) => s.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");

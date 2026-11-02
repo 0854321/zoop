@@ -85,6 +85,11 @@ import {
   quietKey,
   firstUnread,
   type Row,
+  type DataFile,
+  type RuleGroup,
+  RULE_PREFIXES,
+  groupRules,
+  stripFrontMatter,
 } from "./hub";
 
 type Config = { url: string; token: string };
@@ -1006,6 +1011,8 @@ function Sidebar(props: {
   machine: () => string | null;
   onMachine: (host: string) => void;
   onSettings: () => void;
+  rules: () => boolean;
+  onRules: () => void;
   onHelp: () => void;
   onClose?: () => void;
   chrome?: boolean;
@@ -1050,6 +1057,10 @@ function Sidebar(props: {
               <If when={waits().length}>
                 <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${waits().length} 待决定`}</Text>
               </If>
+            </SideRow>
+            <SideRow onPress={props.onRules} selected={props.rules()} title="团队规则与记忆">
+              <Icon name="scroll" size={17} tint={props.rules() ? colors.text : colors.muted} />
+              <Text style={rowText()}>团队规则与记忆</Text>
             </SideRow>
           </View>
           <SideHeading title="待你决定" count={waits().length || undefined} accent />
@@ -1377,7 +1388,7 @@ function createSettings(hub: Hub) {
 type Settings = ReturnType<typeof createSettings>;
 
 /** The wide (desktop, tablet, wide browser) settings page. */
-function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: boolean; onConnection: () => void; onDisconnect: () => void }) {
+function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: boolean; onRules: () => void; onConnection: () => void; onDisconnect: () => void }) {
   const { view, error, saved, save } = props.settings;
   props.settings.load();
   const eff = () => view()?.effective;
@@ -1481,6 +1492,9 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
             </View>
           )}
         </If>
+        <Group title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
+          <SetRow first label="查看规则与记忆" chevron onPress={props.onRules} testID="settings-rules" />
+        </Group>
         <Group title="账号与连接" hint="登录状态保存在这台设备上，下次打开自动连接。">
           <View style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
             <View style={{ flex: props.wide ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -1683,6 +1697,9 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
     <Grouped testID="phone-settings">
       <Section title="通知" hint="需要你拍板的事推送到这台设备；通知上可以直接选择选项。">
         <SetRow first label="通知" value={notify.short()} chevron onPress={() => props.onOpen({ name: "notify" })} testID="settings-notify" />
+      </Section>
+      <Section title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
+        <SetRow first label="规则与记忆" chevron onPress={() => props.onOpen({ name: "rules" })} testID="settings-rules" />
       </Section>
       <SaveNote settings={props.settings} />
       <If when={eff()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>{error() ? "设置读取失败" : "读取中…"}</Text>}>
@@ -1887,6 +1904,67 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
   );
 }
 
+// ---------------------------------------------------------------- the team's rules and memory (read-only)
+
+/** 团队规则与记忆: policies, the owner's memory, each agent's profile and memory, closed decisions. */
+function RulesList(props: { hub: Hub; onOpen: (path: string) => void }) {
+  const groups = signal<RuleGroup[] | null>(null);
+  const error = signal("");
+  void (async () => {
+    const lists: Record<string, DataFile[]> = {};
+    for (const pre of RULE_PREFIXES) {
+      const r = await props.hub.api("GET", `/api/files/list?prefix=${encodeURIComponent(pre)}`);
+      if (!r.ok) { error.set(r.status ? `读取失败（${r.status}）` : "连不上服务器"); return; }
+      lists[pre] = (r.data.files as DataFile[] | undefined) ?? [];
+    }
+    groups.set(groupRules(lists));
+  })();
+  return (
+    <Grouped testID="rules">
+      <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.muted }}>团队做事依据的规则和记忆。这里只读，内容由团队在工作中维护。</Text>
+      <If when={groups()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: error() ? colors.danger : colors.faint }}>{error() || "读取中…"}</Text>}>
+        {(gs) => (
+          <Each of={gs()} key={(g) => g.key}>
+            {(g) => (
+              <Section title={g().title} hint={g().hint} testID={`rules-${g().key}`}>
+                <If when={g().items.length} else={<SetRow first label="暂无内容" disabled />}>
+                  <Each of={g().items} key={(it) => it.path}>
+                    {(it, i) => (
+                      <SetRow first={i() === 0} label={it().title} value={it().detail} chevron onPress={() => props.onOpen(it().path)} testID={`rule-${it().path}`} />
+                    )}
+                  </Each>
+                </If>
+              </Section>
+            )}
+          </Each>
+        )}
+      </If>
+    </Grouped>
+  );
+}
+
+/** One rules or memory file, rendered as markdown. Read-only. */
+function RuleDoc(props: { hub: Hub; path: string; wide: boolean }) {
+  const text = signal<string | null>(null);
+  const error = signal("");
+  void props.hub.api("GET", `/api/files/read?path=${encodeURIComponent(props.path)}`).then((r) => {
+    if (r.ok && typeof r.data.content === "string") text.set(stripFrontMatter(r.data.content));
+    else error.set(r.status === 404 ? "这个文件已经不在了。" : r.status ? `读取失败（${r.status}）` : "连不上服务器");
+  });
+  return (
+    <Scroll testID="rule-doc" style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>
+        <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{props.path}</Text>
+        <If when={text() !== null} else={<Text style={{ fontSize: 14, color: error() ? colors.danger : colors.faint }}>{error() || "读取中…"}</Text>}>
+          <If when={(text() ?? "").trim()} else={<Text style={{ fontSize: 14, color: colors.faint }}>（空文件）</Text>}>
+            <View selectable><Rich text={text() ?? ""} /></View>
+          </If>
+        </If>
+      </View>
+    </Scroll>
+  );
+}
+
 // ---------------------------------------------------------------- keyboard help
 
 const SHORTCUTS: [string, string][] = [
@@ -1961,7 +2039,9 @@ type Route =
   | { name: "host"; host: string }
   | { name: "notify" }
   | { name: "member"; id: string }
-  | { name: "routine"; routine: string };
+  | { name: "routine"; routine: string }
+  | { name: "rules" }
+  | { name: "doc"; path: string };
 const CHANNEL: Route = { name: "channel" };
 
 function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => void; onDisconnect: () => void }) {
@@ -2238,6 +2318,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const c = choicesOf(e)[n];
     if (c) answer(e.ref!, c);
   }
+  /** 团队规则与记忆: from the sidebar in place; from settings on top (back returns to settings). */
+  const openRules = (fromSettings = false) => {
+    if (fromSettings) { drawer.set(false); nav.push({ name: "rules" }); }
+    else show({ name: "rules" });
+  };
   const openTeam = () => {
     if (untracked(top).name === "team") { drawer.set(false); nav.popToRoot(); }
     else show({ name: "team" });
@@ -2294,6 +2379,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       machine={() => { const t = top(); return t.name === "host" ? t.host : null; }}
       onMachine={openHost}
       onSettings={openTeam}
+      rules={() => { const n = top().name; return n === "rules" || n === "doc"; }}
+      onRules={() => openRules()}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
@@ -2624,10 +2711,12 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "notify": return "通知";
       case "member": return r.id;
       case "routine": return r.routine;
+      case "rules": return "团队规则与记忆";
+      case "doc": return r.path.split("/").pop()!.replace(/\.md$/i, "");
     }
   };
   /** The back button's label, the page below's short name. */
-  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : titleOf(r));
+  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : r.name === "rules" ? "规则与记忆" : titleOf(r));
   const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
   const connPill = () => (
     <View
@@ -2701,12 +2790,14 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             when={wide()}
             else={<PhoneSettings hub={hub} push={push} settings={settings} onOpen={(x) => nav.push(x)} onDisconnect={props.onDisconnect} />}
           >
-            <TeamSettings hub={hub} push={push} settings={settings} wide={wide()} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
+            <TeamSettings hub={hub} push={push} settings={settings} wide={wide()} onRules={() => openRules(true)} onConnection={props.onConnection} onDisconnect={props.onDisconnect} />
           </If>
         );
       case "notify": return <PhoneNotify push={push} settings={settings} />;
       case "member": return <PhoneMember id={r.id} settings={settings} />;
       case "routine": return <PhoneRoutine name={r.routine} settings={settings} />;
+      case "rules": return <RulesList hub={hub} onOpen={(path) => nav.push({ name: "doc", path })} />;
+      case "doc": return <RuleDoc hub={hub} path={r.path} wide={wide()} />;
     }
   };
 
