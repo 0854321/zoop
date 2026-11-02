@@ -2795,22 +2795,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     >
                       <Icon name="image" size={18} tint={colors.muted} />
                     </View>
-                    <If when={!touch && wide()}>
-                      <Kbd k="Enter" />
-                      <Text style={{ fontSize: 13, color: colors.faint }}>发送</Text>
-                      <Kbd k="Shift+Enter" />
-                      <Text style={{ fontSize: 13, color: colors.faint }}>换行</Text>
-                      <View
-                        role="button"
-                        accessibilityLabel="快捷键"
-                        onPress={() => help.set(true)}
-                        hoverStyle={hovered()}
-                        style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 28, paddingHorizontal: 6, borderRadius: 6, marginLeft: 4 }}
-                      >
-                        <Kbd k="?" />
-                        <Text style={{ fontSize: 13, color: colors.faint }}>全部快捷键</Text>
-                      </View>
-                    </If>
                   </View>
                   <View
                     testID="send"
