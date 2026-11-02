@@ -29,16 +29,16 @@
       "borderColor": "rgba(0,0,0,0.5)"
     },
     "light": {
-      "backgroundColor": "#c4ec6a",
-      "backgroundImage": "linear-gradient(180deg, #c4ec6a 0%, #c4ec6a 100%)",
-      "boxShadow": "inset 0 0 0 1px rgba(255,255,255,0.22), inset 0 1px 1px rgba(255,255,255,0.35), 0 1px 1px rgba(0,0,0,0.12)",
-      "borderColor": "rgba(40,60,0,0.55)"
+      "backgroundColor": "#f5f5f5",
+      "backgroundImage": "linear-gradient(180deg, #f5f5f5 0%, #f5f5f5 100%)",
+      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.5), 0 1px 1px rgba(0,0,0,0.2)",
+      "borderColor": "rgba(255,255,255,0.6)"
     },
     "accent": {
-      "backgroundColor": "#c4ec6a",
-      "backgroundImage": "linear-gradient(180deg, #c4ec6a 0%, #c4ec6a 100%)",
-      "boxShadow": "inset 0 0 0 1px rgba(255,255,255,0.22), inset 0 1px 1px rgba(255,255,255,0.35), 0 1px 1px rgba(0,0,0,0.12)",
-      "borderColor": "rgba(40,60,0,0.55)"
+      "backgroundColor": "#f5f5f5",
+      "backgroundImage": "linear-gradient(180deg, #f5f5f5 0%, #f5f5f5 100%)",
+      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.5), 0 1px 1px rgba(0,0,0,0.2)",
+      "borderColor": "rgba(255,255,255,0.6)"
     },
     "track": {
       "boxShadow": "inset 0 1px 1px rgba(0,0,0,0.35)",
@@ -106,16 +106,16 @@
       "borderColor": "#c4c4bc"
     },
     "light": {
-      "backgroundColor": "#c6ef6a",
-      "backgroundImage": "linear-gradient(180deg, #c6ef6a 0%, #c6ef6a 100%)",
-      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 0 rgba(60,90,0,0.12), 0 1px 0 rgba(60,90,0,0.14)",
-      "borderColor": "#9cc43a"
+      "backgroundColor": "#111111",
+      "backgroundImage": "linear-gradient(180deg, #111111 0%, #111111 100%)",
+      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 1px rgba(0,0,0,0.18)",
+      "borderColor": "#000000"
     },
     "accent": {
-      "backgroundColor": "#c6ef6a",
-      "backgroundImage": "linear-gradient(180deg, #c6ef6a 0%, #c6ef6a 100%)",
-      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 0 rgba(60,90,0,0.12), 0 1px 0 rgba(60,90,0,0.14)",
-      "borderColor": "#9cc43a"
+      "backgroundColor": "#111111",
+      "backgroundImage": "linear-gradient(180deg, #111111 0%, #111111 100%)",
+      "boxShadow": "inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 1px rgba(0,0,0,0.18)",
+      "borderColor": "#000000"
     },
     "track": {
       "boxShadow": "inset 0 1px 1px rgba(20,20,10,0.05)",

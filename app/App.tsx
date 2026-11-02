@@ -138,7 +138,7 @@ async function loadConfig(): Promise<Boot> {
   let url = (await Storage.getItem(KEYS.url)) ?? "";
   const token = (await Storage.getItem(KEYS.token)) ?? "";
   if (!url && page.origin) url = page.origin;
-  const suggested = url || page.origin || "http://localhost:8787";
+  const suggested = url || page.origin || "";
   const email = (await Storage.getItem(KEYS.email)) ?? "";
   return { config: url && token ? { url: normalizeUrl(url), token } : null, suggested, served: !!page.origin, email, ref: page.ref ?? null };
 }
@@ -407,7 +407,7 @@ function Mark(props: { size?: number }) {
   const s = props.size ?? 24;
   return (
     <View style={{ width: s, height: s, borderRadius: s * 0.28, backgroundColor: colors.text, alignItems: "center", justifyContent: "center" }}>
-      <View style={{ width: s * 0.38, height: s * 0.38, borderRadius: s, backgroundColor: colors.accentFill }} />
+      <View style={{ width: s * 0.38, height: s * 0.38, borderRadius: s, backgroundColor: colors.surface }} />
     </View>
   );
 }
@@ -467,7 +467,7 @@ function Avatar(props: { from: string }) {
       }}
     >
       <If when={hubbed} else={<Text style={{ fontSize: 13, fontWeight: "600", color: colors.muted }}>{initials(props.from)}</Text>}>
-        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.accentFill }} />
+        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.surface }} />
       </If>
     </View>
   );
@@ -2016,7 +2016,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
                       </View>
                     }
                   >
-                    <Field label="服务器地址" value={url()} onChange={(v) => url.set(v)} onSubmit={sendCode} placeholder="http://localhost:8787" keyboardType="url" testID="url" hint="hub 所在机器的地址和端口，例如 http://192.168.1.10:8787" />
+                    <Field label="服务器地址" value={url()} onChange={(v) => url.set(v)} onSubmit={sendCode} placeholder="https://noop.<你的账号>.workers.dev" keyboardType="url" testID="url" hint="你的 noop 地址：安装完成时显示，也可以在主机上运行 noop status --brief 查看" />
                   </If>
                 </>
               }
@@ -2107,7 +2107,7 @@ function App() {
   Scrollbar.setTheme(scrollbarTheme);
   const ready = signal(false);
   const config = signal<Config | null>(null);
-  const url = signal("http://localhost:8787");
+  const url = signal("");
   const served = signal(false);
   const email = signal("");
   const notice = signal("");
