@@ -656,10 +656,12 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] cancel ${tid}`);
     return "cancelled";
   }));
-  if (isPrimary(cfg, host)) startServer(cfg, async (text) => {
-    // Same work as an open task? Add the message to it instead of opening a duplicate.
+  if (isPrimary(cfg, host)) startServer(cfg, async (text, reply) => {
+    // Same work as an open task? Add the message to it instead of opening a duplicate. A reply names the task itself.
     const chat = recentChat(text);
-    const { same, follows } = await relatedTask(text, cfg, chat).catch(() => ({ same: null, follows: null }));
+    const { same, follows } = reply
+      ? (["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${reply}.md`))) ? { same: reply, follows: null } : { same: null, follows: reply })
+      : await relatedTask(text, cfg, chat).catch(() => ({ same: null, follows: null }));
     const title = same ? await appendFollowUp(same, text) : "";
     if (same && title) return { id: same, title };
     return locked(async () => {
@@ -668,8 +670,9 @@ async function daemon(cfg: Cfg) {
     // channel's recent conversation and the task it most likely continues (finished tasks included).
     const prev = follows;
     const prevFile = prev ? ["done", "failed", "rejected", "blocked", "inbox", "active", "waiting"].map((d) => P("tasks", d, `${prev}.md`)).find(existsSync) : undefined;
-    const context = chat.length
-      ? `\n\n## The channel just before this message\nThe owner writes tersely: words like "this", "不行", "这个细节", "以后都这样" refer to what was just said here.\n\n${chat.map((l) => `- ${l}`).join("\n")}\n` +
+    const context = chat.length || reply
+      ? (reply ? `\n\nThe owner wrote this as a reply to the team's message about ${reply}.` : "") +
+        `\n\n## The channel just before this message\nThe owner writes tersely: words like "this", "不行", "这个细节", "以后都这样" refer to what was just said here.\n\n${chat.map((l) => `- ${l}`).join("\n")}\n` +
         (prevFile ? `\nThis continues ${prev} (${prevFile.split("/").slice(-2, -1)[0]}): read tasks/${prevFile.split("/").slice(-2).join("/")} for what was done and how. If the owner is correcting that result, fix it; if they say to remember something ("记录下来", "以后都这样"), write it as a durable rule/memory for the agent and kind of work it concerns, not just in this task.\n` : "")
       : "";
     const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}${context}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,

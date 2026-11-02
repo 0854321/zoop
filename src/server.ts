@@ -32,7 +32,8 @@ const sockets = new Set<ServerWebSocket<unknown>>();
 type Inbound = { id: string; answer: string; source: string };
 const inbound: Inbound[] = [];
 /** The owner's chat request becomes a task: a new one, or (with its title) the open task it continues. */
-type OwnerTask = (text: string) => Promise<{ id: string; title?: string; follows?: string }>;
+/** A chat message becomes work; `reply` is the task whose message the owner replied to ("T-0125"). */
+type OwnerTask = (text: string, reply?: string) => Promise<{ id: string; title?: string; follows?: string }>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -341,7 +342,15 @@ export async function handleOwnerMessage(
   }
   const m = text.match(ID);
   const id = m?.[1] ?? (reply_to && /^[DLP]-[A-Z]?\d{4}$/.test(reply_to) ? reply_to : null);
-  if (id) {
+  // a reply to an agent's message about a task: it goes to that task, whatever came just before
+  const replyTask = !id && reply_to && /^T-\d{4,}$/.test(reply_to) ? reply_to : undefined;
+  if (replyTask && ownerTask) {
+    const { id: tid, title } = await ownerTask(text, replyTask);
+    followUp = { tid, at: Date.now() };
+    appendEvent(title
+      ? { from: "hub", kind: "system", text: `收到，已补充到 ${tid}「${title}」，接着处理。`, ref: tid }
+      : { from: "hub", kind: "system", text: `收到，接着 ${replyTask} 处理（${tid}）。`, ref: tid });
+  } else if (id) {
     inbound.push({ id, answer: (m ? m[2] : text).trim(), source: "chat" });
     if (id.startsWith("D-")) lastAnswer = { id, at: Date.now() };
   } else if (!noAmend && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS) {

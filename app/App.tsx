@@ -521,6 +521,8 @@ function hubMarkdown(text: string): string {
 
 /** Texts inside a pressable chip: a pointer, not the I-beam selectable texts force (per view on Linux). */
 const chipText = { cursor: "pointer", userSelect: "none" } as const;
+/** A message's first line, without markdown marks, for a one-line quote. */
+const firstLine = (t: string) => (t.split("\n").find((l) => l.trim()) ?? "").replace(/^\s*(#+|>)\s*/, "").replace(/[*_`]/g, "").trim().slice(0, 80);
 const chipFrame: ViewStyle = {
   cursor: "pointer", verticalAlign: "middle", flexDirection: "row", alignItems: "center", gap: 5, marginHorizontal: 2, height: 20,
   borderWidth: 1, borderColor: colors.border, backgroundColor: alpha(colors.text, 0.05),
@@ -771,7 +773,10 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
   const e = props.event;
   // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
   const ref = e.ref ?? e.text.match(/^([DLP]-[A-Z]?\d{4}) \S/)?.[1];
-  const asked = () => (ref ? askLine(props.hub.events().find((x) => x.ref === ref && isAsk(x))?.text ?? "") || (props.hub.status()?.decisions.find((d) => d.id === ref)?.question ?? "") : "");
+  // a reply to an agent's message about a task quotes that message (the last one about it before this)
+  const said = () => [...props.hub.events()].reverse().find((x) => x.ref === ref && x.ts <= e.ts && x.kind !== "owner" && !isHub(x.from));
+  const asked = () => (ref ? askLine(props.hub.events().find((x) => x.ref === ref && isAsk(x))?.text ?? "") || (props.hub.status()?.decisions.find((d) => d.id === ref)?.question ?? "")
+    || (/^T-/.test(ref) && said() ? `${displayName(said()!.from)}：${firstLine(said()!.text)}` : "") : "");
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
@@ -843,11 +848,14 @@ function Message(props: {
   /** The pending ask the keyboard acts on. */
   target: () => string | null;
   onAnswer: (ref: string, choice: string) => void;
-  onReply: (ref: string) => void;
+  onReply: (ref: string, note?: string) => void;
   cardRef?: (r: ViewRef) => void;
 }) {
   const e = props.event;
   const ask = isAsk(e);
+  // an agent's message about a task can be replied to: the reply goes to that task
+  const replyable = !ask && !isHub(e.from) && !!e.ref && /^T-\d{4,}$/.test(e.ref);
+  const over = signal(false);
   const tag = TAGS[e.kind];
   const body = (
     <View selectable style={{ gap: 10 }}>
@@ -870,13 +878,32 @@ function Message(props: {
       </View>
     );
   return (
-    <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} ref={(r) => props.cardRef?.(r)}>
+    <View
+      style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }}
+      ref={(r) => props.cardRef?.(r)}
+      onMouseEnter={replyable ? () => over.set(true) : undefined}
+      onMouseLeave={replyable ? () => over.set(false) : undefined}
+    >
       <Avatar from={e.from} />
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
           <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>{displayName(e.from)}</Text>
           <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
           {tag && !ask ? <Badge label={tag} /> : null}
+          <If when={replyable}>
+            <View style={{ flex: 1 }} />
+            <View
+              role="button"
+              testID={`reply-${e.id}`}
+              accessibilityLabel={`回复 ${displayName(e.from)}`}
+              onPress={() => props.onReply(e.ref!, `${displayName(e.from)}：${firstLine(e.text)}`)}
+              hoverStyle={hovered()}
+              style={{ flexDirection: "row", alignItems: "center", gap: 5, height: 24, paddingHorizontal: 8, borderRadius: 6, opacity: touch || over() ? 1 : 0 }}
+            >
+              <Icon name="reply" size={13} tint={colors.muted} />
+              <Text style={{ fontSize: 13, color: colors.muted }}>回复</Text>
+            </View>
+          </If>
         </View>
         {ask ? (
           <View
@@ -2714,6 +2741,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   effect(() => { if (onChannel() && !jumping) { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
   const replyTo = signal<string | null>(null);
+  /** What the reply answers, for the chip ("Kai：nsh #812 主要修的是…"); none for a decision (its id says it). */
+  const replyNote = signal<string | null>(null);
   const focused = signal(false);
   const inputHeight = signal(28);
   const outbox = signal<Outgoing[]>([]);
@@ -2774,7 +2803,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     toEnd(true);
   };
 
-  const reply = (ref: string) => {
+  const reply = (ref: string, note?: string) => {
+    replyNote.set(note ?? null);
     replyTo.set(ref);
     if (!untracked(onChannel)) nav.popToRoot();
     composer?.focus();
@@ -2797,6 +2827,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     outbox.update((list) => list.filter((x) => x.id !== o.id));
     if (!/^[DLP]-[A-Z]?\d{4} \S+$/.test(o.text) || o.ref || o.files.length) {
       draft.set(o.text);
+      replyNote.set(null);
       replyTo.set(o.ref);
       attachments.update((a) => [...o.files, ...a]);
       composer?.focus();
@@ -3365,8 +3396,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               >
                 <If when={replyTo()}>
                   {(ref) => (
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", height: 30, paddingLeft: 10, paddingRight: 4, borderRadius: 8, backgroundColor: tints.accent }}>
-                      <Text style={{ fontSize: 14, fontWeight: "500", color: colors.accent }}>回复 {ref()}</Text>
+                    <View testID="reply-chip" style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", maxWidth: "100%", height: 30, paddingLeft: 10, paddingRight: 4, borderRadius: 8, backgroundColor: tints.accent }}>
+                      <Text style={{ ...chipText, flexShrink: 1, numberOfLines: 1, fontSize: 14, fontWeight: "500", color: colors.accent }}>{replyNote() ? `回复 ${replyNote()}` : `回复 ${ref()}`}</Text>
                       <View
                         onPress={() => replyTo.set(null)}
                         role="button"

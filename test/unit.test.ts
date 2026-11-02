@@ -178,3 +178,13 @@ test("pickTask: a task no machine here can run (needs another OS) never holds ba
   if (picked === null && !Bun.which("claude") && !Bun.which("codex")) return; // no AI CLI here: nothing is pickable
   expect(picked).toContain("T-9002");
 });
+
+test("a reply to an agent's message goes to that message's task, not to the last answered decision", async () => {
+  const { handleOwnerMessage, setOwnerTask, feed } = await import("../src/server");
+  const calls: [string, string | undefined][] = [];
+  setOwnerTask(async (text, reply) => { calls.push([text, reply]); return { id: "T-0200", title: "" }; });
+  await handleOwnerMessage("D-0001 A"); // just answered a decision: a plain message right after would amend it
+  await handleOwnerMessage("为何我看图片不清晰呢", "T-0125");
+  expect(calls).toEqual([["为何我看图片不清晰呢", "T-0125"]]);
+  expect(feed("", 50).at(-1)?.text).toBe("收到，接着 T-0125 处理（T-0200）。");
+});

@@ -34,6 +34,7 @@ export type IconName =
   | "minus"
   | "arrow-up"
   | "arrow-down"
+  | "reply"
   | "play"
   | "pause"
   | "search"
@@ -405,6 +406,10 @@ const glyphs: Record<IconName, Draw> = {
   "arrow-down": (c) => {
     line(c, [10, 4, 10, 16]);
     line(c, [5, 11, 10, 16, 15, 11]);
+  },
+  reply: (c) => {
+    line(c, [8, 5, 4, 9, 8, 13]);
+    line(c, [4, 9, 11, 9, 14, 10, 15.5, 12.5, 16, 15.5]);
   },
   play: (c) => {
     c.beginPath();
