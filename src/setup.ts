@@ -165,7 +165,7 @@ const LABEL = SERVICE === "agent-hub" ? "com.agent-hub.daemon" : "dev.noop.daemo
 export async function install() {
   const bun = Bun.which("bun") ?? join(homedir(), ".bun/bin/bun");
   const cli = join(CODE, "src", "cli.ts");
-  const path = [join(homedir(), ".bun/bin"), join(homedir(), ".local/bin"), join(homedir(), ".local/share/mise/shims"),
+  const path = [join(homedir(), ".bun/bin"), join(homedir(), ".local/bin"), join(homedir(), ".cargo/bin"), join(homedir(), "go/bin"), join(homedir(), ".local/share/mise/shims"),
     join(homedir(), ".local/share/mise/command-wrappers/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":");
   if (process.platform === "linux") {
     const unit = join(homedir(), `.config/systemd/user/${SERVICE}.service`);
