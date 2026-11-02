@@ -405,8 +405,8 @@ function Btn(props: {
   );
 }
 
-function Dot(props: { tone: "on" | "run" | "wait" | "off" | "bad" }) {
-  const color = () => ({ on: colors.up, run: colors.up, wait: colors.warn, off: colors.faint, bad: colors.danger })[props.tone];
+function Dot(props: { tone: "on" | "run" | "queue" | "wait" | "off" | "bad" }) {
+  const color = () => ({ on: colors.up, run: colors.up, queue: colors.info, wait: colors.warn, off: colors.faint, bad: colors.danger })[props.tone];
   return <View style={{ width: 8, height: 8, borderRadius: 4, flexShrink: 0, backgroundColor: color() }} />;
 }
 
@@ -751,12 +751,12 @@ function Message(props: {
 }
 
 /** A task's state as the sidebar's dot: only what needs attention gets a color. */
-const TONE: Record<string, "on" | "run" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "off", waiting: "off" };
+const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { active: "run", blocked: "wait", failed: "bad", done: "off", inbox: "queue", waiting: "wait" };
 
 /** A task's state: its label, color and mark. */
 const STATE_OF = (): Record<string, [string, string, string]> => ({
-  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.muted, "○"], waiting: ["等子任务", colors.muted, "○"],
-  blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.up, "✓"],
+  active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"],
+  blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.faint, "✓"],
 });
 
 /** A progress step's icon and color. */
@@ -831,7 +831,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                   <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
                     <Text style={{ width: 44, fontSize: 13.5, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
                     <View style={{ width: 12, height: 21, alignItems: "center", justifyContent: "center" }}>
-                      <Dot tone={st().kind === "done" ? "on" : st().kind === "fail" ? "bad" : st().kind === "decision" ? "wait" : "off"} />
+                      <Dot tone={st().kind === "done" ? "off" : st().kind === "fail" ? "bad" : st().kind === "decision" ? "wait" : "off"} />
                     </View>
                     <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.muted }}>{st().text}</Text>
                   </View>
