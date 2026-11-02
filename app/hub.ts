@@ -197,7 +197,7 @@ export type Autonomy = "onboarding" | "assisted" | "autonomous" | (string & {});
 export type SettingsView = {
   current: Record<string, unknown>;
   effective: {
-    agents: { id: string; clis: string[]; autonomy: Autonomy }[];
+    agents: { id: string; title?: string; about?: string; clis: string[]; autonomy: Autonomy }[];
     autonomy: Autonomy;
     routines: { name: string; every: string; agent: string; enabled: boolean }[];
     max_parallel: number | null;
@@ -236,7 +236,7 @@ export type Command = { name: string; text: string };
 export type CommandItem = { id: string; name: string; detail: string; action?: "update-fleet"; text?: string };
 
 export const BUILTIN_COMMANDS: CommandItem[] = [
-  { id: "builtin:update-fleet", name: "更新所有机器", detail: "让所有机器拉取最新的 noop 代码并重启，主控机同时重新发布线上", action: "update-fleet" },
+  { id: "builtin:update-fleet", name: "更新所有机器", detail: "所有机器拉取最新代码并重启", action: "update-fleet" },
 ];
 
 /** The owner's saved commands, as settings hold them (anything malformed is left out). */

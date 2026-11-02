@@ -27,7 +27,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ViewStyle } from "nsh";
-import { AlertDialog, ContextMenu, Dialog, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import {
   alpha,
@@ -97,6 +97,7 @@ import {
   type CommandItem,
   commandItems,
   savedCommands,
+  BUILTIN_COMMANDS,
   slashQuery,
 } from "./hub";
 
@@ -761,20 +762,22 @@ function askLine(text: string): string {
 
 function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
-  const asked = () => (e.ref ? askLine(props.hub.events().find((x) => x.ref === e.ref && isAsk(x))?.text ?? "") : "");
+  // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
+  const ref = e.ref ?? e.text.match(/^([DLP]-[A-Z]?\d{4}) \S/)?.[1];
+  const asked = () => (ref ? askLine(props.hub.events().find((x) => x.ref === ref && isAsk(x))?.text ?? "") || (props.hub.status()?.decisions.find((d) => d.id === ref)?.question ?? "") : "");
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
         {/* what this answers, quoted above the bubble (press: back to the card) */}
-        <If when={e.ref}>
+        <If when={ref}>
           <View
             role="link"
-            testID={`reply-to-${e.ref}`}
-            onPress={() => props.onRef?.(e.ref!)}
+            testID={`reply-to-${ref}`}
+            onPress={() => props.onRef?.(ref!)}
             hoverStyle={{ opacity: 1 }}
             style={{ cursor: "pointer", opacity: 0.85, flexDirection: "row", alignItems: "center", gap: 6, maxWidth: "100%", paddingLeft: 8, paddingRight: 4, borderLeftWidth: 2, borderLeftColor: colors.fieldBorder }}
           >
-            <Text style={{ ...chipText, fontFamily: MONO, fontSize: 12, color: colors.muted }}>{e.ref}</Text>
+            <Text style={{ ...chipText, fontFamily: MONO, fontSize: 12, color: colors.muted }}>{ref}</Text>
             <If when={asked()}>
               <Text style={{ ...chipText, flexShrink: 1, numberOfLines: 1, fontSize: 13, color: colors.faint }}>{asked()}</Text>
             </If>
@@ -1410,6 +1413,66 @@ function Chip(props: { label: string; on: boolean; onPress: () => void; testID?:
 }
 
 /** A settings section: the gallery's Card (a title above one flat surface). */
+const AUTONOMY_DETAIL: Record<string, string> = {
+  onboarding: "大多数事先问你，从你的回答里学习",
+  assisted: "常规的事自己做，重要的先问你",
+  autonomous: "自己拿主意，只有高风险的事才问你",
+};
+const cliDetail = (c: string[]) =>
+  c.length === 1 ? `只用 ${cliLabel([c[0]!]).replace(/^仅\s*/, "")}` : `先用 ${cliLabel([c[0]!]).replace(/^仅\s*/, "")}，失败或额度用尽时换 ${cliLabel([c[1]!]).replace(/^仅\s*/, "")}`;
+
+type DropdownOption = { id: string; label: string; detail?: string; testID?: string };
+
+/** A labelled value that opens a menu of its choices (each with a line saying what it means). */
+function Dropdown(props: { label: string; value: string; options: DropdownOption[]; selected: string; onPick: (id: string) => void; testID?: string }) {
+  return (
+    <Menu
+      align="end"
+      offset={6}
+      margin={8}
+      popupStyle={{ minWidth: 260, maxWidth: 340, padding: 4, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}
+      trigger={
+        <View
+          role="button"
+          testID={props.testID}
+          accessibilityLabel={`${props.label}：${props.value}`}
+          hoverStyle={hovered()}
+          style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingLeft: 11, paddingRight: 9, borderRadius: radius.control, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}
+        >
+          <Text style={{ fontSize: 13, color: colors.faint }}>{props.label}</Text>
+          <Text style={{ fontSize: 14, fontWeight: "500", color: colors.text }}>{props.value}</Text>
+          <Icon name="chevron-down" size={12} tint={colors.muted} />
+        </View>
+      }
+    >
+      <Each of={props.options}>
+        {(o) => (
+          <MenuItem
+            testID={o().testID}
+            role="menuitemradio"
+            checked={o().id === props.selected}
+            onSelect={() => o().id !== props.selected && props.onPick(o().id)}
+            hoverStyle={hovered()}
+            style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 7, paddingHorizontal: 10, borderRadius: 6 }}
+          >
+            <View style={{ width: 14, paddingTop: 3 }}>
+              <If when={o().id === props.selected}>
+                <Icon name="check" size={13} tint={colors.text} />
+              </If>
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ fontSize: 14, fontWeight: "500", color: colors.text }}>{o().label}</Text>
+              <If when={o().detail}>
+                <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.muted }}>{o().detail}</Text>
+              </If>
+            </View>
+          </MenuItem>
+        )}
+      </Each>
+    </Menu>
+  );
+}
+
 function Group(props: { title: string; hint?: string; children: JSX.Element }) {
   return (
     <View style={{ gap: 8 }}>
@@ -1596,10 +1659,26 @@ function createSettings(hub: Hub) {
     }
   }
   // the command being added in 常用指令 (kept here: the settings page may be laid out again while typing)
-  const commandDraft = { name: signal(""), text: signal("") };
-  return { view, error, saved, load, save, commandDraft };
+  /** The command editor: `editing` is undefined when closed, "" for a new command, else the name being edited. */
+  const commandDraft = { name: signal(""), text: signal(""), editing: signal<string | undefined>(undefined), note: signal("") };
+  /** The section the wide settings page shows (its sidebar picks it). */
+  const tab = signal<SettingsTab>("notify");
+  return { view, error, saved, load, save, commandDraft, tab };
 }
 type Settings = ReturnType<typeof createSettings>;
+
+/** The sections of the wide settings page, in its sidebar's order. */
+const SETTINGS_TABS = [
+  ["notify", "通知", "bell"],
+  ["members", "成员", "chat"],
+  ["routines", "例行任务", "play"],
+  ["parallel", "并行", "layers"],
+  ["commands", "常用指令", "terminal"],
+  ["version", "版本", "github"],
+  ["rules", "规则与记忆", "scroll"],
+  ["account", "账号与连接", "lock"],
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number][0];
 
 /** The wide (desktop, tablet, wide browser) settings page. */
 function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: boolean; onRules: () => void; onConnection: () => void; onDisconnect: () => void }) {
@@ -1609,59 +1688,84 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
   const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
   const chips: ViewStyle = { flexDirection: "row", flexWrap: "wrap", gap: 6 };
 
+  const tab = props.settings.tab;
+  const on = (k: SettingsTab) => tab() === k;
   return (
+    <View style={{ flex: 1, flexDirection: "row" }}>
+      <View testID="settings-nav" role="tablist" style={{ width: 208, gap: 2, paddingHorizontal: 10, paddingVertical: 20, borderRightWidth: 1, borderRightColor: colors.line }}>
+        <Each of={[...SETTINGS_TABS]}>
+          {(x) => (
+            <View
+              role="tab"
+              testID={`settings-tab-${x()[0]}`}
+              accessibilityLabel={x()[1]}
+              accessibilityState={{ selected: on(x()[0]) }}
+              onPress={() => tab.set(x()[0])}
+              hoverStyle={on(x()[0]) ? undefined : hovered()}
+              style={{ flexDirection: "row", alignItems: "center", gap: 10, height: 36, paddingHorizontal: 10, borderRadius: 8, backgroundColor: on(x()[0]) ? colors.raised : undefined }}
+            >
+              <Icon name={x()[2]} size={16} tint={on(x()[0]) ? colors.text : colors.muted} />
+              <Text style={{ fontSize: 14.5, fontWeight: on(x()[0]) ? "600" : "400", color: on(x()[0]) ? colors.text : colors.muted }}>{x()[1]}</Text>
+            </View>
+          )}
+        </Each>
+      </View>
     <Scroll style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 28, paddingHorizontal: props.wide ? 32 : 16, paddingTop: props.wide ? 28 : 18, paddingBottom: 48 }}>
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 12 }}>
-          <View style={{ flex: 1, gap: 6 }}>
-            <Text style={{ fontSize: 24, fontWeight: "600", color: colors.text, letterSpacing: -0.2 }}>团队设置</Text>
-            <Text style={{ fontSize: 15, lineHeight: 22, color: colors.muted }}>Claude Opus 做有挑战的活，Codex 做例行的活；随时可以在这里调整。</Text>
-          </View>
-          <Text style={{ fontSize: 13.5, color: error() ? colors.danger : colors.up }}>{error() || saved()}</Text>
-        </View>
-        <NotifySettings push={props.push} view={view()} save={save} wide={props.wide} />
+        <If when={error() || saved()}>
+          <Text testID="settings-note" style={{ alignSelf: "flex-end", fontSize: 13.5, color: error() ? colors.danger : colors.up }}>{error() || saved()}</Text>
+        </If>
+        <If when={on("notify")}>
+          <NotifySettings push={props.push} view={view()} save={save} wide={props.wide} />
+        </If>
+        <If when={on("members") || on("routines") || on("parallel")}>
         <If when={eff()} else={<Text style={{ fontSize: 14, color: colors.faint }}>{error() ? "" : "读取中…"}</Text>}>
           {(e) => (
             <View style={{ gap: 28 }}>
-              <Group title="成员" hint="模型：先用哪个、失败或额度用尽时换哪个；自主程度：多大的事需要先问你">
+              <If when={on("members")}>
+              <Group title="成员" hint="团队里的每个角色。模型决定由谁来干活，自主程度决定多大的事要先问你。">
                 <Each of={e().agents} key={(a) => a.id}>
                   {(a, i) => (
-                    <View style={{ ...row, borderTopWidth: i() === 0 ? 0 : 1 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <View testID={`member-${a().id}`} style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: i() === 0 ? 0 : 1, borderTopColor: colors.line }}>
+                      <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 12 }}>
                         <Avatar from={a().id} />
-                        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>{a().id}</Text>
+                        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                          <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+                            <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{a().title ?? a().id}</Text>
+                            <If when={a().title && a().title !== a().id}>
+                              <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint, numberOfLines: 1 }}>{a().id}</Text>
+                            </If>
+                          </View>
+                          <If when={a().about}>
+                            <Text testID={`member-about-${a().id}`} style={{ fontSize: 13.5, lineHeight: 19, color: colors.muted, numberOfLines: 2 }}>{a().about}</Text>
+                          </If>
+                        </View>
                       </View>
-                      <View style={props.wide ? { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 24, rowGap: 8 } : { gap: 8 }}>
-                        <View style={chips}>
-                          <Each of={view()!.options.clis}>
-                            {(c) => (
-                              <Chip
-                                testID={`cli-${a().id}-${cliKey(c())}`}
-                                label={cliLabel(c())}
-                                on={cliKey(c()) === cliKey(a().clis)}
-                                onPress={() => save(patches.clis(a().id, c()))}
-                              />
-                            )}
-                          </Each>
-                        </View>
-                        <View style={chips}>
-                          <Each of={view()!.options.autonomy}>
-                            {(l) => (
-                              <Chip
-                                testID={`autonomy-${a().id}-${l()}`}
-                                label={autonomyLabel(l())}
-                                on={l() === a().autonomy}
-                                onPress={() => save(patches.autonomy(a().id, l()))}
-                              />
-                            )}
-                          </Each>
-                        </View>
+                      <View style={{ flexDirection: "row", gap: 8, paddingLeft: props.wide ? 0 : 52 }}>
+                        <Dropdown
+                          testID={`cli-${a().id}`}
+                          label="模型"
+                          value={cliLabel(a().clis)}
+                          options={view()!.options.clis.map((c) => ({ id: cliKey(c), label: cliLabel(c), detail: cliDetail(c), testID: `cli-${a().id}-${cliKey(c)}` }))}
+                          selected={cliKey(a().clis)}
+                          onPick={(k) => { const c = view()!.options.clis.find((x) => cliKey(x) === k); if (c) save(patches.clis(a().id, c)); }}
+                        />
+                        <Dropdown
+                          testID={`autonomy-${a().id}`}
+                          label="自主程度"
+                          value={autonomyLabel(a().autonomy)}
+                          options={view()!.options.autonomy.map((l) => ({ id: l, label: autonomyLabel(l), detail: AUTONOMY_DETAIL[l], testID: `autonomy-${a().id}-${l}` }))}
+                          selected={a().autonomy}
+                          onPick={(l) => save(patches.autonomy(a().id, l))}
+                        />
                       </View>
                     </View>
                   )}
                 </Each>
               </Group>
+              </If>
 
+              <If when={on("routines")}>
               <Group title="例行任务" hint="开关与运行间隔">
                 <Each of={e().routines} key={(r) => r.name}>
                   {(r, i) => (
@@ -1692,7 +1796,9 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
                   )}
                 </Each>
               </Group>
+              </If>
 
+              <If when={on("parallel")}>
               <Group title="并行">
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
                   <Text style={{ flex: 1, fontSize: 15.5, color: colors.text }}>每台机器同时运行的任务数</Text>
@@ -1703,18 +1809,27 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
                   <Chip label="+" on={false} testID="parallel-inc" accessibilityLabel="增加" onPress={() => save(patches.maxParallel(Math.min(32, (e().max_parallel ?? 2) + 1)))} />
                 </View>
               </Group>
+              </If>
             </View>
           )}
         </If>
+        </If>
+        <If when={on("commands")}>
         <Group title="常用指令" hint="在输入框里输入 / 选用。内置指令执行操作，你添加的指令把一段话发给团队。">
           <CommandRows settings={props.settings} />
         </Group>
+        </If>
+        <If when={on("version")}>
         <Group title="版本" hint="每台机器运行的代码。更新会让所有机器拉取最新代码，主控机同时重新发布线上。">
           <VersionRows hub={props.hub} />
         </Group>
+        </If>
+        <If when={on("rules")}>
         <Group title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
           <SetRow first label="查看规则与记忆" chevron onPress={props.onRules} testID="settings-rules" />
         </Group>
+        </If>
+        <If when={on("account")}>
         <Group title="账号与连接" hint="登录状态保存在这台设备上，下次打开自动连接。">
           <View style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
             <View style={{ flex: props.wide ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -1726,8 +1841,10 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
             </View>
           </View>
         </Group>
+        </If>
       </View>
     </Scroll>
+    </View>
   );
 }
 
@@ -1820,48 +1937,130 @@ async function updateAllMachines(hub: Hub) {
 function CommandRows(props: { settings: Settings }) {
   const { view, save } = props.settings;
   const saved = () => savedCommands(view());
-  const { name, text } = props.settings.commandDraft;
-  const add = () => {
-    const n = name().trim().replace(/^\//, ""), t = text().trim();
-    if (!n || !t) return;
-    const next: Command[] = [...saved().filter((c) => c.name !== n), { name: n, text: t }];
-    name.set(""); text.set("");
-    void save({ commands: next });
+  const { name, text, editing, note } = props.settings.commandDraft;
+  const open = (c?: Command) => {
+    name.set(c?.name ?? ""); text.set(c?.text ?? ""); note.set("");
+    editing.set(c?.name ?? "");
   };
-  const remove = (n: string) => void save({ commands: saved().filter((c) => c.name !== n) });
   return (
     <>
-      <SetRow first label="/更新所有机器" detail="内置：让所有机器拉取最新代码并重启" testID="command-row-builtin" />
+      <SetRow
+        first
+        label="/更新所有机器"
+        detail="让所有机器拉取最新代码并重启"
+        testID="command-row-builtin"
+        trailing={<Text style={{ fontSize: 12, color: colors.faint, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: colors.raised }}>内置</Text>}
+      />
       <Each of={saved()} key={(c) => c.name}>
         {(c) => (
-          <SetRow
-            label={`/${c().name}`}
-            detail={c().text}
+          <View
+            role="button"
             testID={`command-row-${c().name}`}
-            trailing={
-              <View
-                role="button"
-                testID={`command-delete-${c().name}`}
-                accessibilityLabel={`删除指令 ${c().name}`}
-                onPress={() => remove(c().name)}
-                hoverStyle={hovered()}
-                style={{ width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" }}
-              >
-                <Icon name="close" size={14} tint={colors.muted} />
+            accessibilityLabel={`编辑指令 ${c().name}`}
+            onPress={() => open(c())}
+            hoverStyle={hovered()}
+            class="active:bg-raised"
+          >
+            <Hairline />
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 16, paddingRight: 14, paddingVertical: 11 }}>
+              <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                <Text style={{ fontSize: 15.5, fontWeight: "500", color: colors.text, numberOfLines: 1 }}>/{c().name}</Text>
+                <Text style={{ fontSize: 13.5, lineHeight: 19, color: colors.muted, numberOfLines: 2 }}>{c().text}</Text>
               </View>
-            }
-          />
+              <Icon name="chevron" size={14} tint={colors.faint} />
+            </View>
+          </View>
         )}
       </Each>
-      <View style={{ gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
-        <Hairline />
-        <Field label="名称" value={name()} onChange={(v) => name.set(v)} placeholder="例如：日报" testID="command-name" />
-        <Field label="发给团队的话" value={text()} onChange={(v) => text.set(v)} onSubmit={add} placeholder="例如：把今天各项目的进展整理成日报发给我" testID="command-text" />
-        <View style={{ flexDirection: "row" }}>
-          <Btn label="添加指令" onPress={add} testID="command-add" />
+      <SetRow label="新建指令" tone="accent" leading={<Icon name="plus" size={16} tint={colors.info} />} onPress={() => open()} testID="command-new" />
+      <CommandEditor settings={props.settings} />
+    </>
+  );
+}
+
+/** New / edit / delete one saved command, in a dialog: a name and the words it sends (several lines welcome). */
+function CommandEditor(props: { settings: Settings }) {
+  const { view, save } = props.settings;
+  const { name, text, editing, note } = props.settings.commandDraft;
+  const isNew = () => editing() === "";
+  const close = () => editing.set(undefined);
+  const others = () => savedCommands(view()).filter((c) => c.name !== editing());
+  const clean = () => name().trim().replace(/^\//, "").replace(/\s+/g, "-");
+  const ok = () => !!clean() && !!text().trim();
+  const submit = async () => {
+    const n = clean(), t = text().trim();
+    if (!n) return note.set("给指令起个名字");
+    if (!t) return note.set("写下这条指令要发给团队的话");
+    if (BUILTIN_COMMANDS.some((b) => b.name === n)) return note.set(`「${n}」是内置指令的名字`);
+    if (others().some((c) => c.name === n)) return note.set(`已经有一条「/${n}」`);
+    const list = savedCommands(view());
+    const i = list.findIndex((c) => c.name === editing());
+    const next = i < 0 ? [...list, { name: n, text: t }] : list.map((c, j) => (j === i ? { name: n, text: t } : c));
+    close();
+    await save({ commands: next });
+  };
+  const remove = async () => {
+    const n = editing();
+    close();
+    await save({ commands: savedCommands(view()).filter((c) => c.name !== n) });
+  };
+  const focused = signal(false);
+  return (
+    <Dialog
+      testID="command-editor"
+      open={editing() !== undefined}
+      animation="fade"
+      onOpenChange={({ open }) => !open && close()}
+      backdropClass="bg-scrim"
+      style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16, pointerEvents: "box-none" }}
+    >
+      <View style={{ width: "100%", maxWidth: 560, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, overflow: "hidden" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 20, paddingRight: 10, height: 56, borderBottomWidth: 1, borderBottomColor: colors.line }}>
+          <Text style={{ flex: 1, fontSize: 17, fontWeight: "600", color: colors.text }}>{isNew() ? "新建指令" : "编辑指令"}</Text>
+          <ToolButton icon="close" label="关闭" shortcut="Esc" onPress={close} />
+        </View>
+        <View style={{ gap: 16, padding: 20 }}>
+          <Field label="名称" value={name()} onChange={(v) => { name.set(v); note.set(""); }} placeholder="例如：日报" testID="command-name" autoFocus={isNew()} hint={clean() ? `在输入框里输入 /${clean()} 选用` : "在输入框里输入 / 加名称选用"} />
+          <View style={{ gap: 7 }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: colors.text }}>发给团队的话</Text>
+            <Input
+              testID="command-text"
+              multiline
+              value={text()}
+              onChange={({ value }) => { text.set(value); note.set(""); }}
+              onFocus={() => focused.set(true)}
+              onBlur={() => focused.set(false)}
+              placeholder={"例如：把今天各项目的进展整理成日报发给我，\n按项目分段，每段先说结论。"}
+              class="placeholder:text-faint"
+              style={{
+                height: 140,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                borderRadius: radius.control,
+                borderWidth: 1,
+                borderColor: focused() ? colors.accent : colors.fieldBorder,
+                backgroundColor: colors.field,
+                fontSize: 15.5,
+                lineHeight: 23,
+                color: colors.text,
+                ...(focused() ? { outlineStyle: "solid", outlineWidth: 3, outlineColor: alpha(colors.accent, 0.12) } : {}),
+              }}
+            />
+          </View>
+          <If when={note()}>
+            <Text testID="command-note" style={{ fontSize: 13.5, color: colors.danger }}>{note()}</Text>
+          </If>
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 20, paddingBottom: 20 }}>
+          <If when={!isNew()}>
+            <Btn label="删除" kind="danger" icon="trash" onPress={() => void remove()} testID="command-delete" />
+          </If>
+          <View style={{ flex: 1 }} />
+          <Btn label="取消" kind="ghost" onPress={close} testID="command-cancel" />
+          <Btn label={isNew() ? "添加" : "保存"} kind="primary" disabled={!ok()} onPress={() => void submit()} testID="command-save" />
         </View>
       </View>
-    </>
+    </Dialog>
   );
 }
 
@@ -2294,6 +2493,66 @@ function RuleDoc(props: { hub: Hub; path: string; wide: boolean }) {
   );
 }
 
+// ---------------------------------------------------------------- commands ("/" in the composer)
+
+/** The commands a "/" draft matches, above the composer. While it shows, Up / Down (and Ctrl+P / Ctrl+N) move the
+ * pick, Tab or Return runs it, Escape closes the list (clearing the "/"). */
+function CommandList(props: {
+  items: CommandItem[];
+  selected: number;
+  touch: boolean;
+  onHover: (i: number) => void;
+  onMove: (delta: number) => void;
+  onRun: (c: CommandItem) => void;
+  onClose: () => void;
+  onManage: () => void;
+}) {
+  const run = () => { const c = props.items[props.selected]; if (c) props.onRun(c); };
+  keymap.bind(
+    { up: () => props.onMove(-1), down: () => props.onMove(1), "ctrl+p": () => props.onMove(-1), "ctrl+n": () => props.onMove(1), tab: run, escape: props.onClose },
+    { when: "always", repeat: true },
+  );
+  return (
+    <View
+      testID="commands"
+      role="menu"
+      accessibilityLabel="指令"
+      style={{ width: "100%", maxWidth: 480, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: 4, overflow: "hidden" }}
+    >
+      <Each of={props.items} key={(c) => c.id}>
+        {(c, i) => (
+          <View
+            testID={`command-${c().id}`}
+            role="menuitem"
+            accessibilityLabel={c().name}
+            accessibilityState={{ selected: i() === props.selected }}
+            onPress={() => props.onRun(c())}
+            onMouseEnter={() => props.onHover(i())}
+            style={{ flexDirection: "row", alignItems: "center", gap: 10, height: 34, paddingHorizontal: 10, borderRadius: 8, backgroundColor: i() === props.selected ? colors.raised : undefined }}
+          >
+            <Text style={{ flexShrink: 0, maxWidth: 180, fontSize: 14.5, fontWeight: "500", color: colors.text, numberOfLines: 1 }}>{`/${c().name}`}</Text>
+            <Text style={{ flex: 1, minWidth: 0, fontSize: 13, color: colors.faint, numberOfLines: 1 }}>{c().detail}</Text>
+            <If when={i() === props.selected && !props.touch}>
+              <Text style={{ fontSize: 12, color: colors.faint }}>↵</Text>
+            </If>
+          </View>
+        )}
+      </Each>
+      <If when={!props.items.length}>
+        <Text style={{ paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: colors.muted }}>没有匹配的指令</Text>
+      </If>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, height: 30, paddingHorizontal: 10, marginTop: 2, borderTopWidth: 1, borderTopColor: colors.line }}>
+        <If when={!props.touch}>
+          <Text style={{ flex: 1, fontSize: 12, color: colors.faint }}>↑↓ 选择 · ↵ 执行 · Esc 关闭</Text>
+        </If>
+        <View testID="manage-commands" role="button" onPress={props.onManage} style={{ marginLeft: props.touch ? 0 : undefined }}>
+          <Text style={{ fontSize: 12.5, color: colors.accent }}>管理…</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------- keyboard help
 
 const SHORTCUTS: [string, string][] = [
@@ -2505,7 +2764,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   }
   // Commands: a draft of "/<query>" lists the built-in and saved commands; Return runs the first one.
   const slash = () => slashQuery(draft());
-  const commands = () => { const q = slash(); return q == null ? [] : commandItems(settings.view(), q); };
+  const commands = () => { const q = slash(); return q == null ? [] : commandItems(settings.view(), q).slice(0, 8); };
+  /** The command Return runs: Up and Down move it, a new query starts it over at the first. */
+  const cmdSel = signal(0);
+  effect(() => { slash(); cmdSel.set(0); });
+  const pickedCommand = () => commands()[Math.min(cmdSel(), commands().length - 1)];
   effect(() => { if (slash() != null && !untracked(settings.view)) settings.load(); });
   function runCommand(c: CommandItem) {
     draft.set("");
@@ -2516,7 +2779,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   function submit() {
     if (speech() !== "off") stopDictation(true);
-    if (slash() != null && commands().length && !attachments().length) return runCommand(commands()[0]);
+    if (slash() != null && commands().length && !attachments().length) return runCommand(pickedCommand()!);
     const v = draft().trim();
     const files = attachments();
     if (!v && !files.length) return;
@@ -2988,43 +3251,16 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 </View>
               </If>
               <If when={slash() != null}>
-                <View
-                  testID="commands"
-                  role="menu"
-                  accessibilityLabel="指令"
-                  style={{ borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, paddingVertical: 6, overflow: "hidden" }}
-                >
-                  <Each of={commands().slice(0, 8)} key={(c) => c.id}>
-                    {(c, i) => (
-                      <View
-                        testID={`command-${c().id}`}
-                        role="menuitem"
-                        accessibilityLabel={c().name}
-                        onPress={() => runCommand(c())}
-                        hoverStyle={hovered()}
-                        style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 40, paddingHorizontal: 14, backgroundColor: i() === 0 ? colors.raised : undefined }}
-                      >
-                        <Text style={{ fontSize: 15, fontWeight: "500", color: colors.text }}>{`/${c().name}`}</Text>
-                        <Text style={{ flex: 1, fontSize: 13.5, color: colors.faint, numberOfLines: 1 }}>{c().detail}</Text>
-                        <If when={i() === 0 && !touch}>
-                          <Text style={{ fontSize: 12, color: colors.faint }}>↵</Text>
-                        </If>
-                      </View>
-                    )}
-                  </Each>
-                  <If when={!commands().length}>
-                    <Text style={{ paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: colors.muted }}>没有匹配的指令</Text>
-                  </If>
-                  <View
-                    testID="manage-commands"
-                    role="button"
-                    onPress={() => { draft.set(""); openTeam(); }}
-                    hoverStyle={hovered()}
-                    style={{ minHeight: 36, justifyContent: "center", paddingHorizontal: 14 }}
-                  >
-                    <Text style={{ fontSize: 13.5, color: colors.accent }}>管理常用指令…</Text>
-                  </View>
-                </View>
+                <CommandList
+                  items={commands()}
+                  selected={commands().indexOf(pickedCommand()!)}
+                  touch={touch}
+                  onHover={(i) => cmdSel.set(i)}
+                  onMove={(d) => { const n = untracked(commands).length; if (n) cmdSel.set((untracked(cmdSel) + d + n) % n); }}
+                  onRun={(c) => runCommand(c)}
+                  onClose={() => draft.set("")}
+                  onManage={() => { draft.set(""); openTeam(); }}
+                />
               </If>
               <View
                 style={{

@@ -169,13 +169,22 @@ export function status() {
 // ---------------------------------------------------------------- settings (UI-adjustable, shared via data repo)
 const SETTABLE = ["clis", "autonomy", "routines", "host", "idle", "judge", "resources", "notify_prefs", "commands"]; // whitelisted top-level keys
 
+/** What an agent is for, from its profile's first line: "# Name (中文名) — what it does". */
+export function agentRole(agent: string): { title?: string; about?: string } {
+  const p = P("agents", agent, "profile.md");
+  const head = existsSync(p) ? (readFileSync(p, "utf8").split("\n").find((l) => l.startsWith("# ")) ?? "") : "";
+  const m = head.match(/^#\s+(.+?)\s*(?:\(([^)]+)\))?\s*(?:[—–-]+\s*(.+))?$/);
+  if (!m) return {};
+  return { title: (m[2] ?? m[1]).trim(), about: m[3]?.trim() };
+}
+
 export function settingsView() {
   const cfg = loadConfig();
   const agents = readdirSync(P("agents"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   return {
     current: existsSync(P("settings.json")) ? JSON.parse(readFileSync(P("settings.json"), "utf8")) : {},
     effective: {
-      agents: agents.map((a) => ({ id: a, clis: allowedClis({ agent: a }, cfg), autonomy: cfg.autonomy?.agents?.[a] ?? cfg.autonomy?.level ?? "onboarding" })),
+      agents: agents.map((a) => ({ id: a, ...agentRole(a), clis: allowedClis({ agent: a }, cfg), autonomy: cfg.autonomy?.agents?.[a] ?? cfg.autonomy?.level ?? "onboarding" })),
       autonomy: cfg.autonomy?.level ?? "onboarding",
       routines: (cfg.routine ?? []).map((r: any) => ({ name: r.name, every: r.every, agent: r.agent, enabled: r.enabled !== false })),
       max_parallel: cfg.host?.max_parallel ?? null,

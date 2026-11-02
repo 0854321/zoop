@@ -153,6 +153,7 @@ describe("login", () => {
       network: { ...hub([]), ...auth(log), [`GET ${URL}/api/settings`]: { status: 500 } },
     });
     await app.press("id:settings");
+    await app.press("id:settings-tab-account");
     await app.press("id:logout");
     await app.waitFor("登录 noop");
     expect(log.logouts).toBe(1);
@@ -272,6 +273,7 @@ describe("channel", () => {
     await app.waitFor("id:rev-linux-box");
     expect(app.shows("c1cc085")).toBe(true);
     await app.press("id:settings");
+    await app.press("id:settings-tab-version");
     await app.waitFor("id:version-linux-box");
     app.onDialog((d) => (d.title === "更新所有机器？" ? "取消" : null));
     await app.press("id:update-fleet");
@@ -463,12 +465,17 @@ describe("team settings", () => {
       },
     });
     await app.press("id:settings");
-    await app.waitFor("仅 Claude");
+    await app.press("id:settings-tab-members");
+    await app.waitFor("id:cli-reporter");
+    await app.press("id:cli-reporter");
     await app.press("id:cli-reporter-claude");
     await app.waitUntil(() => puts.length === 1);
+    await app.press("id:autonomy-reporter");
     await app.press("id:autonomy-reporter-assisted");
+    await app.press("id:settings-tab-routines");
     await app.press("id:routine-triage-inbound");
     await app.press("id:every-triage-inbound-1h");
+    await app.press("id:settings-tab-parallel");
     await app.press("id:parallel-inc");
     await app.waitUntil(() => puts.length === 5);
     expect(puts).toEqual([
@@ -897,19 +904,57 @@ describe("commands", () => {
     expect(posts.length).toBe(1);
   });
 
-  test("settings adds and deletes saved commands", async () => {
+  test("the / list takes the keyboard: Down picks the next, Return runs it, Escape closes", async () => {
+    const posts: { text: string; reply_to?: string }[] = [], puts: unknown[] = [], updates = { n: 0 };
+    const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: server(posts, puts, updates) });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "/");
+    await app.waitFor("id:command-saved:0");
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("id:commands"));
+    expect(app.value("id:composer")).toBe("");
+    await app.type("id:composer", "/");
+    await app.waitFor("id:command-saved:0");
+    await app.keyboard.press("down");
+    await app.keyboard.press("mod+enter");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "把今天各项目的进展整理成日报发给我" });
+    expect(updates.n).toBe(0);
+  });
+
+  test("settings adds, edits and deletes saved commands in an editor", async () => {
     const posts: { text: string; reply_to?: string }[] = [], puts: unknown[] = [], updates = { n: 0 };
     const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: server(posts, puts, updates) });
     await app.press("id:settings");
+    await app.press("id:settings-tab-commands");
     await app.waitFor("id:command-row-日报");
-    await app.type("id:command-name", "/周报");
-    await app.type("id:command-text", "整理本周进展");
-    await app.press("id:command-add");
+    // new: a name taken by another command is refused
+    await app.press("id:command-new");
+    await app.waitFor("id:command-editor");
+    await app.type("id:command-name", "/日报");
+    await app.type("id:command-text", "整理本周进展\n按项目分段");
+    await app.press("id:command-save");
+    await app.waitFor("id:command-note");
+    expect(puts.length).toBe(0);
+    await app.clear("id:command-name");
+    await app.type("id:command-name", "周报");
+    await app.press("id:command-save");
     await app.waitUntil(() => puts.length === 1);
-    expect(puts[0]).toEqual({ commands: [{ name: "日报", text: "把今天各项目的进展整理成日报发给我" }, { name: "周报", text: "整理本周进展" }] });
-    await app.waitFor("id:command-row-周报");
-    await app.press("id:command-delete-日报");
+    expect(puts[0]).toEqual({ commands: [{ name: "日报", text: "把今天各项目的进展整理成日报发给我" }, { name: "周报", text: "整理本周进展\n按项目分段" }] });
+    await app.waitUntil(() => !app.shows("id:command-editor"));
+    // edit: renaming keeps its place
+    await app.press("id:command-row-日报");
+    expect(app.value("id:command-name")).toBe("日报");
+    await app.clear("id:command-name");
+    await app.type("id:command-name", "今日");
+    await app.press("id:command-save");
     await app.waitUntil(() => puts.length === 2);
-    expect(puts[1]).toEqual({ commands: [{ name: "周报", text: "整理本周进展" }] });
+    expect(puts[1]).toEqual({ commands: [{ name: "今日", text: "把今天各项目的进展整理成日报发给我" }, { name: "周报", text: "整理本周进展\n按项目分段" }] });
+    // delete
+    await app.waitFor("id:command-row-周报");
+    await app.press("id:command-row-周报");
+    await app.press("id:command-delete");
+    await app.waitUntil(() => puts.length === 3);
+    expect(puts[2]).toEqual({ commands: [{ name: "今日", text: "把今天各项目的进展整理成日报发给我" }] });
   });
 });
