@@ -264,17 +264,17 @@ function applyRemote(st: State, f: Remote): "ok" | "merged" | "lost" {
   return outcome;
 }
 
-async function _pull(st: State, t: Transport): Promise<{ ok: boolean; lost: Set<string> }> {
-  const lost = new Set<string>();
+async function _pull(st: State, t: Transport): Promise<{ ok: boolean; lost: Set<string>; seen: Set<string> }> {
+  const lost = new Set<string>(), seen = new Set<string>();
   for (let page = 0; page < 10_000; page++) {
     const r = await t(`/api/files/changes?since=${st.rev}`);
-    if (!r || r.status !== 200) { if (r) console.error(`sync: pull failed ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`); return { ok: false, lost }; }
-    for (const f of r.json.files as Remote[]) if (applyRemote(st, f) === "lost") lost.add(f.path);
+    if (!r || r.status !== 200) { if (r) console.error(`sync: pull failed ${r.status} ${JSON.stringify(r.json).slice(0, 200)}`); return { ok: false, lost, seen }; }
+    for (const f of r.json.files as Remote[]) { seen.add(f.path); if (applyRemote(st, f) === "lost") lost.add(f.path); }
     st.rev = r.json.rev;
     saveState(st);
     if (!r.json.more) break;
   }
-  return { ok: true, lost };
+  return { ok: true, lost, seen };
 }
 
 export async function pull(): Promise<boolean> {
@@ -284,17 +284,8 @@ export async function pull(): Promise<boolean> {
 }
 
 // ------------------------------------------------------------------ replaced Worker
-/** The Worker holds an older version of a path than we last synced: it was replaced (moved to another account,
- *  restored from a copy), so its revs no longer line up with ours and `changes?since=` would return nothing forever. */
-async function replaced(st: State, t: Transport, conflicts: string[]): Promise<boolean> {
-  for (const p of conflicts.filter((p) => st.files[p]).slice(0, 3)) {
-    const r = await t(`/api/files/history?path=${encodeURIComponent(p)}&limit=1`);
-    if (r?.status !== 200) continue;
-    if ((r.json.history?.[0]?.version ?? 0) < st.files[p].v) return true;
-  }
-  return false;
-}
-
+// A Worker moved to another account or restored from a copy has lower revs than ours: `changes?since=` returns
+// nothing forever and every commit conflicts. Detected in commitPush; rebase() re-learns it.
 /** Re-learn every path from the replaced Worker. Our files are at least as new as its copy, so where they differ ours
  *  win (append-only files merge) and the next commit pushes them; paths only it has are written here. */
 async function rebase(st: State, t: Transport): Promise<boolean> {
@@ -355,9 +346,10 @@ export async function commitPush(msg: string): Promise<boolean> {
       if (r.status === 200) { recordCommitted(st, changes, r.json.files); saveState(st); return true; }
       if (r.status !== 409) { console.error(`sync: commit rejected ${r.status}: ${JSON.stringify(r.json).slice(0, 300)}`); saveState(st); return false; }
       const conflicts: string[] = r.json.conflicts ?? [];
-      const { ok, lost } = await _pull(st, t);
+      const { ok, lost, seen } = await _pull(st, t);
       if (!ok) return false;
-      if (await replaced(st, t, conflicts)) { if (!(await rebase(st, t))) return false; continue; }
+      // a real race leaves the winner's row after our rev, so the pull brings it; none at all → the Worker was replaced
+      if (conflicts.length && !conflicts.some((p) => seen.has(p))) { if (!(await rebase(st, t))) return false; continue; }
       if (conflicts.some((p) => lost.has(p))) return false; // someone else won (e.g. claimed the task)
     }
     return false;
