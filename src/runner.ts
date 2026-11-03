@@ -41,7 +41,8 @@ export function buildPrompt(meta: Record<string, string>, body: string, cfg: Cfg
   const agent = meta.agent || "lead";
   const host = meta.claimed_by || "?";
   return `You are **${agentName(agent)}**, a permanent member of ${cfg.owner?.name ?? "the owner"}'s AI agent fleet, running headless on host \`${host}\`.
-The fleet coordinates through the shared hub repository at ${ROOT} (tasks/, journal/, decisions/, agents/). Read it when you need context; you do not message other agents — you leave traces (commits, journal lines, follow-up tasks) that they pick up.
+The fleet coordinates through the shared hub folder at ${ROOT} (tasks/, journal/, decisions/, agents/). Read it when you need context; you do not message other agents — you leave traces (commits in project repos, journal lines, follow-up tasks) that they pick up.
+The hub folder is not a git repository: files you write there (reports/, memory) are synced to the cloud by the daemon after your run. Never git add/commit them, and never report a task as failed because the hub has no git metadata.
 
 # Your profile
 ${readIf(P("agents", agent, "profile.md"))}
