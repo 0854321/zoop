@@ -60,6 +60,10 @@ const json = (d: unknown, status = 200) => Response.json(d, { status });
 const CHUNK = 1_000_000; // SQLite row limit is 2 MB
 const MAX_MEDIA = 30_000_000;
 const STALE_MS = 3 * 60_000;
+/** Daily write budget (free plan: 100k rows_written/day per account, shared by every DO in it). */
+const WRITE_LEAN = 40_000, WRITE_SHED = 70_000;
+const SHEDDABLE = new Set(["system", "daemon", "notice"]);
+const HOT = new Set(["status", "host_seen"]), HOT_PERSIST_MS = 5 * 60_000;
 const CODE_TTL = 10 * 60_000, CODE_TRIES = 5, RESEND_MS = 60_000, SENDS_PER_HOUR = 10, SEEN_EVERY = 3600_000;
 
 const hex = (b: ArrayBuffer | Uint8Array) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -144,13 +148,53 @@ export class Hub extends DurableObject<Env> {
     return session;
   }
 
-  get(k: string): any { const r = this.sql.exec("SELECT v FROM kv WHERE k = ?", k).toArray()[0]; return r ? JSON.parse(r.v as string) : null; }
-  set(k: string, v: unknown) { this.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", k, JSON.stringify(v)); }
+  // ---- write budget. The free plan allows 100k rows_written a day per account; past that every DO write errors until
+  // 00:00 UTC. Hot state lives in memory and is persisted lazily; a daily counter sheds non-essential writes well before the cap.
+  mem = new Map<string, string>();
+  flushed = new Map<string, number>();
+  budget = { day: "", n: 0 };
+  /** Estimated rows written today (a write statement counts ≥ 2: row + index/rowid). */
+  spend(rows = 2) {
+    const day = new Date().toISOString().slice(0, 10);
+    if (this.budget.day !== day) this.budget = { day, n: 0 };
+    this.budget.n += rows;
+  }
+  /** Writes allowed today: "ok", "lean" (hot state persisted rarely) or "shed" (only owner-critical writes). */
+  level(): "ok" | "lean" | "shed" {
+    const day = new Date().toISOString().slice(0, 10);
+    const n = this.budget.day === day ? this.budget.n : 0;
+    return n < WRITE_LEAN ? "ok" : n < WRITE_SHED ? "lean" : "shed";
+  }
+
+  get(k: string): any {
+    const m = this.mem.get(k);
+    if (m !== undefined) return JSON.parse(m);
+    const r = this.sql.exec("SELECT v FROM kv WHERE k = ?", k).toArray()[0];
+    if (r) this.mem.set(k, r.v as string);
+    return r ? JSON.parse(r.v as string) : null;
+  }
+  /** Writes only when the value changed. Hot keys (status, host_seen) are kept in memory and persisted at most every
+   *  HOT_PERSIST_MS (longer when the budget is tight): losing a few minutes of them on eviction is harmless, the daemon re-sends. */
+  set(k: string, v: unknown) {
+    const s = JSON.stringify(v);
+    if (this.mem.get(k) === s) return;
+    if (!this.mem.has(k) && this.sql.exec("SELECT v FROM kv WHERE k = ?", k).toArray()[0]?.v === s) { this.mem.set(k, s); return; }
+    this.mem.set(k, s);
+    if (HOT.has(k)) {
+      const lvl = this.level(), every = lvl === "ok" ? HOT_PERSIST_MS : lvl === "lean" ? HOT_PERSIST_MS * 6 : Infinity;
+      if (Date.now() - (this.flushed.get(k) ?? 0) < every) return;
+    }
+    this.flushed.set(k, Date.now());
+    this.spend();
+    this.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", k, s);
+  }
+  touchHost() { this.set("host_seen", Date.now()); }
 
   append(e: Partial<Ev>): Ev {
     const ev = { id: crypto.randomUUID(), ts: new Date().toISOString(), ...e } as Ev;
+    this.spend(3);
     this.sql.exec("INSERT INTO events (ts, json) VALUES (?, ?)", ev.ts, JSON.stringify(ev));
-    this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
+    if (Math.random() < 0.02) this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
     const s = JSON.stringify(ev);
     for (const ws of this.ctx.getWebSockets()) try { ws.send(s); } catch {}
     try { this.mcp.onEvent(ev); } catch (err) { console.error(`mcp: ${err}`); }
@@ -173,7 +217,9 @@ export class Hub extends DurableObject<Env> {
 
   /** Owner→fleet inbox. A waiting long-poll from the primary daemon is answered at once (no polling delay). */
   inboxWaiters = new Set<() => void>();
+  acked = 0;
   toInbox(item: Record<string, unknown>) {
+    this.spend();
     this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify(item));
     for (const w of [...this.inboxWaiters]) w();
   }
@@ -497,18 +543,23 @@ export class Hub extends DurableObject<Env> {
     }
 
     // ---- fleet side
-    if (p === "/api/events" && m === "POST") return json(this.append((await req.json()) as Partial<Ev>));
+    if (p === "/api/events" && m === "POST") {
+      const e = (await req.json()) as Partial<Ev>;
+      // over budget, routine fleet chatter is dropped (still in the local journal); what the owner must see still goes through
+      if (this.level() === "shed" && SHEDDABLE.has(String(e.kind ?? ""))) return json({ dropped: "write budget" });
+      return json(this.append(e));
+    }
     if (p === "/api/host/state" && m === "PUT") {
       const { status, settings } = (await req.json()) as { status?: unknown; settings?: unknown };
       if (status) { this.set("status", status); this.mcp.onChanged(["noop://status"]); }
       if (settings) this.set("settings", settings);
-      this.set("host_seen", Date.now());
+      this.touchHost();
       return json({ ok: true });
     }
     if (p === "/api/host/inbox") {
       const after = Number(url.searchParams.get("after") ?? 0);
-      this.sql.exec("DELETE FROM inbox WHERE seq <= ?", after); // acked
-      this.set("host_seen", Date.now());
+      if (after > this.acked) { this.sql.exec("DELETE FROM inbox WHERE seq <= ?", after); this.acked = after; this.spend(); } // acked
+      this.touchHost();
       const read = () => this.sql.exec("SELECT seq, json FROM inbox ORDER BY seq LIMIT 50").toArray()
         .map((r) => ({ seq: r.seq as number, ...JSON.parse(r.json as string) }));
       let items = read();
@@ -522,7 +573,7 @@ export class Hub extends DurableObject<Env> {
           this.inboxWaiters.add(done);
           req.signal?.addEventListener?.("abort", done);
         });
-        this.set("host_seen", Date.now());
+        this.touchHost();
         items = read();
       }
       return json({ items });
