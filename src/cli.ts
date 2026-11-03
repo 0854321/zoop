@@ -19,7 +19,9 @@ import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
-import { drainInbound, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setCancelTask, setUpdateFleet, onSettingsSaved, startServer } from "./server";
+import { answerFromChat, appendEvent, cancelTask, drainInbound, feed, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setApplyOp, setCancelTask, setUpdateFleet, onSettingsSaved, startServer, status as hubStatus } from "./server";
+import { type BrainOut, ClaudeModel, SYSTEM, dataActs, localStore, logBrain, think } from "./brain";
+import { runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
@@ -581,46 +583,6 @@ Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": 
   });
 }
 
-/** Where an owner message in the team channel goes, decided by a quick model (seconds, not a judgement):
- * - "same": an OPEN task (queued, running, waiting) it is part of → add it there
- * - "follows": a task from the channel it refers to (often finished) → a new task that continues it
- * - "amend": a change to the decision the owner just answered
- * - "new": new, unrelated work */
-export async function routeMessage(text: string, cfg: Cfg, chat: string[] = [], answered?: string):
-  Promise<{ action: "same" | "follows" | "amend" | "new"; id?: string; reply?: string }> {
-  const open = ["inbox", "active", "waiting"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
-    .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: String(meta.id), title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
-  const recent = [...new Set(chat.join("\n").match(/\bT-\d{4}\b/g) ?? [])];
-  const decision = answered && existsSync(P("decisions", "closed", `${answered}.md`)) ? readDoc(P("decisions", "closed", `${answered}.md`)).meta : null;
-  const r = await quickAsk(`You route the owner's chat messages for their AI team. The team channel is the main conversation;
-each task is its own conversation. Decide where this new message belongs:
-- "same": one of the OPEN tasks below when it is clearly about the same work (same goal, same repo/PR/release). Two messages
-  sent close together are NOT the same task just for that: "Review NSH#743" and "nsh#812 为何图片不清晰" are different PRs.
-- "follows": a task from the channel that the message refers to — corrects its result ("不行，…"), asks about it or for more
-  of it, or asks to remember how it was done. The owner writes tersely: read the channel.
-- "amend": ${decision ? `the owner just answered ${answered} ("${decision.question}" → ${decision.answer}); the message changes or qualifies that answer ("等等，选错了", "B 但是先…").` : "(not possible now)"}
-- "new": new, unrelated work.
-
-Message:
-${text.slice(0, 1500)}
-${chat.length ? `\nThe channel just before it (oldest first):\n${chat.join("\n")}\n` : ""}
-Open tasks:
-${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n") || "(none)"}
-
-Also write "reply": the one short line the team answers in the channel right now, as a person would — in the owner's
-language, specific to what they asked (e.g. "好，我去把 MCP 接上，做完给你看。"), never a template, no task ids, no promises
-about process ("做完带结果回来", "需要你拍板时…"). Empty string when a reply adds nothing (e.g. a bare "A").
-
-Reply with exactly one fenced json block: {"action": "same" | "follows" | "amend" | "new", "id": "<task id for same/follows>" | null, "reply": "..."}`,
-    cfg, P("logs", "runs", `route-${Date.now()}.log`));
-  const action = r?.action;
-  const reply = typeof r?.reply === "string" && r.reply.trim() ? r.reply.trim().slice(0, 300) : undefined;
-  if (action === "same" && open.some((t) => t.id === r.id)) return { action, id: r.id, reply };
-  if (action === "follows" && (recent.includes(r.id) || open.some((t) => t.id === r.id))) return { action, id: r.id, reply };
-  if (action === "amend" && decision) return { action, id: answered, reply };
-  return { action: "new", reply };
-}
-
 async function daemon(cfg: Cfg) {
   const host = hostName(cfg);
   const every = (cfg.host?.tick_seconds ?? 60) * 1000;
@@ -681,37 +643,64 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] cancel ${tid}`);
     return "cancelled";
   }));
-  if (isPrimary(cfg, host)) startServer(cfg, async (text, { reply, answered }) => {
-    // A reply (or a message on a task's page) names its task; anything else is routed by a quick model.
-    const chat = recentChat(text);
-    const isOpen = (t: string) => ["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${t}.md`)));
-    const route = reply
-      ? { action: isOpen(reply) ? "same" : "follows", id: reply, reply: undefined as string | undefined }
-      : await routeMessage(text, cfg, chat, answered).catch(() => ({ action: "new" as const, id: undefined, reply: undefined }));
-    if (route.action === "amend" && route.id) return { amend: route.id };
-    const same = route.action === "same" ? route.id! : null;
-    const follows = route.action === "follows" ? route.id! : null;
-    const title = same ? await appendFollowUp(same, text) : "";
-    if (same && title) return { id: same, title, reply: route.reply };
-    return locked(async () => {
+  // A new task from the owner's chat (created by the chat brain, or by create_task over MCP). It carries the channel's
+  // recent conversation and the task it continues, so terse follow-ups ("不行，…", "这个细节记下来") keep their meaning.
+  let chatNow: { text: string; chat: string[]; reply?: string } | null = null; // the owner message the brain is handling
+  const createOwnerTask = (op: { title: string; details?: string; repo?: string; agent?: string; follows?: string }) => locked(async () => {
     await _pull();
-    // A short reply ("不行，…", "这个细节记下来") only makes sense with what came before it: the new task carries the
-    // channel's recent conversation and the task it most likely continues (finished tasks included).
-    const prev = follows ?? same; // `same` here: it finished meanwhile, so the new task continues it
+    const m = chatNow;
+    const prev = op.follows ?? (m?.reply && !["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${m.reply}.md`))) ? m.reply : undefined);
     const prevFile = prev ? ["done", "failed", "rejected", "blocked", "inbox", "active", "waiting"].map((d) => P("tasks", d, `${prev}.md`)).find(existsSync) : undefined;
-    const context = chat.length || reply
-      ? (reply ? `\n\nThe owner wrote this as a reply to the team's message about ${reply}.` : "") +
-        `\n\n## The channel just before this message\nThe owner writes tersely: words like "this", "不行", "这个细节", "以后都这样" refer to what was just said here.\n\n${chat.map((l) => `- ${l}`).join("\n")}\n` +
-        (prevFile ? `\nThis continues ${prev} (${prevFile.split("/").slice(-2, -1)[0]}): read tasks/${prevFile.split("/").slice(-2).join("/")} for what was done and how. If the owner is correcting that result, fix it; if they say to remember something ("记录下来", "以后都这样"), write it as a durable rule/memory for the agent and kind of work it concerns, not just in this task.\n` : "")
+    const asked = m ? `The owner (CEO) said in chat:\n\n> ${m.text.replace(/\n/g, "\n> ")}\n` : "The owner asked for this through noop's MCP connector.\n";
+    const context = m && (m.chat.length || m.reply)
+      ? (m.reply ? `\nThe owner wrote this as a reply to the team's message about ${m.reply}.\n` : "") +
+        `\n## The channel just before this message\nThe owner writes tersely: words like "this", "不行", "这个细节", "以后都这样" refer to what was just said here.\n\n${m.chat.map((l) => `- ${l}`).join("\n")}\n`
       : "";
-    const id = newTask(text.split("\n")[0].slice(0, 80), `The owner (CEO) said in chat:\n\n> ${text.replace(/\n/g, "\n> ")}${context}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
-      { agent: "lead", source: "owner@chat", priority: "high", extra: { origin: "owner", ...(prevFile && prev ? { follows: prev } : {}) } });
-    journal(host, `💬 ${id} from owner chat${prevFile ? ` (follows ${prev})` : ""}: ${text.slice(0, 80)}`);
+    const cont = prevFile && prev ? `\nThis continues ${prev} (${prevFile.split("/").slice(-2, -1)[0]}): read tasks/${prevFile.split("/").slice(-2).join("/")} for what was done and how. If the owner is correcting that result, fix it; if they say to remember something ("记录下来", "以后都这样"), write it as a durable rule/memory for the agent and kind of work it concerns, not just in this task.\n` : "";
+    const id = newTask(op.title.slice(0, 80), `${asked}${op.details ? `\n## What the chat understood\n${op.details}\n` : ""}${op.repo ? `\nRepo: ${op.repo}\n` : ""}${context}${cont}\nHandle it like a capable chief of staff (see your profile: "Owner requests").`,
+      { agent: op.agent ?? "lead", source: m ? "owner@chat" : "owner@mcp", priority: "high", extra: { origin: "owner", ...(op.repo ? { repo: op.repo } : {}), ...(prevFile && prev ? { follows: prev } : {}) } });
+    journal(host, `💬 ${id} from owner ${m ? "chat" : "MCP"}${prevFile ? ` (follows ${prev})` : ""}: ${op.title.slice(0, 80)}`);
     await _commitPush(`[${host}] chat ${id}`);
     // plan it now and wake the loop, so an idle machine starts it within seconds instead of after the next tick or two
     queueMicrotask(() => void planInbox(cfg, host).then(wakeDaemon).catch(() => {}));
-    return { id, reply: route.reply, ...(prevFile ? { follows: prev! } : {}) };
-    });
+    return { ok: true, id, ...(prevFile ? { follows: prev } : {}) };
+  });
+  const store = localStore({
+    status: hubStatus, feed: () => feed("", 2000),
+    acts: {
+      ...dataActs(host),
+      create_task: createOwnerTask,
+      amend_task: async (op) => { const title = await appendFollowUp(op.id, op.text); return title ? { ok: true, id: op.id, title } : { ok: false, error: `${op.id} is not open` }; },
+      cancel_task: async (op) => { const r = await cancelTask(op.id); return { ok: r === "cancelled", id: op.id, result: r }; },
+      answer_decision: async (op) => {
+        const open = existsSync(P("decisions", "open", `${op.id}.md`));
+        answerFromChat(op.id, op.answer, !open);
+        return { ok: true, id: op.id, ...(open ? {} : { amended: true }) };
+      },
+      send_message: async (op) => { await handleOwnerMessage(op.text, op.reply_to); return { ok: true }; },
+    },
+  });
+  setApplyOp((op) => runTool(store, op?.tool, op));
+  const model = new ClaudeModel(String(cfg.router?.model ?? "claude-haiku-5-5"), String(cfg.router?.cli ?? "claude"), (cfg.router?.timeout_seconds ?? 45) * 1000);
+  if (isPrimary(cfg, host) && Bun.which(String(cfg.router?.cli ?? "claude"))) model.warm(SYSTEM);
+  if (isPrimary(cfg, host)) startServer(cfg, async (text, { reply, answered, sentAt }) => {
+    const got = Date.now();
+    const m = { text, replyTo: reply, answered, chat: recentChat(text), sentAt };
+    chatNow = { text, chat: m.chat, reply };
+    const post = (r: string, ref?: string) => appendEvent({ from: "hub", kind: "system", text: r.slice(0, 2000), ...(ref ? { ref } : {}) });
+    let out: BrainOut;
+    try {
+      out = await think(m, store, model, post);
+      if (!out.calls.length && !out.reply && out.rounds >= 4) throw new Error("no answer");
+    } catch (err) {
+      // no model (CLI missing, logged out, timeout): the message still becomes work, silently — never lost, never canned
+      console.error(`chat brain: ${err}`);
+      const r = reply && ["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${reply}.md`)))
+        ? await store.act({ tool: "amend_task", id: reply, text })
+        : await store.act({ tool: "create_task", title: text.split("\n")[0].slice(0, 80) });
+      out = { reply: "", calls: [{ tool: "fallback", args: {}, ok: !!r.ok, result: r }], rounds: 0, ms: { model: [], total: Date.now() - got }, fallback: true };
+    } finally { chatNow = null; }
+    logBrain(m, out, got);
   });
   await locked(async () => { // recover tasks this host was running when it died/restarted
     await _pull();

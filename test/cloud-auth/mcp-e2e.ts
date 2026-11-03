@@ -50,6 +50,8 @@ const call = async (method: string, params: unknown = {}) => {
   const res = await fetch(`${BASE}/mcp`, { method: "POST", headers: { ...A, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(sid ? { "mcp-session-id": sid } : {}) },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
   sid ||= res.headers.get("mcp-session-id") ?? "";
+  if (res.headers.get("content-type") === "text/event-stream") // streamed tools/call: the response is the message with our id
+    return (await res.text()).split("\n").filter((l) => l.startsWith("data: {")).map((l) => JSON.parse(l.slice(6))).find((m) => m.id === id);
   return (await res.json() as any);
 };
 const init = await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } });
@@ -88,7 +90,87 @@ ok(sentMsg.ok && feed.events.some((e: any) => e.kind === "owner" && e.text === `
 const inbox = await (await fetch(`${BASE}/api/host/inbox?after=0`, { headers: M })).json() as any;
 ok(inbox.items.some((i: any) => i.event?.text === `mcp e2e ${marker}`), "…and in the fleet inbox");
 
-// 8. refresh rotates and revokes the old access token
+// 8. spec details
+const H = (h: Record<string, string> = {}) => ({ ...A, "content-type": "application/json", "mcp-protocol-version": "2025-06-18", "mcp-session-id": sid, ...h });
+const ping = (h: Record<string, string>) => fetch(`${BASE}/mcp`, { method: "POST", headers: { ...A, "content-type": "application/json", ...h }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) });
+ok((await ping({})).status === 400, "no Mcp-Session-Id → 400");
+ok((await ping({ "mcp-session-id": "0".repeat(32) })).status === 404, "unknown session → 404");
+ok((await ping({ "mcp-session-id": sid, "mcp-protocol-version": "1999-01-01" })).status === 400, "bad MCP-Protocol-Version → 400");
+
+/** Reads SSE frames from a response until `until` holds or `ms` passes. */
+async function readFrames(res: Response, until: (f: any[]) => boolean, ms = 8000) {
+  const rd = res.body!.getReader(), d = new TextDecoder(), end = Date.now() + ms;
+  let b = "";
+  const parse = () => b.split("\n\n").slice(0, -1).map((blk) => {
+    const f: any = {};
+    for (const l of blk.split("\n")) { if (l.startsWith("id: ")) f.id = l.slice(4); if (l.startsWith("retry: ")) f.retry = l.slice(7); if (l.startsWith("data: {")) f.data = JSON.parse(l.slice(6)); }
+    return f;
+  });
+  while (Date.now() < end && !until(parse())) {
+    const x = await Promise.race([rd.read(), new Promise<null>((r) => setTimeout(() => r(null), Math.max(1, end - Date.now())))]);
+    if (!x || x.done) break;
+    b += d.decode(x.value);
+  }
+  rd.cancel().catch(() => {});
+  return parse();
+}
+const emit = (text: string, ref = "T-9001") => fetch(`${BASE}/api/events`, { method: "POST", headers: { ...M, "content-type": "application/json" }, body: JSON.stringify({ from: "lead@e2e", kind: "result", text, ref }) });
+
+// 8a. resumability: ids on every message, then reconnect with Last-Event-ID after missing two events
+const m1 = `replay-1 ${Date.now()}`;
+const s1 = await fetch(`${BASE}/mcp`, { headers: { ...A, accept: "text/event-stream", "mcp-session-id": sid } });
+const got1P = readFrames(s1, (f) => f.some((x) => x.data?.params?.data?.text === m1));
+await new Promise((res) => setTimeout(res, 300));
+await emit(m1);
+const got1 = await got1P;
+const f1 = got1.find((x) => x.data?.params?.data?.text === m1);
+ok(got1[0]?.retry && f1?.id?.startsWith("g."), `SSE retry hint + event id ${f1?.id}`);
+await new Promise((res) => setTimeout(res, 300));
+const m2 = `replay-2 ${Date.now()}`, m3 = `replay-3 ${Date.now()}`;
+await emit(m2); await emit(m3);
+const got2 = await readFrames(await fetch(`${BASE}/mcp`, { headers: { ...A, accept: "text/event-stream", "mcp-session-id": sid, "last-event-id": f1.id } }),
+  (f) => f.some((x) => x.data?.params?.data?.text === m3));
+const texts = got2.filter((x) => x.data?.method === "notifications/message").map((x) => x.data.params.data.text);
+ok(texts.includes(m2) && texts.includes(m3) && !texts.includes(m1), `Last-Event-ID ${f1.id} replays the 2 missed events only`);
+
+// 8b. list_changed when a new open task appears (machine writes the task file, like the daemon does)
+const s2 = await fetch(`${BASE}/mcp`, { headers: { ...A, accept: "text/event-stream", "mcp-session-id": sid } });
+const lcP = readFrames(s2, (f) => f.some((x) => x.data?.method === "notifications/resources/list_changed"));
+await new Promise((res) => setTimeout(res, 300));
+const tid = `T-e2e${String(Date.now()).slice(-4)}`;
+const content = btoa(`---\nid: ${tid}\ntitle: e2e list_changed\n---\nbody\n`);
+const commit = await fetch(`${BASE}/api/files/commit`, { method: "POST", headers: { ...M, "content-type": "application/json" },
+  body: JSON.stringify({ msg: "e2e", changes: [{ path: `tasks/active/${tid}.md`, base_version: 0, content }] }) });
+ok(commit.ok, `machine commits tasks/active/${tid}.md (${commit.status})`);
+ok((await lcP).some((x) => x.data?.method === "notifications/resources/list_changed"), "→ notifications/resources/list_changed");
+const list = (await call("resources/list")).result.resources.map((x: any) => x.uri);
+ok(list.includes(`noop://tasks/${tid}`), "resources/list has the new task");
+
+// 8c. progress over a POST SSE response, then cancel
+const wait = (rid: string, cur: number, secs: number) => fetch(`${BASE}/mcp`, { method: "POST", headers: H({ accept: "application/json, text/event-stream" }),
+  body: JSON.stringify({ jsonrpc: "2.0", id: rid, method: "tools/call", params: { name: "wait_for_events", arguments: { cursor: cur, timeout_seconds: secs }, _meta: { progressToken: rid } } }) });
+const { cursor: c2 } = await tool("get_feed", { limit: 1 });
+const w1 = await wait("w1", c2, 8);
+ok(w1.headers.get("content-type") === "text/event-stream", "wait_for_events with progressToken → SSE response");
+const m4 = `progress ${Date.now()}`;
+setTimeout(() => emit(m4), 6000);
+const wf = await readFrames(w1, (f) => f.some((x) => x.data?.id === "w1"), 15000);
+const prog = wf.filter((x) => x.data?.method === "notifications/progress");
+const resp = wf.find((x) => x.data?.id === "w1");
+ok(prog.length >= 2 && prog.every((x) => x.data.params.progressToken === "w1" && x.id), `${prog.length} notifications/progress with ids before the response`);
+ok(resp && JSON.parse(resp.data.result.content[0].text).events.some((e: any) => e.text === m4), "…then the result with the new event");
+const { cursor: c3 } = await tool("get_feed", { limit: 1 });
+const t0 = Date.now();
+const w2 = await wait("w2", c3 + 1_000_000, 40);
+setTimeout(() => fetch(`${BASE}/mcp`, { method: "POST", headers: H(), body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "w2", reason: "e2e" } }) }), 500);
+const cf = await readFrames(w2, () => false, 10000);
+ok(Date.now() - t0 < 9000 && !cf.some((x) => x.data?.id === "w2"), `notifications/cancelled ends the wait in ${Date.now() - t0}ms with no response`);
+
+// 8d. DELETE ends the session → 404
+const old = sid;
+ok((await fetch(`${BASE}/mcp`, { method: "DELETE", headers: H() })).status === 204 && (await ping({ "mcp-session-id": old })).status === 404, "DELETE → later requests 404");
+
+// 9. refresh rotates and revokes the old access token
 const t2 = await (await fetch(asm.token_endpoint, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: tok.refresh_token, client_id: client.client_id }) })).json() as any;
 ok(t2.access_token && (await fetch(`${BASE}/api/status`, { headers: A })).status === 401, "refresh → new token, old one revoked");

@@ -9,13 +9,13 @@ import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { writeHubToml } from "./sync";
-import { type Event, MEDIA, appendEvent, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
+import { type Event, MEDIA, appendEvent, applyOp, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
 
 const base = (cfg: Cfg) => String(cfg.cloud?.url ?? "").replace(/\/$/, "");
 const headers = (cfg: Cfg) => ({ Authorization: `Bearer ${cfg.server?.token}`, "Content-Type": "application/json" });
 
-async function call(cfg: Cfg, path: string, init: RequestInit = {}) {
-  const r = await fetch(base(cfg) + path, { ...init, headers: headers(cfg), signal: AbortSignal.timeout(15_000) }).catch(() => null);
+async function call(cfg: Cfg, path: string, init: RequestInit = {}, timeoutMs = 15_000) {
+  const r = await fetch(base(cfg) + path, { ...init, headers: headers(cfg), signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
   if (!r?.ok) return null;
   return r.json() as Promise<any>;
 }
@@ -61,32 +61,48 @@ export function startCloudBridge(cfg: Cfg) {
     if (!force && st === lastStatus) return;
     if (await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ status: JSON.parse(st), settings: settingsView() }) })) lastStatus = st;
   };
+  // housekeeping every few seconds: mirror events up, push the dashboard
   const loop = async () => {
     if (busy) return; busy = true;
     try {
       await flush();
       await pushStatus(n++ % 10 === 0);
-      const r = await call(cfg, `/api/host/inbox?after=${after}`);
-      for (const it of r?.items ?? []) {
-        if (it.type === "message") {
-          const e = it.event as Event;
-          appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
-          await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p) });
-        } else if (it.type === "cancel" && typeof it.id === "string") {
-          await cancelTask(it.id);
-        } else if (it.type === "update") {
-          await updateFleet();
-        } else if (it.type === "settings") {
-          await saveSettings(it.patch);
-          await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });
-        }
-        after = it.seq;
-      }
-      if (r?.items?.length) await pushStatus();
     } catch (err) { console.error(`cloud bridge: ${err}`); }
     busy = false;
   };
+  // the owner→fleet inbox, long-polled: the Worker holds the request until a message arrives, so the chat brain here
+  // gets it within milliseconds (the owner's model login never leaves this machine; only the message and the reply travel)
+  const inbox = async () => {
+    for (;;) {
+      const t0 = Date.now();
+      try {
+        const r = await call(cfg, `/api/host/inbox?after=${after}&wait=25`, {}, 40_000);
+        for (const it of r?.items ?? []) {
+          if (it.type === "message") {
+            const e = it.event as Event;
+            appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
+            await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts });
+          } else if (it.type === "op" && it.op) {
+            await applyOp(it.op);
+          } else if (it.type === "cancel" && typeof it.id === "string") {
+            await cancelTask(it.id);
+          } else if (it.type === "update") {
+            await updateFleet();
+          } else if (it.type === "settings") {
+            await saveSettings(it.patch);
+            await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });
+          }
+          after = it.seq;
+        }
+        if (r?.items?.length) await pushStatus();
+      } catch (err) { console.error(`cloud bridge inbox: ${err}`); }
+      // an older Worker (no long-poll) or an error answers at once: don't spin
+      const left = (cfg.cloud?.poll_seconds ?? 3) * 1000 - (Date.now() - t0);
+      if (left > 0) await Bun.sleep(left);
+    }
+  };
   void loop();
+  void inbox();
   setInterval(loop, (cfg.cloud?.poll_seconds ?? 3) * 1000);
   console.log(`cloud bridge → ${base(cfg)}`);
 }

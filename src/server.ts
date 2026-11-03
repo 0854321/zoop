@@ -31,11 +31,10 @@ const FEED_DIR = join(DATA, "..", "feed"); // primary-local (next to the data re
 const sockets = new Set<ServerWebSocket<unknown>>();
 type Inbound = { id: string; answer: string; source: string };
 const inbound: Inbound[] = [];
-/** The owner's chat request becomes a task: a new one, or (with its title) the open task it continues. */
-/** A chat message becomes work. `reply`: the task whose message the owner replied to ("T-0125"), or whose page they wrote on;
- * `answered`: the decision the owner answered moments ago (the message may change that answer). The result: added to an open
- * task (`title`), a new task continuing one (`follows`), a new task, or `amend`: a change to the answered decision. */
-type OwnerTask = (text: string, o: { reply?: string; answered?: string }) => Promise<{ id: string; title?: string; follows?: string; reply?: string } | { amend: string }>;
+/** A chat message goes to the chat brain (src/brain.ts), which replies and acts through noop's tools. `reply`: the task
+ * whose message the owner replied to ("T-0125"), or whose page they wrote on; `answered`: the decision the owner answered
+ * moments ago (the message may change that answer); `sentAt`: when the owner sent it (for latency). */
+type OwnerTask = (text: string, o: { reply?: string; answered?: string; sentAt?: string }) => Promise<void>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -76,6 +75,11 @@ export function recentChat(text = "", opts: { limit?: number; hours?: number } =
 
 /** Replies the daemon should process (same shape as Slack/Discord replies). */
 export const drainInbound = () => inbound.splice(0);
+/** A decision answer from the chat brain: an open card is answered; one answered minutes ago is amended. */
+export function answerFromChat(id: string, answer: string, amend: boolean) {
+  inbound.push({ id, answer, source: amend ? "chat-amend" : "chat" });
+  if (!amend) lastAnswer = { id, at: Date.now() };
+}
 
 /** Store a local file as media; returns a server-relative URL. */
 export function storeMedia(path: string): string {
@@ -286,6 +290,10 @@ let cancelHook: ((tid: string) => Promise<string>) | null = null;
 export const setCancelTask = (fn: (tid: string) => Promise<string>) => { cancelHook = fn; };
 /** The owner cancels a task (queued, waiting, blocked, proposed or running). */
 export const cancelTask = async (tid: string) => (cancelHook ? cancelHook(tid) : "not available");
+let opHook: ((op: any) => Promise<unknown>) | null = null;
+export const setApplyOp = (fn: (op: any) => Promise<unknown>) => { opHook = fn; };
+/** A write the cloud MCP server handed over (create/amend/cancel a task, remember, …): performed here, where the data lives. */
+export const applyOp = async (op: any) => (opHook ? opHook(op) : null);
 let updateHook: (() => Promise<number>) | null = null;
 export const setUpdateFleet = (fn: () => Promise<number>) => { updateHook = fn; };
 /** The owner asks every machine to update to the latest code (the primary also redeploys the Worker and the web app). */
@@ -351,7 +359,7 @@ export function withAttachments(text: string, files: string[], missing = 0): str
 
 export async function handleOwnerMessage(
   text: string, reply_to?: string, noAmend = false,
-  att: { paths?: string[]; key?: string; fetch?: FetchAttachment } = {},
+  att: { paths?: string[]; key?: string; fetch?: FetchAttachment; sentAt?: string } = {},
 ) {
   if (att.paths?.length) {
     const files = await saveAttachments(att.key ?? crypto.randomUUID(), att.paths, att.fetch);
@@ -365,15 +373,9 @@ export async function handleOwnerMessage(
     inbound.push({ id, answer: (m ? m[2] : text).trim(), source: "chat" });
     if (id.startsWith("D-")) lastAnswer = { id, at: Date.now() };
   } else if (ownerTask) {
-    // everything else is routed by a quick model: which task it belongs to, or new work
+    // everything else goes to the chat brain: it answers, looks things up, and creates or adjusts work through the tools
     const answered = !noAmend && !replyTask && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS ? lastAnswer.id : undefined;
-    const r = await ownerTask(text, { reply: replyTask, answered });
-    if ("amend" in r) {
-      inbound.push({ id: r.amend, answer: text.trim(), source: "chat-amend" }); // "wait, I clicked the wrong one"
-      return;
-    }
-    // the acknowledgement is written by the routing model; no canned text — when it has nothing to say, say nothing
-    if (r.reply) appendEvent({ from: "hub", kind: "system", text: r.reply, ref: r.id });
+    await ownerTask(text, { reply: replyTask, answered, sentAt: att.sentAt });
   }
 }
 

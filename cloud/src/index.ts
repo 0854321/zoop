@@ -114,6 +114,8 @@ export class Hub extends DurableObject<Env> {
       events: (after, limit) => this.sql.exec("SELECT seq, json FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit).toArray()
         .map((r) => ({ seq: r.seq as number, ev: JSON.parse(r.json as string) })),
       say: (text, ref) => this.ownerMessage(text, ref),
+      enqueue: (op) => this.toInbox({ type: "op", op }),
+      hostOnline: () => this.hostOnline(),
       startCode: async (email) => { const r = await this.auth("/api/auth/start", new Request("https://hub/api/auth/start", { method: "POST", body: JSON.stringify({ email }) })); return { status: r.status, body: await r.json() }; },
       checkCode: (email, code) => this.checkCode(email, code),
       newSession: (email, ua) => this.newSession(email, ua),
@@ -169,9 +171,16 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM media WHERE instr(id, '-') = 14 AND CAST(substr(id, 1, 13) AS INTEGER) < ?", now - days * 86_400_000);
   }
 
+  /** Owner→fleet inbox. A waiting long-poll from the primary daemon is answered at once (no polling delay). */
+  inboxWaiters = new Set<() => void>();
+  toInbox(item: Record<string, unknown>) {
+    this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify(item));
+    for (const w of [...this.inboxWaiters]) w();
+  }
+
   ownerMessage(text: string, ref?: string, attachments?: string[]): Ev {
     const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(attachments?.length ? { attachments } : {}) });
-    this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "message", event: ev }));
+    this.toInbox({ type: "message", event: ev });
     if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id });
     return ev;
   }
@@ -450,17 +459,17 @@ export class Hub extends DurableObject<Env> {
       if (who === "machine") return json({ error: "forbidden" }, 403);
       const { id } = (await req.json().catch(() => ({}))) as { id?: string };
       if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
-      this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "cancel", id }));
+      this.toInbox({ type: "cancel", id });
       return json({ ok: true });
     }
     if (p === "/api/fleet/update" && m === "POST") { // owner: every machine updates to the latest code; the primary acts on it
       if (who === "machine") return json({ error: "forbidden" }, 403);
-      this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "update" }));
+      this.toInbox({ type: "update" });
       return json({ ok: true });
     }
     if (p === "/api/settings" && m === "PUT") {
       const patch = await req.json();
-      this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify({ type: "settings", patch }));
+      this.toInbox({ type: "settings", patch });
       const view = this.get("settings") ?? { current: {} };
       const deep = (a: any, b: any): any => { const o = { ...a }; for (const [k, v] of Object.entries(b ?? {})) o[k] = v && typeof v === "object" && !Array.isArray(v) ? deep(o[k] ?? {}, v) : v; return o; };
       view.current = deep(view.current ?? {}, patch);
@@ -500,8 +509,22 @@ export class Hub extends DurableObject<Env> {
       const after = Number(url.searchParams.get("after") ?? 0);
       this.sql.exec("DELETE FROM inbox WHERE seq <= ?", after); // acked
       this.set("host_seen", Date.now());
-      const items = this.sql.exec("SELECT seq, json FROM inbox ORDER BY seq LIMIT 50").toArray()
+      const read = () => this.sql.exec("SELECT seq, json FROM inbox ORDER BY seq LIMIT 50").toArray()
         .map((r) => ({ seq: r.seq as number, ...JSON.parse(r.json as string) }));
+      let items = read();
+      // long-poll (?wait=<s>, ≤ 25): hold the request until something arrives, so an owner message reaches the
+      // daemon in milliseconds instead of on its next poll
+      const wait = Math.max(0, Math.min(Number(url.searchParams.get("wait")) || 0, 25)) * 1000;
+      if (!items.length && wait) {
+        await new Promise<void>((res) => {
+          const done = () => { clearTimeout(t); this.inboxWaiters.delete(done); res(); };
+          const t = setTimeout(done, wait);
+          this.inboxWaiters.add(done);
+          req.signal?.addEventListener?.("abort", done);
+        });
+        this.set("host_seen", Date.now());
+        items = read();
+      }
       return json({ items });
     }
     return json({ error: "not found" }, 404);

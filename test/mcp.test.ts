@@ -24,6 +24,7 @@ function hub() {
   sql.exec(`CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, json TEXT);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, email TEXT, created INTEGER, last_seen INTEGER, ua TEXT)`);
   const said: { text: string; ref?: string }[] = [];
+  const queued: any[] = [];
   let mcp: Mcp;
   const append = (e: any) => {
     const ev = { id: crypto.randomUUID(), ts: new Date().toISOString(), ...e };
@@ -38,6 +39,7 @@ function hub() {
     sql, status: () => ({ tasks: { active: 1 }, decisions: [{ id: "D-0099", question: "合并吗？" }], hosts: [{ host: "h1", online: true }], active: [], hub: { online: true } }),
     events: (after, limit) => sql.exec("SELECT seq, json FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit).toArray().map((r) => ({ seq: r.seq, ev: JSON.parse(r.json) })),
     say: (text, ref) => { said.push({ text, ref }); return append({ from: "owner", kind: "owner", text, ref }); },
+    enqueue: (op) => { queued.push(op); },
     startCode: async (email) => (email === "owner@example.com" ? { status: 200, body: { ok: true } } : { status: 400, body: { error: "invalid email" } }),
     checkCode: async (email, code) => (code === "123456" ? { email } : { error: "验证码不对" }),
     newSession: async (email) => { const s = crypto.randomUUID().replace(/-/g, ""); sql.exec("INSERT INTO sessions (id, email) VALUES (?, ?)", s, email); return s; },
@@ -47,15 +49,22 @@ function hub() {
   file("tasks/active/T-0184.md", "---\nid: T-0184\ntitle: noop: MCP server\nagent: lead\nrepo: huacnlee/noop\nclaimed_by: h1\n---\nBuild the MCP server.\n");
   file("tasks/done/T-0100.md", "---\nid: T-0100\ntitle: Fix typo\nagent: lead\n---\ndone\n");
   file("decisions/open/D-0099.md", "---\nid: D-0099\ntask: T-0184\nquestion: 合并吗？\nrecommendation: A\noptions: A: 合并 — 好 | B: 不合并 — 等\n---\n## Context\n需要你决定。\n\n## Options\n- A\n");
-  return { sql, mcp, said, append, file };
+  return { sql, mcp, said, queued, append, file };
 }
 
 const B = "https://noop.example.com";
 const post = (path: string, body: unknown, h: Record<string, string> = {}) =>
   new Request(B + path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...h }, body: JSON.stringify(body) });
-const rpc = async (mcp: Mcp, method: string, params: unknown = {}, sid = "", id: number | null = 1) => {
+const sessions = new WeakMap<Mcp, string>();
+const rpc = async (mcp: Mcp, method: string, params: unknown = {}, sid = "", id: number | null = 1): Promise<{ status: number; sid: string; body: any }> => {
+  if (!sid && method !== "initialize") { // every request after initialize needs a session
+    if (!sessions.has(mcp)) sessions.set(mcp, (await rpc(mcp, "initialize", { protocolVersion: "2025-06-18" })).sid);
+    sid = sessions.get(mcp)!;
+  }
   const r = await mcp.fetch(post("/mcp", id === null ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id, method, params }, sid ? { "mcp-session-id": sid } : {}), "machine");
-  return { status: r.status, sid: r.headers.get("mcp-session-id") ?? "", body: r.status === 202 ? null : (await r.json()) as any };
+  const sse = r.headers.get("content-type") === "text/event-stream"; // streamed tools/call: the response is the last message
+  const body = r.status === 202 ? null : sse ? (await r.text()).split("\n").filter((l) => l.startsWith("data: {")).map((l) => JSON.parse(l.slice(6))).find((m) => "id" in m) : await r.json();
+  return { status: r.status, sid: r.headers.get("mcp-session-id") ?? "", body };
 };
 const tool = async (mcp: Mcp, name: string, args: unknown = {}) => {
   const r = await rpc(mcp, "tools/call", { name, arguments: args });
@@ -123,7 +132,8 @@ test("initialize, tools/list, resources", async () => {
   expect(init.body.result.capabilities.resources.subscribe).toBe(true);
   expect((await rpc(mcp, "notifications/initialized", {}, init.sid, null)).status).toBe(202);
   const names = (await rpc(mcp, "tools/list", {}, init.sid)).body.result.tools.map((t: any) => t.name);
-  expect(names).toEqual(["get_status", "list_tasks", "get_task", "list_decisions", "get_feed", "wait_for_events", "send_message", "create_task", "answer_decision", "search", "fetch"]);
+  expect(names).toEqual(["get_status", "list_tasks", "get_task", "list_decisions", "get_feed", "wait_for_events", "list_agents", "list_routines", "read_memory",
+    "search_journal", "search", "fetch", "send_message", "create_task", "amend_task", "cancel_task", "set_priority", "reassign_task", "remember", "answer_decision"]);
   expect(names.some((n: string) => /merge|release|setting/.test(n))).toBe(false);
   const res = (await rpc(mcp, "resources/list")).body.result.resources.map((r: any) => r.uri);
   expect(res).toContain("noop://tasks/T-0184");
@@ -134,7 +144,7 @@ test("initialize, tools/list, resources", async () => {
 });
 
 test("tools: read and owner-level writes", async () => {
-  const { mcp, said } = hub();
+  const { mcp, said, queued } = hub();
   expect((await tool(mcp, "get_status")).data.decisions[0].id).toBe("D-0099");
   expect((await tool(mcp, "list_tasks")).data.tasks.map((t: any) => t.id)).toEqual(["T-0184"]);
   expect((await tool(mcp, "list_tasks", { state: "all", query: "typo" })).data.tasks.map((t: any) => t.id)).toEqual(["T-0100"]);
@@ -148,9 +158,11 @@ test("tools: read and owner-level writes", async () => {
   expect((await tool(mcp, "send_message", { text: "  hi team ", reply_to: "T-0184" })).data.ok).toBe(true);
   expect((await tool(mcp, "answer_decision", { id: "D-0099", answer: "A" })).data.ok).toBe(true);
   expect((await tool(mcp, "answer_decision", { id: "D-0001", answer: "A" })).isError).toBe(true); // not open
-  await tool(mcp, "create_task", { title: "Add dark mode", details: "Make it balanced.", repo: "huacnlee/noop" });
-  expect(said).toEqual([{ text: "hi team", ref: "T-0184" }, { text: "D-0099 A", ref: "D-0099" },
-    { text: "新任务：Add dark mode\n\n仓库：huacnlee/noop\n\nMake it balanced.", ref: undefined }]);
+  // other writes are performed by the primary daemon (which owns the data): queued on the owner→fleet inbox
+  expect((await tool(mcp, "create_task", { title: "Add dark mode", details: "Make it balanced.", repo: "huacnlee/noop" })).data.queued).toBe(true);
+  expect((await tool(mcp, "cancel_task", { id: "T-0100" })).isError).toBe(true); // finished: not open
+  expect(said).toEqual([{ text: "hi team", ref: "T-0184" }, { text: "D-0099 A", ref: "D-0099" }]);
+  expect(queued).toEqual([{ tool: "create_task", title: "Add dark mode", details: "Make it balanced.", repo: "huacnlee/noop", agent: undefined, follows: undefined }]);
 
   const feed = (await tool(mcp, "get_feed")).data;
   expect(feed.events.map((e: any) => e.text)).toContain("D-0099 A");
@@ -184,8 +196,8 @@ test("SSE stream delivers events as notifications/message and resources/updated 
   append({ from: "lead@h1", kind: "result", text: "T-0184 PR opened", ref: "T-0184" });
   append({ from: "hub", kind: "system", text: "debug noise" }); // below "info" → no message
   let buf = "";
-  while (!(buf.match(/^data: /gm)?.length! >= 2)) buf += dec.decode((await reader.read()).value);
-  const msgs = buf.split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
+  while (!(buf.match(/^data: \{/gm)?.length! >= 2)) buf += dec.decode((await reader.read()).value);
+  const msgs = buf.split("\n").filter((l) => l.startsWith("data: {")).map((l) => JSON.parse(l.slice(6)));
   expect(msgs[0]).toMatchObject({ method: "notifications/message", params: { level: "info", logger: "noop", data: { text: "T-0184 PR opened" } } });
   expect(msgs[1]).toMatchObject({ method: "notifications/resources/updated", params: { uri: "noop://tasks/T-0184" } });
   expect(msgs.some((m) => m.params?.data?.text === "debug noise")).toBe(false);
@@ -194,6 +206,141 @@ test("SSE stream delivers events as notifications/message and resources/updated 
   while (!buf.includes("resources/updated")) buf += dec.decode((await reader.read()).value);
   expect(buf).toContain("noop://tasks/T-0184");
   expect(buf).not.toContain("noop://status"); // not subscribed
+  for (const s of mcp.streams) s.close();
+});
+
+// ---- spec details: sessions, headers, resumability, POST SSE, progress, cancel, list_changed
+const get = (mcp: Mcp, sid: string, h: Record<string, string> = {}) =>
+  mcp.fetch(new Request(`${B}/mcp`, { headers: { accept: "text/event-stream", "mcp-session-id": sid, ...h } }), "machine");
+/** Reads SSE frames until `until(frames)` is true. */
+async function frames(r: Response, until: (f: { id?: string; data?: any; retry?: string }[]) => boolean) {
+  const reader = r.body!.getReader(), dec = new TextDecoder();
+  let buf = "";
+  const parse = () => buf.split("\n\n").slice(0, -1).map((blk) => {
+    const f: any = {};
+    for (const l of blk.split("\n")) {
+      if (l.startsWith("id: ")) f.id = l.slice(4);
+      if (l.startsWith("retry: ")) f.retry = l.slice(7);
+      if (l.startsWith("data: ") && l.length > 6) f.data = JSON.parse(l.slice(6));
+    }
+    return f;
+  });
+  while (!until(parse())) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value); }
+  reader.releaseLock();
+  return { all: parse(), cancel: () => r.body!.cancel() };
+}
+
+test("sessions: 400 without Mcp-Session-Id, 404 when unknown, expired or deleted; protocol version validated", async () => {
+  const { mcp, sql } = hub();
+  const call = (h: Record<string, string>) => mcp.fetch(post("/mcp", { jsonrpc: "2.0", id: 1, method: "ping" }, h), "machine");
+  expect((await call({})).status).toBe(400);
+  expect((await call({ "mcp-session-id": "deadbeef" })).status).toBe(404);
+  const { sid } = await rpc(mcp, "initialize", { protocolVersion: "2025-06-18" });
+  expect((await call({ "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" })).status).toBe(200);
+  expect((await call({ "mcp-session-id": sid, "mcp-protocol-version": "1999-01-01" })).status).toBe(400);
+  expect((await get(mcp, "")).status).toBe(400);
+  expect((await get(mcp, "nope")).status).toBe(404);
+  // batches are only valid for 2025-03-26
+  const batch = (s: string) => mcp.fetch(post("/mcp", [{ jsonrpc: "2.0", id: 1, method: "ping" }], { "mcp-session-id": s }), "machine");
+  expect((await batch(sid)).status).toBe(400);
+  const old = (await rpc(mcp, "initialize", { protocolVersion: "2025-03-26" })).sid;
+  expect(((await (await batch(old)).json()) as any)[0].result).toEqual({});
+  // idle sessions expire
+  sql.exec("UPDATE mcp_sessions SET last = ? WHERE id = ?", Date.now() - 25 * 3600_000, sid);
+  expect((await call({ "mcp-session-id": sid })).status).toBe(404);
+  // DELETE ends it
+  expect((await mcp.fetch(new Request(`${B}/mcp`, { method: "DELETE", headers: { "mcp-session-id": old } }), "machine")).status).toBe(204);
+  expect((await call({ "mcp-session-id": old })).status).toBe(404);
+});
+
+test("capabilities follow the negotiated version", async () => {
+  const { mcp } = hub();
+  for (const v of ["2025-11-25", "2025-06-18", "2025-03-26"]) {
+    const r = (await rpc(mcp, "initialize", { protocolVersion: v })).body.result;
+    expect(r.protocolVersion).toBe(v);
+    expect(r.capabilities).toEqual({ tools: { listChanged: false }, resources: { subscribe: true, listChanged: true }, logging: {} });
+  }
+  expect((await rpc(mcp, "initialize", { protocolVersion: "2024-01-01" })).body.result.protocolVersion).toBe("2025-11-25");
+});
+
+test("GET stream: every message has an id, retry hint, priming event (2025-11-25), Last-Event-ID replays only what was missed", async () => {
+  const { mcp, append } = hub();
+  mcp.keepAliveMs = 30;
+  const { sid } = await rpc(mcp, "initialize", { protocolVersion: "2025-11-25" });
+  const r1 = await get(mcp, sid);
+  const a = await frames(r1, (f) => f.filter((x) => x.data).length >= 1 || (f.length >= 2 && !!append({ from: "lead@h1", kind: "result", text: "one" }) && false));
+  expect(a.all[0].retry).toBe("3000");
+  expect(a.all[1]).toEqual({ id: "g.0" }); // priming: id + empty data
+  const one = a.all.find((x) => x.data)!;
+  expect(one.id).toBe("g.1");
+  expect(one.data.params.data.text).toBe("one");
+  await a.cancel(); // drop the connection
+  await new Promise((res) => setTimeout(res, 10));
+  append({ from: "lead@h1", kind: "result", text: "two" }); // while disconnected
+  append({ from: "lead@h1", kind: "result", text: "three" });
+  const b = await frames(await get(mcp, sid, { "last-event-id": "g.1" }), (f) => f.filter((x) => x.data).length >= 2);
+  expect(b.all.filter((x) => x.data).map((x) => [x.id, x.data.params.data.text])).toEqual([["g.2", "two"], ["g.3", "three"]]);
+  // keep-alive comments flow on idle streams
+  const r3 = await get(mcp, sid);
+  const reader = r3.body!.getReader();
+  let buf = "";
+  while (!buf.includes(": ping")) buf += new TextDecoder().decode((await reader.read()).value);
+  for (const s of mcp.streams) s.close();
+  expect((await get(mcp, sid, { "last-event-id": "garbage" })).status).toBe(400);
+});
+
+test("wait_for_events over a POST SSE response: progress with the client's token, then the result", async () => {
+  const { mcp, append } = hub();
+  mcp.progressEveryMs = 20;
+  const { sid } = await rpc(mcp, "initialize", { protocolVersion: "2025-06-18" });
+  const cursor = (await rpc(mcp, "tools/call", { name: "get_feed", arguments: {} }, sid)).body.result.structuredContent.cursor;
+  const r = await mcp.fetch(post("/mcp", { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "wait_for_events", arguments: { cursor, timeout_seconds: 10 }, _meta: { progressToken: "tok" } } },
+    { "mcp-session-id": sid }), "machine");
+  expect(r.headers.get("content-type")).toBe("text/event-stream");
+  setTimeout(() => append({ from: "lead@h1", kind: "result", text: "landed" }), 80);
+  const f = await frames(r, (x) => x.some((y) => y.data?.id === 7));
+  const progress = f.all.filter((x) => x.data?.method === "notifications/progress").map((x) => x.data.params);
+  expect(progress.length).toBeGreaterThanOrEqual(2);
+  expect(progress.every((p) => p.progressToken === "tok" && p.total === 10)).toBe(true);
+  expect(progress.map((p) => p.progress)).toEqual([...progress.map((p) => p.progress)].sort((x, y) => x - y));
+  const res = f.all.find((x) => x.data?.id === 7)!;
+  expect(JSON.parse(res.data.result.content[0].text).events.map((e: any) => e.text)).toEqual(["landed"]);
+  // the POST stream is resumable too: replay from its first id returns the rest, ending with the response
+  const first = f.all.find((x) => x.data)!.id!;
+  const again = await frames(await get(mcp, sid, { "last-event-id": first }), (x) => x.some((y) => y.data?.id === 7));
+  expect(again.all.filter((x) => x.data).length).toBe(f.all.filter((x) => x.data).length - 1);
+  // without progressToken / SSE accept: plain JSON
+  const plain = await mcp.fetch(new Request(`${B}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json", "mcp-session-id": sid },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "wait_for_events", arguments: { cursor: 0, timeout_seconds: 1 } } }) }), "machine");
+  expect(plain.headers.get("content-type")).toContain("application/json");
+});
+
+test("notifications/cancelled aborts wait_for_events and no response is sent", async () => {
+  const { mcp } = hub();
+  const { sid } = await rpc(mcp, "initialize", { protocolVersion: "2025-11-25" });
+  const t0 = Date.now();
+  const r = await mcp.fetch(post("/mcp", { jsonrpc: "2.0", id: "w1", method: "tools/call", params: { name: "wait_for_events", arguments: { cursor: 999999, timeout_seconds: 30 }, _meta: { progressToken: 1 } } },
+    { "mcp-session-id": sid }), "machine");
+  setTimeout(() => rpc(mcp, "notifications/cancelled", { requestId: "w1", reason: "user gave up" }, sid, null), 50);
+  const f = await frames(r, () => false); // reads until the server closes the stream
+  expect(Date.now() - t0).toBeLessThan(5000);
+  expect(f.all.some((x) => x.data?.id === "w1")).toBe(false);
+  expect(mcp.inflight.size).toBe(0);
+});
+
+test("resources/list_changed when the set of open tasks or decisions changes", async () => {
+  const { mcp, file, append } = hub();
+  const { sid } = await rpc(mcp, "initialize", { protocolVersion: "2025-06-18" });
+  const r = await get(mcp, sid);
+  mcp.onChanged(["noop://tasks/T-0184"]); // content change only → no list_changed
+  file("tasks/active/T-0201.md", "---\nid: T-0201\ntitle: new\n---\n");
+  mcp.onChanged(["noop://tasks/T-0201", "noop://status"]);
+  const f = await frames(r, (x) => x.some((y) => y.data?.method === "notifications/resources/list_changed"));
+  expect(f.all.filter((x) => x.data?.method === "notifications/resources/list_changed").length).toBe(1);
+  expect((await rpc(mcp, "resources/list", {}, sid)).body.result.resources.map((x: any) => x.uri)).toContain("noop://tasks/T-0201");
+  expect((await rpc(mcp, "resources/list", {}, sid)).body.result.resources.map((x: any) => x.uri)).toContain("noop://decisions/D-0099");
+  expect(JSON.parse((await rpc(mcp, "resources/read", { uri: "noop://decisions/D-0099" }, sid)).body.result.contents[0].text).question).toBe("合并吗？");
+  void append;
   for (const s of mcp.streams) s.close();
 });
 

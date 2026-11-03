@@ -18,7 +18,8 @@
 - Shared state is a set of files. Each machine keeps a local mirror (`DATA`) so agents read and write plain Markdown; `src/sync.ts` syncs it with the Worker (`cloud/src/files.ts`).
 - Commits are compare-and-swap per path (`base_version`). A 409 means another host won; task claims rely on this, so exactly one host claims a task.
 - Every file version is kept in `history` (90 days / 20k rows, latest per path always kept) and can be reverted — this is how self-evolution edits are audited and undone.
-- The primary mirrors chat events to the Worker and pulls the owner's messages and settings from its inbox (`src/cloud.ts`).
+- The primary mirrors chat events to the Worker and long-polls its inbox (`GET /api/host/inbox?wait=25`: the Worker holds the request until something arrives) for the owner's messages, settings and MCP writes (`src/cloud.ts`).
+- Chat brain (`src/brain.ts`): every owner message that isn't a bare `D-0012 A` goes to a fast model (Claude Haiku via the local `claude` CLI, a pre-spawned warm process) that runs a short agent loop over noop's tools (`cloud/src/tools.ts`, shared with the MCP server): answer, look up, create/amend/cancel/reprioritise/reassign tasks, answer decisions, remember. The owner's model login stays on the primary; only the message and the reply cross the Worker. Latency per message: `~/.noop/brain.jsonl`.
 
 ## Layout
 
