@@ -3144,7 +3144,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       else void hostCall("speechStop");
     }
   }
-  const toggleDictation = () => (speech() === "off" ? void startDictation() : speech() === "on" ? stopDictation() : undefined);
+  /** The mic / stop button: start, stop (keeping the words), and if the recognizer hangs while finishing, a second press ends it. */
+  const toggleDictation = () => (speech() === "off" ? void startDictation() : stopDictation(speech() === "stopping"));
   if (host.available()) {
     host.on("speech", (p) => heard(String((p as { text?: string })?.text ?? "")));
     host.on("speechEnd", (p) => ended((p as { error?: string })?.error));
@@ -3614,6 +3615,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                       <Icon name="image" size={18} tint={colors.muted} />
                     </View>
                     <If when={canDictate()}>
+                      {/* while listening the mic turns into a filled stop button, so the way out is always in the same place */}
                       <View
                         testID="dictate"
                         role="button"
@@ -3621,23 +3623,23 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         accessibilityState={{ selected: speech() !== "off" }}
                         tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
                         onPress={toggleDictation}
-                        hoverStyle={speech() === "off" ? hovered() : { opacity: 0.85 }}
+                        hoverStyle={speech() === "off" ? hovered() : { opacity: 0.9 }}
                         style={{
                           width: touch ? 40 : 32,
                           height: touch ? 40 : 32,
                           borderRadius: radius.control,
                           alignItems: "center",
                           justifyContent: "center",
-                          backgroundColor: speech() === "off" ? undefined : tints.danger,
+                          backgroundColor: speech() === "off" ? undefined : colors.accentFill,
                           transitionProperty: "background-color",
                           transitionDuration: 120,
                         }}
                       >
-                        <Icon name="mic" size={18} tint={speech() === "off" ? colors.muted : colors.danger} />
+                        <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? 18 : 16} tint={speech() === "off" ? colors.muted : colors.onAccent} />
                       </View>
                     </If>
                     <If when={speech() !== "off"}>
-                      <Text testID="dictating" style={{ fontSize: 13, color: colors.danger, numberOfLines: 1 }}>
+                      <Text testID="dictating" style={{ fontSize: 13, color: colors.accent, numberOfLines: 1 }}>
                         {speech() === "on" ? "正在听…" : "正在识别…"}
                       </Text>
                     </If>

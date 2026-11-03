@@ -37,6 +37,7 @@ export type IconName =
   | "reply"
   | "play"
   | "pause"
+  | "stop"
   | "search"
   | "star"
   | "bell"
@@ -423,6 +424,11 @@ const glyphs: Record<IconName, Draw> = {
   pause: (c) => {
     c.fillRect(5.5, 4.5, 3, 11);
     c.fillRect(11.5, 4.5, 3, 11);
+  },
+  stop: (c) => {
+    c.beginPath();
+    c.roundRect(5, 5, 10, 10, 2);
+    c.fill();
   },
   search: (c) => {
     circle(c, 8.5, 8.5, 5);

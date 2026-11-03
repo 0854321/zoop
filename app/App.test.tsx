@@ -802,6 +802,21 @@ describe("voice input", () => {
     expect(app.shows("text:/没有麦克风或语音识别权限/")).toBe(true);
     expect(app.shows("label:停止语音输入")).toBe(false);
   });
+
+  test("on a phone, listening shows a filled stop button where the mic was; stopping keeps the words", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 390, height: 844, platform: "ios" });
+    await app.waitFor("label:语音输入");
+    await app.press("label:语音输入");
+    await app.waitFor("label:停止语音输入");
+    expect(app.shows("id:dictate")).toBe(true);
+    expect(app.shows("label:语音输入")).toBe(false);
+    await app.hear("部署一下");
+    await app.press("label:停止语音输入");
+    await app.waitFor("label:语音输入");
+    expect(app.value("id:composer")).toBe("部署一下");
+    expect(posts).toEqual([]);
+  });
 });
 
 describe("phones", () => {
