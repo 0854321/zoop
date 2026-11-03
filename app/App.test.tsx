@@ -179,11 +179,12 @@ describe("channel", () => {
     expect(app.shows("text:/排队 2/")).toBe(true);
   });
 
-  test("a task id is a chip that opens the task; a GitHub PR link is a chip that opens it", async () => {
+  test("a task id is a chip that opens the task; a GitHub PR link is a plain link named repo#n", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
-    await app.waitFor("id:gh-chip-app-42");
-    expect(app.shows("text:app#42")).toBe(true);
-    await app.press("id:gh-chip-app-42");
+    await app.waitFor("text:app#42");
+    expect(app.shows("id:gh-chip-app-42")).toBe(false);
+    expect(app.shows("text:/github\\.com\\/acme\\/app/")).toBe(false);
+    await app.press("text:app#42");
     expect(app.openedUrls()).toEqual(["https://github.com/acme/app/pull/42"]);
     await app.press("id:task-chip-T-0005");
     await app.waitFor("任务 T-0005");
@@ -209,18 +210,32 @@ describe("channel", () => {
     await app.waitFor("text:再看下 iPad");
   });
 
-  test("a decision's PR reference is a chip, host-lettered ids are chips, option buttons shorten PR links", async () => {
+    test("a decision's PR references are links, host-lettered ids are chips, option buttons shorten PR links", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([], [prDecision]), width: 1200, height: 800, platform: "macos" });
-    await app.waitFor("id:gh-chip-nsh-747");
-    expect(app.shows("text:/D-H0002/")).toBe(true);
+    await app.waitFor("text:/D-H0002/");
+    expect(app.shows("id:gh-chip-nsh-747")).toBe(false);
     expect(app.shows("text:/A: squash 合并 nsh#747 — 进入发布/")).toBe(true);
     expect(app.shows("text:/github\\.com\\/acme\\/nsh/")).toBe(false);
-    // code spans and repositories no link names stay text
-    expect(app.shows("id:gh-chip-nsh-1")).toBe(false);
+    await app.press("text:nsh #747");
+    expect(app.openedUrls()).toEqual(["https://github.com/acme/nsh/issues/747"]);
+    // repositories no link names stay text
     expect(app.shows("text:/other#3/")).toBe(true);
     // the recommendation marks its option instead of a line of its own
     expect(app.shows("text:/建议：\\*?A/")).toBe(false);
     expect(app.shows("text:推荐")).toBe(true);
+  });
+
+  test("a bare #746 links to the repository its thread names", async () => {
+    const thread = [
+      prDecision,
+      { id: "e10", ts: ts(10), from: "owner", kind: "owner", ref: "T-0129", text: "Review NSH#746, 754 770" },
+      { id: "e11", ts: ts(11), from: "lead@linux-box", kind: "notice", ref: "T-0129", text: "都审完了。可以合并：#746（重跑 CI）、#770（要等 `#763` 先合）。" },
+    ];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([], thread), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("text:#770");
+    await app.press("text:#770");
+    await app.press("text:NSH#746");
+    expect(app.openedUrls()).toEqual(["https://github.com/acme/nsh/issues/770", "https://github.com/acme/nsh/issues/746"]);
   });
 
   test("an answer quotes the card it replies to; pressing the quote goes back to the card", async () => {
@@ -288,6 +303,25 @@ describe("channel", () => {
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "先等一周", reply_to: "D-0001" });
     expect(app.value("id:composer")).toBe("");
+  });
+
+  test("a message's quick actions copy its text and reply to its task", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const done = { id: "e8", ts: ts(8), from: "lead@mac", kind: "notice", ref: "T-0009", text: "T-0009 已完成，PR 已开" };
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts, [done]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("id:copy-e8");
+    await app.hover("text:/已完成，PR 已开/");
+    await app.press("id:copy-e8");
+    await app.waitUntil(() => app.clipboard() === "T-0009 已完成，PR 已开");
+    await app.waitFor("label:已复制");
+    // an open question answers through its card, so it has no reply action
+    expect(app.shows("id:reply-e2")).toBe(false);
+    await app.press("id:reply-e8");
+    await app.waitFor("回复 lead：T-0009 已完成，PR 已开");
+    await app.type("id:composer", "再加个截图");
+    await app.keyboard.press("mod+enter");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "再加个截图", reply_to: "T-0009" });
   });
 
   test("a machine in the sidebar opens its page, and its tasks open theirs", async () => {

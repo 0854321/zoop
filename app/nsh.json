@@ -9,6 +9,7 @@
     "host": "./host.js"
   },
   "capabilities": {
+    "clipboard": true,
     "network": {
       "hosts": [
         "*"

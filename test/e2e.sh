@@ -6,7 +6,7 @@ SRC=$(cd "$(dirname "$0")/.." && pwd)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 export HUB_DATA="$W/data" HUB_HOST=pc HUB_SYNC_FAKE="$W/worker.sqlite"
 cd "$SRC"; hub() { bun "$SRC/src/cli.ts" "$@"; }
-hub init >/dev/null
+hub init --primary >/dev/null
 cd "$W/data"
 cat > "$W/fake-agent" <<'F'
 #!/usr/bin/env bash

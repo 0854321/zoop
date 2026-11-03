@@ -56,6 +56,7 @@ export type IconName =
   | "diagnostics"
   | "close"
   | "copy"
+  | "reply"
   | "trash"
   | "share"
   | "download"
@@ -520,6 +521,10 @@ const glyphs: Record<IconName, Draw> = {
   close: (c) => {
     line(c, [5.5, 5.5, 14.5, 14.5]);
     line(c, [14.5, 5.5, 5.5, 14.5]);
+  },
+  reply: (c) => {
+    line(c, [8, 5, 3, 10, 8, 15]);
+    line(c, [3, 10, 12, 10, 15, 11, 16.5, 12.5, 17, 15]);
   },
   copy: (c) => {
     rect(c, 7, 7, 10, 10, 2);
