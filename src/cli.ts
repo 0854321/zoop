@@ -587,12 +587,11 @@ Reply with exactly one fenced json block: {"<task id>": {"requires": "", "cli": 
  * - "amend": a change to the decision the owner just answered
  * - "new": new, unrelated work */
 export async function routeMessage(text: string, cfg: Cfg, chat: string[] = [], answered?: string):
-  Promise<{ action: "same" | "follows" | "amend" | "new"; id?: string }> {
+  Promise<{ action: "same" | "follows" | "amend" | "new"; id?: string; reply?: string }> {
   const open = ["inbox", "active", "waiting"].flatMap((d) => list(P("tasks", d), /^T-.*\.md$/))
     .map((f) => readDoc(f)).map(({ meta, body }) => ({ id: String(meta.id), title: meta.title, ask: body.slice(0, 300).replace(/\s+/g, " ") }));
   const recent = [...new Set(chat.join("\n").match(/\bT-\d{4}\b/g) ?? [])];
   const decision = answered && existsSync(P("decisions", "closed", `${answered}.md`)) ? readDoc(P("decisions", "closed", `${answered}.md`)).meta : null;
-  if (!open.length && !recent.length && !decision) return { action: "new" };
   const r = await quickAsk(`You route the owner's chat messages for their AI team. The team channel is the main conversation;
 each task is its own conversation. Decide where this new message belongs:
 - "same": one of the OPEN tasks below when it is clearly about the same work (same goal, same repo/PR/release). Two messages
@@ -608,13 +607,18 @@ ${chat.length ? `\nThe channel just before it (oldest first):\n${chat.join("\n")
 Open tasks:
 ${open.map((t) => `- ${t.id}: ${t.title} — ${t.ask}`).join("\n") || "(none)"}
 
-Reply with exactly one fenced json block: {"action": "same" | "follows" | "amend" | "new", "id": "<task id for same/follows>" | null}`,
+Also write "reply": the one short line the team answers in the channel right now, as a person would — in the owner's
+language, specific to what they asked (e.g. "好，我去把 MCP 接上，做完给你看。"), never a template, no task ids, no promises
+about process ("做完带结果回来", "需要你拍板时…"). Empty string when a reply adds nothing (e.g. a bare "A").
+
+Reply with exactly one fenced json block: {"action": "same" | "follows" | "amend" | "new", "id": "<task id for same/follows>" | null, "reply": "..."}`,
     cfg, P("logs", "runs", `route-${Date.now()}.log`));
   const action = r?.action;
-  if (action === "same" && open.some((t) => t.id === r.id)) return { action, id: r.id };
-  if (action === "follows" && (recent.includes(r.id) || open.some((t) => t.id === r.id))) return { action, id: r.id };
-  if (action === "amend" && decision) return { action, id: answered };
-  return { action: "new" };
+  const reply = typeof r?.reply === "string" && r.reply.trim() ? r.reply.trim().slice(0, 300) : undefined;
+  if (action === "same" && open.some((t) => t.id === r.id)) return { action, id: r.id, reply };
+  if (action === "follows" && (recent.includes(r.id) || open.some((t) => t.id === r.id))) return { action, id: r.id, reply };
+  if (action === "amend" && decision) return { action, id: answered, reply };
+  return { action: "new", reply };
 }
 
 async function daemon(cfg: Cfg) {
@@ -682,13 +686,13 @@ async function daemon(cfg: Cfg) {
     const chat = recentChat(text);
     const isOpen = (t: string) => ["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${t}.md`)));
     const route = reply
-      ? { action: isOpen(reply) ? "same" : "follows", id: reply }
-      : await routeMessage(text, cfg, chat, answered).catch(() => ({ action: "new" as const, id: undefined }));
+      ? { action: isOpen(reply) ? "same" : "follows", id: reply, reply: undefined as string | undefined }
+      : await routeMessage(text, cfg, chat, answered).catch(() => ({ action: "new" as const, id: undefined, reply: undefined }));
     if (route.action === "amend" && route.id) return { amend: route.id };
     const same = route.action === "same" ? route.id! : null;
     const follows = route.action === "follows" ? route.id! : null;
     const title = same ? await appendFollowUp(same, text) : "";
-    if (same && title) return { id: same, title };
+    if (same && title) return { id: same, title, reply: route.reply };
     return locked(async () => {
     await _pull();
     // A short reply ("不行，…", "这个细节记下来") only makes sense with what came before it: the new task carries the
@@ -706,7 +710,7 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] chat ${id}`);
     // plan it now and wake the loop, so an idle machine starts it within seconds instead of after the next tick or two
     queueMicrotask(() => void planInbox(cfg, host).then(wakeDaemon).catch(() => {}));
-    return { id, ...(prevFile ? { follows: prev! } : {}) };
+    return { id, reply: route.reply, ...(prevFile ? { follows: prev! } : {}) };
     });
   });
   await locked(async () => { // recover tasks this host was running when it died/restarted

@@ -35,7 +35,7 @@ const inbound: Inbound[] = [];
 /** A chat message becomes work. `reply`: the task whose message the owner replied to ("T-0125"), or whose page they wrote on;
  * `answered`: the decision the owner answered moments ago (the message may change that answer). The result: added to an open
  * task (`title`), a new task continuing one (`follows`), a new task, or `amend`: a change to the answered decision. */
-type OwnerTask = (text: string, o: { reply?: string; answered?: string }) => Promise<{ id: string; title?: string; follows?: string } | { amend: string }>;
+type OwnerTask = (text: string, o: { reply?: string; answered?: string }) => Promise<{ id: string; title?: string; follows?: string; reply?: string } | { amend: string }>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -372,12 +372,8 @@ export async function handleOwnerMessage(
       inbound.push({ id: r.amend, answer: text.trim(), source: "chat-amend" }); // "wait, I clicked the wrong one"
       return;
     }
-    const { id: tid, title, follows } = r;
-    appendEvent(title
-      ? { from: "hub", kind: "system", text: `收到，已补充到 ${tid}「${title}」，接着处理。`, ref: tid }
-      : follows
-        ? { from: "hub", kind: "system", text: `收到，接着 ${follows} 处理（${tid}），会结合前面的对话。`, ref: tid }
-        : { from: "hub", kind: "system", text: `收到，交给 Kai 安排（${tid}）。做完带结果回来，需要你拍板时会给你选项。`, ref: tid });
+    // the acknowledgement is written by the routing model; no canned text — when it has nothing to say, say nothing
+    if (r.reply) appendEvent({ from: "hub", kind: "system", text: r.reply, ref: r.id });
   }
 }
 
