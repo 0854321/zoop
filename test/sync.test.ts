@@ -166,3 +166,35 @@ test("append-only files merge by union when both sides diverged; nothing ever ge
   expect(get("b", "decisions/closed/D-9.md")).toBe("---\nid: D-9\n---\nfrom a\n");
   for (const f of [j, get("b", "decisions/closed/D-9.md")]) expect(sync.hasConflictMarkers(f)).toBe(false);
 });
+
+test("a replaced Worker (older copy, lower revs) is re-learned and our newer files pushed to it", async () => {
+  as("a");
+  put("a", "fleet/hosts/a.json", "{\"seen\":1}\n");
+  put("a", "tasks/inbox/T-0900.md", "v1\n");
+  expect(await sync.commitPush("a: seed")).toBe(true);
+  for (const n of [2, 3, 4]) { put("a", "fleet/hosts/a.json", `{"seen":${n}}\n`); expect(await sync.commitPush(`a: beat ${n}`)).toBe(true); }
+  // the new Worker holds an older copy: beat v1, the task, plus a file this host never saw; its revs are far lower
+  const old = await sync.fakeTransport(join(W, "worker-copy.sqlite"), "copy");
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  expect((await old("/api/files/commit", { method: "POST", body: { msg: "copy", changes: [
+    { path: "fleet/hosts/a.json", base_version: 0, content: b64("{\"seen\":1}\n") },
+    { path: "tasks/inbox/T-0900.md", base_version: 0, content: b64("v1\n") },
+    { path: "decisions/open/D-0900.md", base_version: 0, content: b64("from the copy\n") },
+  ] } }))!.status).toBe(200);
+  sync.setSyncData(hosts.a); sync.setTransport(old);
+  put("a", "fleet/hosts/a.json", "{\"seen\":5}\n");
+  put("a", "tasks/inbox/T-0901.md", "new\n");
+  expect(await sync.commitPush("a: beat 5")).toBe(true);
+  const read = async (p: string) => {
+    const r = await old(`/api/files/history?path=${p}&limit=1&content=1`);
+    return Buffer.from(r!.json.history[0].content, "base64").toString();
+  };
+  expect(await read("fleet/hosts/a.json")).toBe("{\"seen\":5}\n");
+  expect(await read("tasks/inbox/T-0901.md")).toBe("new\n");
+  expect(get("a", "decisions/open/D-0900.md")).toBe("from the copy\n");
+  expect(await sync.commitPush("a: settled")).toBe(true);
+  put("a", "fleet/hosts/a.json", "{\"seen\":6}\n");
+  expect(await sync.commitPush("a: beat 6")).toBe(true); // normal CAS again
+  expect(await read("fleet/hosts/a.json")).toBe("{\"seen\":6}\n");
+  sync.setTransport(t);
+});

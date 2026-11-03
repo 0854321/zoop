@@ -283,6 +283,49 @@ export async function pull(): Promise<boolean> {
   return withLock(async () => (await _pull(loadState(), t)).ok);
 }
 
+// ------------------------------------------------------------------ replaced Worker
+/** The Worker holds an older version of a path than we last synced: it was replaced (moved to another account,
+ *  restored from a copy), so its revs no longer line up with ours and `changes?since=` would return nothing forever. */
+async function replaced(st: State, t: Transport, conflicts: string[]): Promise<boolean> {
+  for (const p of conflicts.filter((p) => st.files[p]).slice(0, 3)) {
+    const r = await t(`/api/files/history?path=${encodeURIComponent(p)}&limit=1`);
+    if (r?.status !== 200) continue;
+    if ((r.json.history?.[0]?.version ?? 0) < st.files[p].v) return true;
+  }
+  return false;
+}
+
+/** Re-learn every path from the replaced Worker. Our files are at least as new as its copy, so where they differ ours
+ *  win (append-only files merge) and the next commit pushes them; paths only it has are written here. */
+async function rebase(st: State, t: Transport): Promise<boolean> {
+  console.error(`sync: the Worker was replaced (its history is behind ours at rev ${st.rev}); re-syncing every path, local versions win`);
+  const next: State = { rev: 0, files: {} };
+  for (let page = 0; page < 10_000; page++) {
+    const r = await t(`/api/files/changes?since=${next.rev}`);
+    if (!r || r.status !== 200) return false;
+    for (const f of r.json.files as Remote[]) {
+      if (ignored(f.path) || f.path.includes("..") || f.deleted || f.content == null) continue;
+      const remote = unb64(f.content), local = readLocal(f.path);
+      setBase(f.path, remote);
+      if (!local) {
+        if (st.files[f.path]) { next.files[f.path] = { v: f.version, h: f.hash ?? hash(remote), m: -1, s: -1 }; continue; } // we deleted it since
+        writeAtomic(join(D(), f.path), remote);
+        next.files[f.path] = { v: f.version, h: f.hash ?? hash(remote), ...stamp(f.path) };
+        continue;
+      }
+      if (hash(local) === (f.hash ?? hash(remote))) { next.files[f.path] = { v: f.version, h: hash(local), ...stamp(f.path) }; continue; }
+      const merged = appendOnly(f.path) ? mergeAppend(f.path, null, local, remote) : null;
+      if (merged) writeAtomic(join(D(), f.path), merged);
+      next.files[f.path] = { v: f.version, h: f.hash ?? hash(remote), m: -1, s: -1 }; // differs → the next scan pushes ours
+    }
+    next.rev = r.json.rev;
+    if (!r.json.more) break;
+  }
+  st.rev = next.rev; st.files = next.files;
+  saveState(st);
+  return true;
+}
+
 // ------------------------------------------------------------------ commit
 function recordCommitted(st: State, changes: Change[], files: { path: string; version: number; hash: string | null; deleted: boolean }[]) {
   const byPath = new Map(changes.map((c) => [c.path, c]));
@@ -313,7 +356,9 @@ export async function commitPush(msg: string): Promise<boolean> {
       if (r.status !== 409) { console.error(`sync: commit rejected ${r.status}: ${JSON.stringify(r.json).slice(0, 300)}`); saveState(st); return false; }
       const conflicts: string[] = r.json.conflicts ?? [];
       const { ok, lost } = await _pull(st, t);
-      if (!ok || conflicts.some((p) => lost.has(p))) return false; // someone else won (e.g. claimed the task)
+      if (!ok) return false;
+      if (await replaced(st, t, conflicts)) { if (!(await rebase(st, t))) return false; continue; }
+      if (conflicts.some((p) => lost.has(p))) return false; // someone else won (e.g. claimed the task)
     }
     return false;
   });
