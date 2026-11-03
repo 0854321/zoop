@@ -13,9 +13,10 @@
 //   POST /api/auth/start {email} → mail code · POST /api/auth/verify {email, code} → {session} · POST /api/auth/logout
 // Web Push (owner session): GET /api/push/vapid · POST /api/push/subscribe {subscription, device_label}
 //   · POST /api/push/unsubscribe {endpoint} · POST /api/push/test · POST /api/push/answer {ref, answer}
+// MCP (Claude / ChatGPT connectors): /mcp + OAuth 2.1 at /oauth/* and /.well-known/oauth-* — see mcp.ts and docs/mcp.md.
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
-import { handleFiles, handleReadFiles, initFilesSchema } from "./files";
+import { b64dec, b64enc, handleFiles, handleReadFiles, initFilesSchema } from "./files";
 import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
@@ -28,6 +29,7 @@ async function cfMail(binding: SendEmail, from: string, to: string, subject: str
   await binding.send(new EmailMessage(from, to, raw));
 }
 import { sendPush, type PushSub, type Vapid } from "./push";
+import { CORS, Mcp } from "./mcp";
 
 interface Env {
   HUB: DurableObjectNamespace<Hub>; HUB_TOKEN: string; ASSETS: Fetcher;
@@ -78,16 +80,21 @@ const validEmail = (e: string) => e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    if (!url.pathname.startsWith("/api/") && !url.pathname.startsWith("/media/")) return env.ASSETS.fetch(req);
+    const mcp = isMcpPath(url.pathname);
+    if (mcp && req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    if (!mcp && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/media/")) return env.ASSETS.fetch(req);
     if (!env.HUB_TOKEN) return json({ error: "HUB_TOKEN secret not set" }, 500);
     return env.HUB.get(env.HUB.idFromName("hub")).fetch(req);
   },
 };
 
+const isMcpPath = (p: string) => p === "/mcp" || p.startsWith("/oauth/") || p.startsWith("/.well-known/oauth-") || p === "/.well-known/openid-configuration";
+
 type Ev = { id: string; ts: string; from: string; kind: string; text: string; ref?: string; [k: string]: unknown };
 
 export class Hub extends DurableObject<Env> {
   sql: SqlStorage;
+  mcp: Mcp;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
@@ -101,6 +108,38 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, email TEXT, created INTEGER, last_seen INTEGER, ua TEXT);
       CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, session TEXT, p256dh TEXT, auth TEXT, label TEXT, created INTEGER);`);
     initFilesSchema(this.sql);
+    this.mcp = new Mcp({
+      sql: this.sql,
+      status: () => this.statusView(),
+      events: (after, limit) => this.sql.exec("SELECT seq, json FROM events WHERE seq > ? ORDER BY seq LIMIT ?", after, limit).toArray()
+        .map((r) => ({ seq: r.seq as number, ev: JSON.parse(r.json as string) })),
+      say: (text, ref) => this.ownerMessage(text, ref),
+      startCode: async (email) => { const r = await this.auth("/api/auth/start", new Request("https://hub/api/auth/start", { method: "POST", body: JSON.stringify({ email }) })); return { status: r.status, body: await r.json() }; },
+      checkCode: (email, code) => this.checkCode(email, code),
+      newSession: (email, ua) => this.newSession(email, ua),
+      dropSession: async (raw) => { this.sql.exec("DELETE FROM sessions WHERE id = ?", await sha256(raw)); },
+    });
+  }
+
+  statusView() { return { ...(this.get("status") ?? {}), hub: { online: this.hostOnline(), seen: this.get("host_seen") } }; }
+
+  /** Email-code check shared by /api/auth/verify and the OAuth sign-in page. */
+  async checkCode(rawEmail: unknown, rawCode: unknown): Promise<{ email?: string; error?: string; status?: number }> {
+    const email = normEmail(rawEmail), code = typeof rawCode === "string" ? rawCode.trim() : "";
+    if (!validEmail(email) || !/^\d{6}$/.test(code)) return { error: "invalid request", status: 400 };
+    const r = this.sql.exec("SELECT hash, expires, attempts FROM auth_codes WHERE email = ?", email).toArray()[0];
+    if (!r || (r.expires as number) < Date.now()) return { error: "验证码无效或已过期，请重新获取", status: 401 };
+    if ((r.attempts as number) >= CODE_TRIES) return { error: "尝试次数太多，请重新获取验证码", status: 401 };
+    this.sql.exec("UPDATE auth_codes SET attempts = attempts + 1 WHERE email = ?", email);
+    if (!sameStr(await sha256(`${email}:${code}`), r.hash as string)) return { error: "验证码不对", status: 401 };
+    this.sql.exec("DELETE FROM auth_codes WHERE email = ?", email);
+    this.sql.exec("DELETE FROM kv WHERE k = 'cli_code'");
+    return { email };
+  }
+  async newSession(email: string, ua: string) {
+    const session = hex(crypto.getRandomValues(new Uint8Array(32))), now = Date.now();
+    this.sql.exec("INSERT INTO sessions (id, email, created, last_seen, ua) VALUES (?, ?, ?, ?, ?)", await sha256(session), email, now, now, ua.slice(0, 300));
+    return session;
   }
 
   get(k: string): any { const r = this.sql.exec("SELECT v FROM kv WHERE k = ?", k).toArray()[0]; return r ? JSON.parse(r.v as string) : null; }
@@ -112,6 +151,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
     const s = JSON.stringify(ev);
     for (const ws of this.ctx.getWebSockets()) try { ws.send(s); } catch {}
+    try { this.mcp.onEvent(ev); } catch (err) { console.error(`mcp: ${err}`); }
     this.pruneMedia();
     const n = this.notification(ev);
     if (n) this.ctx.waitUntil(this.pushAll(n.payload, n.urgency).catch((err) => console.error(`push: ${err}`)));
@@ -272,19 +312,9 @@ export class Hub extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (p === "/api/auth/verify") {
-      const email = normEmail(body?.email), code = typeof body?.code === "string" ? body.code.trim() : "";
-      if (!validEmail(email) || !/^\d{6}$/.test(code)) return json({ error: "invalid request" }, 400);
-      const r = this.sql.exec("SELECT hash, expires, attempts FROM auth_codes WHERE email = ?", email).toArray()[0];
-      if (!r || (r.expires as number) < now) return json({ error: "验证码无效或已过期，请重新获取" }, 401);
-      if ((r.attempts as number) >= CODE_TRIES) return json({ error: "尝试次数太多，请重新获取验证码" }, 401);
-      this.sql.exec("UPDATE auth_codes SET attempts = attempts + 1 WHERE email = ?", email);
-      if (!sameStr(await sha256(`${email}:${code}`), r.hash as string)) return json({ error: "验证码不对" }, 401);
-      this.sql.exec("DELETE FROM auth_codes WHERE email = ?", email);
-      this.sql.exec("DELETE FROM kv WHERE k = 'cli_code'");
-      const session = hex(crypto.getRandomValues(new Uint8Array(32)));
-      this.sql.exec("INSERT INTO sessions (id, email, created, last_seen, ua) VALUES (?, ?, ?, ?, ?)",
-        await sha256(session), email, now, now, (req.headers.get("user-agent") ?? "").slice(0, 300));
-      return json({ session });
+      const r = await this.checkCode(body?.email, body?.code);
+      if (!r.email) return json({ error: r.error }, r.status ?? 401);
+      return json({ session: await this.newSession(r.email, req.headers.get("user-agent") ?? "") });
     }
     if (p === "/api/auth/logout") {
       const w = await this.who(req, new URL(req.url));
@@ -302,6 +332,7 @@ export class Hub extends DurableObject<Env> {
     const p = url.pathname, m = req.method;
 
     if (p.startsWith("/api/auth/")) return this.auth(p, req);
+    if (isMcpPath(p)) return this.mcp.fetch(req, await this.who(req, url));
     const who = await this.who(req, url);
     if (!who) return json({ error: "unauthorized" }, 401);
     if (p.startsWith("/api/push/")) return this.push(p, req, who);
@@ -313,7 +344,18 @@ export class Hub extends DurableObject<Env> {
       const ownerOnly = p === "/api/files/history" || p === "/api/files/revert";
       if (ownerOnly ? who === "machine" : who !== "machine") return json({ error: "forbidden" }, 403);
       const actor = who === "machine" ? (req.headers.get("x-noop-host") ?? "machine") : "owner";
+      const rev0 = Number(this.sql.exec("SELECT COALESCE(MAX(rev), 0) AS n FROM files").one().n);
       const r = await handleFiles(this.sql, req, url, actor);
+      if (r && m === "POST") { // tasks / decisions changed → MCP resources/updated
+        const paths = this.sql.exec("SELECT path FROM files WHERE rev > ?", rev0).toArray().map((x) => String(x.path));
+        const uris = new Set<string>();
+        for (const f of paths) {
+          const t = f.match(/^tasks\/[^/]+\/(T-[^/]+)\.md$/)?.[1];
+          if (t) { uris.add(`noop://tasks/${t}`); uris.add("noop://status"); }
+          if (f.startsWith("decisions/")) uris.add("noop://decisions");
+        }
+        if (uris.size) this.mcp.onChanged([...uris]);
+      }
       if (r) return r;
     }
     if (p === "/api/host/login-code") { // `noop login` on the owner's machine, when email isn't configured
@@ -335,7 +377,35 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("DELETE FROM push_subs");
       return json({ ok: true, revoked: n });
     }
-
+    // Moving the hub to another Cloudflare account, one page at a time (media blobs are large):
+    //   GET /api/host/export → {tables: {name: rows}} · GET /api/host/export?table=t&offset=0&limit=50 → {rows}
+    //   POST /api/host/import {table, rows, reset} (reset empties the table first)
+    if (p === "/api/host/export" && m === "GET") {
+      if (who !== "machine") return json({ error: "forbidden" }, 403);
+      const t = url.searchParams.get("table");
+      const names = this.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map((r) => r.name as string);
+      if (!t) return json({ tables: Object.fromEntries(names.map((n) => [n, this.sql.exec(`SELECT COUNT(*) AS n FROM "${n}"`).one().n])) });
+      if (!names.includes(t)) return json({ error: "no such table" }, 404);
+      const offset = Number(url.searchParams.get("offset") ?? 0), limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 1000);
+      const rows = this.sql.exec(`SELECT * FROM "${t}" ORDER BY rowid LIMIT ? OFFSET ?`, limit, offset).toArray().map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) =>
+        [k, v instanceof ArrayBuffer ? { $b64: b64enc(new Uint8Array(v)) } : v])));
+      return json({ rows });
+    }
+    if (p === "/api/host/import" && m === "POST") {
+      if (who !== "machine") return json({ error: "forbidden" }, 403);
+      const { table: t, rows, reset } = (await req.json()) as { table: string; rows: Record<string, unknown>[]; reset?: boolean };
+      const known = new Set(this.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map((r) => r.name as string));
+      if (!known.has(t)) return json({ error: "no such table" }, 404);
+      this.ctx.storage.transactionSync(() => {
+        if (reset) this.sql.exec(`DELETE FROM "${t}"`);
+        for (const r of rows) {
+          const cols = Object.keys(r);
+          const vals = cols.map((c) => { const v = r[c] as any; return v && typeof v === "object" && "$b64" in v ? b64dec(v.$b64) : v; });
+          this.sql.exec(`INSERT OR REPLACE INTO "${t}" (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map(() => "?").join(",")})`, ...vals);
+        }
+      });
+      return json({ ok: true, n: rows.length });
+    }
     if (p === "/api/stream") {
       if (req.headers.get("upgrade") !== "websocket") return json({ error: "websocket expected" }, 426);
       const [client, server] = Object.values(new WebSocketPair());
@@ -373,10 +443,7 @@ export class Hub extends DurableObject<Env> {
       return json({ url: `/media/${id}` });
     }
 
-    if (p === "/api/status") {
-      const st = this.get("status") ?? {};
-      return json({ ...st, hub: { online: this.hostOnline(), seen: this.get("host_seen") } });
-    }
+    if (p === "/api/status") return json(this.statusView());
 
     if (p === "/api/settings" && m === "GET") return json(this.get("settings") ?? { current: {}, effective: {}, options: {} });
     if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it
@@ -424,7 +491,7 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/events" && m === "POST") return json(this.append((await req.json()) as Partial<Ev>));
     if (p === "/api/host/state" && m === "PUT") {
       const { status, settings } = (await req.json()) as { status?: unknown; settings?: unknown };
-      if (status) this.set("status", status);
+      if (status) { this.set("status", status); this.mcp.onChanged(["noop://status"]); }
       if (settings) this.set("settings", settings);
       this.set("host_seen", Date.now());
       return json({ ok: true });

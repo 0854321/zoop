@@ -36,8 +36,8 @@ export function initFilesSchema(sql: FilesSql) {
 }
 
 // ---------------------------------------------------------------- helpers
-const b64enc = (u: Uint8Array) => { let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
-function b64dec(s: string): Uint8Array {
+export const b64enc = (u: Uint8Array) => { let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
+export function b64dec(s: string): Uint8Array {
   const bin = atob(s); const u = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   return u;
