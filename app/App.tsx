@@ -175,6 +175,9 @@ async function loadConfig(): Promise<Boot> {
 
 type Conn = "connecting" | "live" | "offline" | "unauthorized";
 
+/** Failed reconnects in a row before the owner hears about it; anything shorter recovers silently. */
+const OFFLINE_AFTER = 5;
+
 function createHub(cfg: Config) {
   const events = signal<HubEvent[]>([]);
   const status = signal<Status | null>(null);
@@ -184,6 +187,7 @@ function createHub(cfg: Config) {
   let disposed = false;
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let failures = 0;
 
   const last = () => {
     const evs = untracked(events);
@@ -198,7 +202,7 @@ function createHub(cfg: Config) {
       const body = (await r.json()) as { events: HubEvent[] };
       events.update((evs) => merge(evs, body.events));
     } catch {
-      conn.set("offline");
+      /* the socket's retries decide when this counts as offline */
     } finally {
       loaded.set(true);
     }
@@ -217,7 +221,10 @@ function createHub(cfg: Config) {
     if (disposed || untracked(conn) === "unauthorized") return;
     const ws = new WebSocket(wsUrl(cfg.url, cfg.token));
     socket = ws;
-    ws.onopen = () => conn.set("live");
+    ws.onopen = () => {
+      failures = 0;
+      conn.set("live");
+    };
     ws.onmessage = (m: { data: unknown }) => {
       try {
         events.update((evs) => merge(evs, [JSON.parse(String(m.data)) as HubEvent]));
@@ -228,7 +235,7 @@ function createHub(cfg: Config) {
     };
     ws.onclose = () => {
       if (disposed) return;
-      if (untracked(conn) !== "unauthorized") conn.set("offline");
+      if (++failures >= OFFLINE_AFTER && untracked(conn) !== "unauthorized") conn.set("offline");
       retry = setTimeout(async () => {
         await loadFeed();
         stream();
