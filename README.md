@@ -13,6 +13,8 @@ Noop runs a small team of Claude Code and Codex agents on your own computers. Th
 - **Quiet** — no noise, no raw errors. You hear about results and decisions, nothing else.
 - **Yours** — runs on your machines and your own free Cloudflare account. No shared service, no one else's server.
 
+**If this helps you, please [sponsor me](https://github.com/sponsors/huacnlee).**
+
 ## Install
 
 On an always-on Linux machine, once — it becomes the primary:

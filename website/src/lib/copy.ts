@@ -1,7 +1,7 @@
 export const copy = {
   en: {
     description: 'Noop runs a small team of Claude Code and Codex agents on your own computers. They do your daily work, and only ask you when something really needs you.',
-    skip: 'Skip to content', source: 'Source', language: 'Language', darkMode: 'Dark mode', nav: 'Main navigation',
+    skip: 'Skip to content', sponsor: 'Sponsor me', sponsorText: 'If this helps you, please sponsor me.', sponsorButton: 'Sponsor on GitHub', source: 'Source', language: 'Language', darkMode: 'Dark mode', nav: 'Main navigation',
     eyebrow: 'Your own AI team', title: 'Your day can be a no-op.',
     intro: 'Noop runs a small team of Claude Code and Codex agents on your own computers. They do your daily work, decide what they can based on how you’ve decided before, and only ask you when something really needs you, with a short list of options.',
     explore: 'See how it works', note: 'Your machines · Your Cloudflare account · Open source',
@@ -55,7 +55,7 @@ export const copy = {
   },
   'zh-CN': {
     description: 'Noop 在你自己的电脑上运行一支由 Claude Code 和 Codex 智能体组成的小团队。它们处理日常工作，只在真正需要你时才来询问。',
-    skip: '跳转到内容', source: '源码', language: '语言', darkMode: '深色模式', nav: '主导航',
+    skip: '跳转到内容', sponsor: '赞助作者', sponsorText: '如果这个项目帮到了你，请赞助我。', sponsorButton: '在 GitHub 上赞助', source: '源码', language: '语言', darkMode: '深色模式', nav: '主导航',
     eyebrow: '你自己的 AI 团队', title: '你的一天，可以是 no-op',
     intro: 'Noop 在你自己的电脑上运行一支由 Claude Code 和 Codex 智能体组成的小团队。它们处理日常工作，依据你以往的决定自行判断，只在真正需要你时才来询问，并附上几个简短的选项。',
     explore: '了解使用方式', note: '你的机器 · 你的 Cloudflare 账号 · 开源',
