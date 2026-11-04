@@ -3716,36 +3716,36 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     >
                       <Icon name="image" size={18} tint={colors.muted} />
                     </View>
-                    <If when={canDictate()}>
-                      {/* while listening the mic turns into a filled stop button, so the way out is always in the same place */}
-                      <View
-                        testID="dictate"
-                        role="button"
-                        accessibilityLabel={speech() === "off" ? "语音输入" : "停止语音输入"}
-                        accessibilityState={{ selected: speech() !== "off" }}
-                        tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
-                        onPress={toggleDictation}
-                        hoverStyle={speech() === "off" ? hovered() : { opacity: 0.9 }}
-                        style={{
-                          width: touch ? 40 : 32,
-                          height: touch ? 40 : 32,
-                          borderRadius: radius.control,
-                          alignItems: "center",
-                          justifyContent: "center",
-                          backgroundColor: speech() === "off" ? undefined : colors.accentFill,
-                          transitionProperty: "background-color",
-                          transitionDuration: 120,
-                        }}
-                      >
-                        <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? 18 : 16} tint={speech() === "off" ? colors.muted : colors.onAccent} />
-                      </View>
-                    </If>
                     <If when={speech() !== "off"}>
                       <Text testID="dictating" style={{ fontSize: 13, color: colors.accent, numberOfLines: 1 }}>
                         {speech() === "on" ? "正在听…" : "正在识别…"}
                       </Text>
                     </If>
                   </View>
+                  <If when={canDictate()}>
+                    {/* a large square target beside send, unfilled so it does not compete with send; while listening it becomes a red stop in the same place */}
+                    <View
+                      testID="dictate"
+                      role="button"
+                      accessibilityLabel={speech() === "off" ? "语音输入" : "停止语音输入"}
+                      accessibilityState={{ selected: speech() !== "off" }}
+                      tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
+                      onPress={toggleDictation}
+                      hoverStyle={speech() === "off" ? hovered() : { opacity: 0.9 }}
+                      style={{
+                        width: touch ? 44 : 36,
+                        height: touch ? 44 : 36,
+                        borderRadius: radius.control,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: speech() === "off" ? undefined : tints.danger,
+                        transitionProperty: "background-color",
+                        transitionDuration: 120,
+                      }}
+                    >
+                      <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? (touch ? 24 : 20) : (touch ? 20 : 16)} tint={speech() === "off" ? colors.text : colors.danger} />
+                    </View>
+                  </If>
                   <View
                     testID="send"
                     role="button"
@@ -3755,7 +3755,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
                     hoverStyle={canSend() ? { opacity: 0.9 } : undefined}
                     style={{
-                      height: touch ? 40 : 36,
+                      height: touch ? 44 : 36,
                       flexDirection: "row",
                       alignItems: "center",
                       gap: 6,
