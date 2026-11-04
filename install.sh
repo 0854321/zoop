@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # noop installer (Linux / macOS)
-#   a machine (the default; joins your noop):  curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- [<noop-url>]
-#   the first machine, once (the primary):     curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bash -s -- --primary
+#   a machine (the default; joins your noop):  curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- [<noop-url>]
+#   the first machine, once (the primary):     curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- --primary
 set -euo pipefail
 
 HOME_DIR="${NOOP_HOME:-$([ -d "$HOME/.agent-hub" ] && [ ! -d "$HOME/.noop" ] && echo "$HOME/.agent-hub" || echo "$HOME/.noop")}"

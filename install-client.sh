@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the noop client app, or updates it (Linux / macOS):
-#   curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install-client.sh | bash
+#   curl -fsSL https://huacnlee.github.io/noop/install-client.sh | bash
 # NOOP_CLIENT_BASE_URL  where the release assets are (default: the latest GitHub release)
 set -euo pipefail
 

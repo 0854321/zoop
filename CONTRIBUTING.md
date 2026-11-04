@@ -31,6 +31,8 @@ bun cloud/test/run.ts http://127.0.0.1:8799      # file sync harness (see cloud/
 
 App: `cd app && ~/work/nsh/target/debug/nsh test` and `./build-web.sh`.
 
+Website: see [website/README.md](website/README.md). `website/` is the public project site on GitHub Pages and serves the installers; `web/` is the page each owner's Worker serves.
+
 ## Releasing the client apps
 
 Push a tag `vX.Y.Z`. [release.yml](.github/workflows/release.yml) packages Linux, Windows, macOS, iOS and Android and publishes them as a GitHub release; pull requests that change the workflow or the installers build them without publishing. The tag sets the app version and the run number sets the build number.
