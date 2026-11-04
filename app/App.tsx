@@ -682,6 +682,9 @@ type Outgoing = { id: string; ts: string; text: string; ref: string | null; file
 
 /** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
 const MARKS = ["★", "◆", "▲", "●", "✦", "☾", "✿", "♪"];
+/** From this window width on, the app lays out for a desktop or tablet rather than a phone. */
+const WIDE = 860;
+
 function persona(from: string): { tint: string; mark: string } {
   const id = from.split("@")[0].toLowerCase();
   let h = 0;
@@ -689,16 +692,18 @@ function persona(from: string): { tint: string; mark: string } {
   return { tint: token(`agent-${(h % 8) + 1}` as "agent-1"), mark: MARKS[(h >>> 3) % MARKS.length] };
 }
 
-function Avatar(props: { from: string }) {
+function Avatar(props: { from: string; small?: boolean; testID?: string }) {
   const hubbed = isHub(props.from);
   const p = persona(props.from);
+  const box = props.small ? 22 : 36;
   return (
     <View
+      testID={props.testID}
       accessibilityLabel={displayName(props.from)}
       style={{
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: box,
+        height: box,
+        borderRadius: box / 2,
         flexShrink: 0,
         alignItems: "center",
         justifyContent: "center",
@@ -707,13 +712,15 @@ function Avatar(props: { from: string }) {
     >
       <If when={hubbed} else={
         <>
-          <Text style={{ fontSize: 16, fontWeight: "700", color: p.tint }}>{displayName(props.from).slice(0, 1).toUpperCase()}</Text>
-          <View style={{ position: "absolute", right: -3, bottom: -3, width: 17, height: 17, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
-            <Text style={{ fontSize: 10, lineHeight: 12, color: p.tint }}>{p.mark}</Text>
-          </View>
+          <Text style={{ fontSize: props.small ? 12 : 16, fontWeight: "700", color: p.tint }}>{displayName(props.from).slice(0, 1).toUpperCase()}</Text>
+          <If when={!props.small}>
+            <View style={{ position: "absolute", right: -3, bottom: -3, width: 17, height: 17, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+              <Text style={{ fontSize: 10, lineHeight: 12, color: p.tint }}>{p.mark}</Text>
+            </View>
+          </If>
         </>
       }>
-        <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.muted }} />
+        <View style={{ width: props.small ? 8 : 12, height: props.small ? 8 : 12, borderRadius: 6, backgroundColor: colors.muted }} />
       </If>
     </View>
   );
@@ -963,18 +970,21 @@ function Message(props: {
   const done = () => !!e.ref && props.answered().has(e.ref);
   const targeted = () => ask && !done() && props.target() === e.ref;
   const rec = recommended(e);
+  // a phone has no width to spare: the avatar sits in the name's row, and the message takes the whole column
+  const wide = () => windowSize().width >= WIDE;
   if (isHub(e.from) && !ask && e.kind === "system" && !e.attachments?.length)
     return (
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: 50 }} ref={(r) => props.cardRef?.(r)}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: wide() ? 50 : 0 }} ref={(r) => props.cardRef?.(r)}>
         <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
         <View selectable style={{ flex: 1, minWidth: 0 }}><Rich text={e.text} quiet /></View>
       </View>
     );
   return (
     <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} ref={(r) => props.cardRef?.(r)} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
-      <Avatar from={e.from} />
+      <If when={wide()}><Avatar testID={`avatar-column-${e.id}`} from={e.from} /></If>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
+          <If when={!wide()}><Avatar testID={`avatar-inline-${e.id}`} from={e.from} small /></If>
           <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>{displayName(e.from)}</Text>
           <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
           {tag && !ask ? <Badge label={tag} /> : null}
@@ -2974,7 +2984,7 @@ const CHANNEL: Route = { name: "channel" };
 function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => void; onDisconnect: () => void }) {
   const hub = props.hub;
   const push = createPush(hub);
-  const wide = () => windowSize().width >= 860;
+  const wide = () => windowSize().width >= WIDE;
   const drawer = signal(false);
   const sidebarOpen = signal(true);
   const help = signal(false);

@@ -162,6 +162,16 @@ describe("login", () => {
 });
 
 describe("channel", () => {
+  test("a message's avatar sits in the name's row on a phone, and in its own column when wide", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 390, height: 800, platform: "ios" });
+    await app.waitFor("text:/修好了/");
+    expect(app.shows("id:avatar-inline-e6")).toBe(true);
+    expect(app.shows("id:avatar-column-e6")).toBe(false);
+    await app.setViewport(1200, 800);
+    await app.waitFor("id:avatar-column-e6");
+    expect(app.shows("id:avatar-inline-e6")).toBe(false);
+  });
+
   test("shows the timeline, cards and sidebar", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
     await app.waitFor("要不要升级依赖？建议：B");
