@@ -5,8 +5,15 @@
 set -e
 cd "$(dirname "$0")"
 NSH="${NSH:-$HOME/work/nsh/target/debug/nsh}"
-"$NSH" package --target web -o dist/web
+# The package directory is named after the display name (Noop), but the Worker serves dist/web/noop.
 OUT="dist/web/noop"
+TMP="dist/.web-build"
+rm -rf "$TMP"
+"$NSH" package --target web -o "$TMP"
+rm -rf "$OUT"
+mkdir -p dist/web
+mv "$TMP"/* "$OUT"
+rmdir "$TMP"
 cp web/sw.js "$OUT/sw.js"
 cp "$OUT"/icons/192.*.png "$OUT/icons/192.png"
 sed -i 's/"background_color": "[^"]*"/"background_color": "#f7f7f4"/; s/"theme_color": "[^"]*"/"theme_color": "#f7f7f4"/' "$OUT/manifest.webmanifest"
