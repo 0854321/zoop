@@ -883,7 +883,7 @@ describe("voice input", () => {
     expect(app.shows("label:停止语音输入")).toBe(false);
   });
 
-  test("on a phone, listening shows a filled stop button where the mic was; stopping keeps the words", async () => {
+  test("on a phone, listening shows a red stop button where the mic was; stopping keeps the words", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 390, height: 844, platform: "ios" });
     await app.waitFor("label:语音输入");
