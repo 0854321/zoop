@@ -70,7 +70,7 @@ quiet_hours = "23:30-08:30"           # no menus at night (tasks keep running)
 
 [medic]                               # AI self-repair (hub fix; auto on install/update/daemon failures)
 enabled = true
-push = true                           # framework fixes → branch + PR on the noop repo
+push = true                           # framework fixes → branch + PR on the Noop repo
 timeout_minutes = 30
 
 [judge]
@@ -209,4 +209,4 @@ prompt = "Deep weekly evolution: 30-day window. Re-read every agent profile and 
 # port = 465
 # user = ""
 # pass = ""                           # put in the private data repo only
-# from = "noop <hub@example.com>"
+# from = "Noop <hub@example.com>"

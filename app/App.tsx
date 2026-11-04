@@ -1394,7 +1394,7 @@ function Sidebar(props: {
         style={{ height: size.bar, flexDirection: "row", alignItems: "center", gap: 10, paddingLeft: (props.chrome && hasWindow ? titleBar().left : 0) + 18, paddingRight: 10 }}
       >
         <Mark size={24} />
-        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>noop</Text>
+        <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Noop</Text>
         <If when={props.onClose}>
           <ToolButton icon="close" label="收起菜单" onPress={() => props.onClose?.()} />
         </If>
@@ -1672,7 +1672,7 @@ function createPush(hub: Hub) {
       if (typeof key !== "string" || !key) throw new Error("服务器还没有配置推送，暂时无法开启");
       const r = await hostCall<{ permission: string; subscription: unknown; device?: string }>("pushEnable", { publicKey: key });
       if (!r) throw new Error("这个环境不支持网页推送");
-      if (r.permission === "denied") throw new Error("通知被拦截了：请在浏览器或系统设置里允许 noop 发通知，再回来开启");
+      if (r.permission === "denied") throw new Error("通知被拦截了：请在浏览器或系统设置里允许 Noop 发通知，再回来开启");
       if (r.permission !== "granted" || !r.subscription) throw new Error("没有开启通知");
       const s = await hub.api("POST", "/api/push/subscribe", { subscription: r.subscription, device_label: r.device ?? untracked(info)?.device ?? "设备" });
       if (!s.ok) throw new Error(`订阅失败（${s.status || "连不上服务器"}）`);
@@ -1731,11 +1731,11 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
         <If when={push.needsHomeScreen()}>
           <View style={{ gap: 10, padding: 14, borderRadius: radius.inset, backgroundColor: colors.inset, borderWidth: 1, borderColor: colors.line }}>
             <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>在 iPhone 上开启通知</Text>
-            <Steps steps={["在 Safari 里点底部的「分享」按钮", "选「添加到主屏幕」，再点「添加」", "从主屏幕打开 noop，登录后回到这里点「开启通知」"]} />
+            <Steps steps={["在 Safari 里点底部的「分享」按钮", "选「添加到主屏幕」，再点「添加」", "从主屏幕打开 Noop，登录后回到这里点「开启通知」"]} />
           </View>
         </If>
         <If when={push.info()?.permission === "denied" && !push.needsHomeScreen()}>
-          <Text style={{ fontSize: 14, lineHeight: 21, color: colors.muted }}>在浏览器的网站设置（或系统设置 → 通知）里允许 noop，然后刷新页面再开启。</Text>
+          <Text style={{ fontSize: 14, lineHeight: 21, color: colors.muted }}>在浏览器的网站设置（或系统设置 → 通知）里允许 Noop，然后刷新页面再开启。</Text>
         </If>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           <If
@@ -2027,7 +2027,7 @@ function notifyModel(push: Push, view: () => SettingsView | null, save: (patch: 
   const state = () => {
     const i = push.info();
     if (!i) return "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
-    if (push.needsHomeScreen()) return "iPhone 需要先把 noop 添加到主屏幕";
+    if (push.needsHomeScreen()) return "iPhone 需要先把 Noop 添加到主屏幕";
     if (!i.supported) return "这个浏览器不支持网页推送";
     if (i.permission === "denied") return "通知被浏览器拦截了";
     return i.subscribed ? "已开启" : "未开启";
@@ -2540,12 +2540,12 @@ function PhoneNotify(props: { push: Push; settings: Settings }) {
       <If when={push.needsHomeScreen()}>
         <Section title="在 iPhone 上开启通知">
           <View style={{ padding: 16 }}>
-            <Steps steps={["在 Safari 里点底部的「分享」按钮", "选「添加到主屏幕」，再点「添加」", "从主屏幕打开 noop，登录后回到这里点「开启通知」"]} />
+            <Steps steps={["在 Safari 里点底部的「分享」按钮", "选「添加到主屏幕」，再点「添加」", "从主屏幕打开 Noop，登录后回到这里点「开启通知」"]} />
           </View>
         </Section>
       </If>
       <If when={push.info()?.permission === "denied" && !push.needsHomeScreen()}>
-        <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.muted }}>{`${notify.state()}：在浏览器的网站设置（或系统设置 → 通知）里允许 noop，然后刷新页面再开启。`}</Text>
+        <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.muted }}>{`${notify.state()}：在浏览器的网站设置（或系统设置 → 通知）里允许 Noop，然后刷新页面再开启。`}</Text>
       </If>
       <If when={view()}>
         <Section title="推送哪些">
@@ -3492,7 +3492,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   }}
                 >
                   <Text style={{ flex: 1, fontSize: 14, color: hub.conn() === "unauthorized" ? colors.danger : colors.warn }}>
-                    {hub.conn() === "unauthorized" ? "登录已过期，请重新登录。" : "与 noop 的连接断开了，正在自动重连…"}
+                    {hub.conn() === "unauthorized" ? "登录已过期，请重新登录。" : "与 Noop 的连接断开了，正在自动重连…"}
                   </Text>
                   <If when={hub.conn() === "unauthorized"}>
                     <Btn label="重新登录" kind="danger" onPress={props.onConnection} />
@@ -4020,7 +4020,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
         <View style={{ width: "100%", maxWidth: 440, gap: 24 }}>
           <View style={{ alignItems: "center", gap: 12 }}>
             <Mark size={48} />
-            <Text style={{ fontSize: 28, fontWeight: "600", color: colors.text, letterSpacing: -0.3 }}>登录 noop</Text>
+            <Text style={{ fontSize: 28, fontWeight: "600", color: colors.text, letterSpacing: -0.3 }}>登录 Noop</Text>
             <Text style={{ fontSize: 15.5, lineHeight: 23, color: colors.muted, textAlign: "center" }}>
               {step() === "email" ? "用邮箱登录：我们会发一个 6 位验证码给你。" : viaCli() ? "还没配置发信邮箱：在你的主机终端运行 noop login 查看验证码。" : `验证码已发到 ${email().trim()}，请查收邮件。`}
             </Text>
@@ -4138,7 +4138,7 @@ function Connected(props: { config: Config; openRef: string | null; onExpired: (
 
 function App() {
   if (hasWindow) {
-    Window.setTitle("noop");
+    Window.setTitle("Noop");
     Window.setTitleBar({ style: "hidden", height: size.bar });
   }
   Scrollbar.setTheme(scrollbarTheme);

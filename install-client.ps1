@@ -1,4 +1,4 @@
-# Installs the noop client app, or updates it (Windows):
+# Installs the Noop client app, or updates it (Windows):
 #   irm https://huacnlee.github.io/noop/install-client.ps1 | iex
 # $env:NOOP_CLIENT_BASE_URL  where the release assets are (default: the latest GitHub release)
 $ErrorActionPreference = "Stop"

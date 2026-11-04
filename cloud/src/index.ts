@@ -23,7 +23,7 @@ import { EmailMessage } from "cloudflare:email";
 
 const b64 = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
 async function cfMail(binding: SendEmail, from: string, to: string, subject: string, text: string) {
-  const raw = [`From: noop <${from}>`, `To: ${to}`, `Subject: =?UTF-8?B?${b64(subject)}?=`,
+  const raw = [`From: Noop <${from}>`, `To: ${to}`, `Subject: =?UTF-8?B?${b64(subject)}?=`,
     `Message-ID: <${crypto.randomUUID()}@${from.split("@")[1]}>`, `Date: ${new Date().toUTCString()}`,
     "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64(text)].join("\r\n");
   await binding.send(new EmailMessage(from, to, raw));
@@ -42,7 +42,7 @@ interface Env {
 }
 
 const PUSH_KINDS = ["decision", "menu", "proposals", "login", "notice"] as const;
-const TITLES: Record<string, string> = { decision: "需要你拍板", menu: "可以选下一步", proposals: "新的提议", login: "登录提醒", notice: "noop" };
+const TITLES: Record<string, string> = { decision: "需要你拍板", menu: "可以选下一步", proposals: "新的提议", login: "登录提醒", notice: "Noop" };
 /** "23:00-08:00" in tz → is it quiet now? */
 function inQuiet(range: string | undefined, tz: string | undefined, now = new Date()) {
   const m = range?.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
@@ -254,7 +254,7 @@ export class Hub extends DurableObject<Env> {
     return {
       urgency: kind === "decision" || kind === "login" ? "high" : "normal",
       payload: {
-        title: TITLES[kind] ?? "noop", body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
+        title: TITLES[kind] ?? "Noop", body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
         ref, kind, options: kind === "decision" || kind === "menu" ? opts : [],
         url: ref ? `/?ref=${encodeURIComponent(ref)}` : "/", tag: ref ?? kind,
         badge: decisions.filter((d) => !d.held).length,
@@ -302,7 +302,7 @@ export class Hub extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (p === "/api/push/test") {
-      const r = await this.pushAll({ title: "noop", body: "测试通知：手机推送已开通。", kind: "notice", url: "/", tag: "test", options: [], badge: 0 }, "normal", who.session);
+      const r = await this.pushAll({ title: "Noop", body: "测试通知：手机推送已开通。", kind: "notice", url: "/", tag: "test", options: [], badge: 0 }, "normal", who.session);
       return json({ ok: true, ...r });
     }
     return json({ error: "not found" }, 404);
@@ -355,8 +355,8 @@ export class Hub extends DurableObject<Env> {
       if (cli) { this.set("cli_code", { email, code, expires: now + CODE_TTL }); return json({ ok: true, delivery: "cli" }); }
       if (!isOwner) return json({ ok: true });
       try {
-        const subject = `noop 登录验证码：${code}`;
-        const text = `你的 noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`;
+        const subject = `Noop 登录验证码：${code}`;
+        const text = `你的 Noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`;
         if (cf) await cfMail(this.env.EMAIL!, this.env.HUB_MAIL_FROM!, email, subject, text);
         else await sendMail(smtp!, email, subject, text);
       } catch (err) {

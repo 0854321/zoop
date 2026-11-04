@@ -1,17 +1,17 @@
-# Contributing to noop
+# Contributing to Noop
 
 Technical reference for people and AI agents working on this codebase.
 
 ## Principles
 
-- Single owner. noop serves one person (the CEO); there is no multi-tenant or shared service. Each user deploys their own Cloudflare Worker.
+- Single owner. Noop serves one person (the CEO); there is no multi-tenant or shared service. Each user deploys their own Cloudflare Worker.
 - No personal data or secrets in this repository. Templates are generic.
 - Everything is Bun + TypeScript. The client is written with NSH.
 - The owner only sees results and decisions. Never surface raw errors, internal routine failures or test data.
 
 ## Docs
 
-- [docs/architecture.md](docs/architecture.md) — how noop works: sync, Worker API, code layout, agents and safety.
+- [docs/architecture.md](docs/architecture.md) — how Noop works: sync, Worker API, code layout, agents and safety.
 
 ## Development
 

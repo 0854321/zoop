@@ -60,9 +60,10 @@ test('related projects link to the other projects in both languages', async ({ p
     await expect(related.getByRole('link', { name: 'Disktree' })).toHaveAttribute('href', 'https://huacnlee.github.io/disktree/');
     await expect(related.getByRole('link', { name: 'Omasend' })).toHaveAttribute('href', 'https://huacnlee.github.io/omasend/');
     await expect(related.getByRole('link', { name: 'Omamail' })).toHaveAttribute('href', 'https://huacnlee.github.io/omamail/');
+    await expect(related.getByRole('link', { name: 'huacnlee/cargo' })).toHaveAttribute('href', 'https://huacnlee.github.io/cargo/');
     await expect(related.getByRole('link', { name: 'omarchy-mihoro' })).toHaveAttribute('href', 'https://github.com/huacnlee/omarchy-mihoro');
     await expect(related.getByRole('link', { name: 'omarchy-which-key' })).toHaveAttribute('href', 'https://github.com/huacnlee/omarchy-which-key');
-    await expect(related.locator('li p')).toHaveCount(5);
+    await expect(related.locator('li p')).toHaveCount(6);
   }
 });
 

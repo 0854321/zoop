@@ -35,7 +35,7 @@ export function writeHubToml(patch: Record<string, Record<string, string>>) {
   const cur = readHubToml();
   for (const [s, kv] of Object.entries(patch)) cur[s] = { ...(cur[s] ?? {}), ...kv };
   const q = (v: unknown) => JSON.stringify(String(v));
-  const text = "# machine-local noop bootstrap (never synced): your Worker URL + this machine's token\n" +
+  const text = "# machine-local Noop bootstrap (never synced): your Worker URL + this machine's token\n" +
     Object.entries(cur).map(([s, kv]) => `[${s}]\n${Object.entries(kv as object).map(([k, v]) => `${k} = ${q(v)}`).join("\n")}\n`).join("\n");
   mkdirSync(dirname(hubTomlPath()), { recursive: true });
   writeFileSync(hubTomlPath(), text);

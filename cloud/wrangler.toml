@@ -1,4 +1,4 @@
-# Your own noop coordination plane on Cloudflare's free plan.
+# Your own Noop coordination plane on Cloudflare's free plan.
 # Deployed by `hub cloud deploy` (also run by `hub init` on the primary). Each user deploys into their own account.
 name = "noop"
 main = "src/index.ts"

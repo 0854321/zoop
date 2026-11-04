@@ -76,7 +76,7 @@ describe("login", () => {
   test("email, then the 6-digit code logs in and keeps the session", async () => {
     const log = newLog();
     const app = await open("./App.tsx", { network: { ...hub([]), ...auth(log) } });
-    await app.waitFor("登录 noop");
+    await app.waitFor("登录 Noop");
     await app.clear("id:url");
     await app.type("id:url", "hub.test:8787/");
     await app.type("id:email", "ceo@example.com");
@@ -99,7 +99,7 @@ describe("login", () => {
       storage: { "hub.email": "ceo@example.com" },
       network: { ...hub([]), ...auth(log) },
     });
-    await app.waitFor("登录 noop");
+    await app.waitFor("登录 Noop");
     expect(app.shows("id:url")).toBe(false);
     expect(app.value("id:email")).toBe("ceo@example.com");
     await app.submit("id:email");
@@ -155,7 +155,7 @@ describe("login", () => {
     await app.press("id:settings");
     await app.press("id:settings-tab-account");
     await app.press("id:logout");
-    await app.waitFor("登录 noop");
+    await app.waitFor("登录 Noop");
     expect(log.logouts).toBe(1);
     expect(app.storage()["hub.token"]).toBe(undefined);
   });
@@ -756,7 +756,7 @@ describe("notifications", () => {
     await app.press("id:settings-top");
     app.onDialog((d) => (d.title === "退出登录？" ? "退出登录" : null));
     await app.press("id:logout");
-    await app.waitFor("登录 noop");
+    await app.waitFor("登录 Noop");
     expect(app.dialogs()[0].title).toBe("退出登录？");
     expect(log.unsubs).toEqual([{ endpoint: "https://push.test/e1" }]);
   });
@@ -853,7 +853,7 @@ describe("phones", () => {
     await app.waitFor("id:phone-settings");
     app.onDialog((d) => d.title === "退出登录？" ? "退出登录" : null);
     await app.press("id:logout");
-    await app.waitFor("登录 noop");
+    await app.waitFor("登录 Noop");
     expect(log.logouts).toBe(1);
   });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# noop installer (Linux / macOS)
-#   a machine (the default; joins your noop):  curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- [<noop-url>]
+# Noop installer (Linux / macOS)
+#   a machine (the default; joins your Noop):  curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- [<noop-url>]
 #   the first machine, once (the primary):     curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- --primary
 set -euo pipefail
 
@@ -21,16 +21,16 @@ on_fail() {
   if command -v bun >/dev/null && [ -f "$APP/src/cli.ts" ]; then
     bun "$APP/src/cli.ts" fix "install.sh failed. Log: $LOG. Finish the installation by rerunning: $0 $*" || true
   elif command -v claude >/dev/null; then
-    claude -p "noop install.sh failed on $(uname -a). Read $LOG, fix the cause, then rerun the installer." --permission-mode acceptEdits || true
+    claude -p "Noop install.sh failed on $(uname -a). Read $LOG, fix the cause, then rerun the installer." --permission-mode acceptEdits || true
   fi
 }
 trap on_fail ERR
 
-printf "\n%snoop%s — your own AI team\n\n" "$B" "$N"
+printf "\n%sNoop%s — your own AI team\n\n" "$B" "$N"
 
 step "git";  command -v git >/dev/null || { printf "%s✗%s install git first\n" "$R" "$N"; exit 1; }; ok
 step "bun";  if ! command -v bun >/dev/null; then run bash -c "curl -fsSL https://bun.sh/install | bash"; export PATH="$HOME/.bun/bin:$PATH"; else run bun upgrade; fi; ok "$(bun --version)"
-step "noop"
+step "Noop"
 if [ -d "$APP/.git" ]; then run git -C "$APP" pull -q --ff-only || true; else run git clone -q "$REPO" "$APP"; fi
 (cd "$APP" && run bun install --frozen-lockfile)
 mkdir -p "$HOME/.local/bin"

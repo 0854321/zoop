@@ -162,7 +162,7 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 export const TOOLS: Tool[] = [
   // ---- read
   { name: "get_status", title: "Fleet status", annotations: RO, inputSchema: obj({}),
-    description: "Current state of the noop fleet: online machines, running tasks with their latest activity, task counts per state, and decisions waiting for the owner." },
+    description: "Current state of the Noop fleet: online machines, running tasks with their latest activity, task counts per state, and decisions waiting for the owner." },
   { name: "list_tasks", title: "List tasks", annotations: RO,
     inputSchema: obj({ state: str("Which tasks: open (default: queued, running, waiting, blocked), all, or one state", { enum: ["open", "all", ...TASK_STATES] }),
       query: str("Case-insensitive filter on id, title, repo, agent"), limit: int("Max rows (default 50, max 200)", { minimum: 1, maximum: 200 }) }),
@@ -174,7 +174,7 @@ export const TOOLS: Tool[] = [
     description: "Decision cards waiting for the owner (question, options, recommendation, context). Answer one with answer_decision." },
   { name: "get_feed", title: "Read the feed", annotations: RO,
     inputSchema: obj({ cursor: int("Return events after this cursor (from a previous call); omit for the latest ones"), limit: int("Max events (default 50, max 300)", { minimum: 1, maximum: 300 }) }),
-    description: "The chat/activity feed the owner sees in the noop app: agent reports, decisions, owner messages, system notices. Returns {cursor, events}; pass cursor back to get only newer events." },
+    description: "The chat/activity feed the owner sees in the Noop app: agent reports, decisions, owner messages, system notices. Returns {cursor, events}; pass cursor back to get only newer events." },
   { name: "wait_for_events", title: "Wait for new events", annotations: RO, only: "mcp",
     inputSchema: obj({ cursor: int("Cursor from get_feed / a previous wait"), timeout_seconds: int("How long to wait (default 30, max 50)", { minimum: 1, maximum: 50 }) }, ["cursor"]),
     description: "Blocks until the fleet emits new events after `cursor` (or the timeout passes) and returns them. For clients that do not receive MCP notifications." },
@@ -190,13 +190,13 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ query: str("Words that must all appear in the line"), days: int("How many recent days (default 14, max 60)", { minimum: 1, maximum: 60 }) }, ["query"]),
     description: "Search the fleet's daily journal (what every machine did: tasks started/finished, decisions, deploys), newest first." },
   { name: "search", title: "Search", annotations: RO, inputSchema: obj({ query: str("What to look for") }, ["query"]),
-    description: "Search noop tasks and decisions. Returns {results:[{id, title, url}]}; use fetch with an id for the full text." },
+    description: "Search Noop tasks and decisions. Returns {results:[{id, title, url}]}; use fetch with an id for the full text." },
   { name: "fetch", title: "Fetch", annotations: RO, inputSchema: obj({ id: str("An id from search: a task (T-…) or decision (D-…)") }, ["id"]),
     description: "Full text of a task or decision found by search. Returns {id, title, text, url, metadata}." },
   // ---- write
   { name: "send_message", title: "Message the fleet", annotations: RW, write: true, only: "mcp",
     inputSchema: obj({ text: str("The message, as the owner would type it in chat"), reply_to: str("Optional: task id (T-…) or event id this replies to") }, ["text"]),
-    description: "Send a chat message to the fleet as the owner (same as typing in the noop app). The chat brain answers it and acts on it." },
+    description: "Send a chat message to the fleet as the owner (same as typing in the Noop app). The chat brain answers it and acts on it." },
   { name: "create_task", title: "Create a task", annotations: RW, write: true,
     inputSchema: obj({ title: str("Short imperative title"), details: str("Goal, context and acceptance criteria — everything the agent needs, in the owner's words"),
       repo: str("Optional repo, e.g. longbridge/nsh"), agent: str("Optional agent name from list_agents (default: lead, who plans and delegates)"),
@@ -220,7 +220,7 @@ export const TOOLS: Tool[] = [
     description: "Write a durable memory the whole fleet reads from now on: the owner's preference, a rule ('以后都这样'), a fact about a project." },
   { name: "answer_decision", title: "Answer a decision", annotations: RW, write: true,
     inputSchema: obj({ id: str("Decision id, e.g. D-0025"), answer: str("An option letter (A, B, …) or a free-text answer") }, ["id", "answer"]),
-    description: "Answer a decision card (or change the answer the owner gave minutes ago), exactly like tapping an option in the noop app." },
+    description: "Answer a decision card (or change the answer the owner gave minutes ago), exactly like tapping an option in the Noop app." },
 ];
 
 export const toolsFor = (where: "mcp" | "brain") => TOOLS.filter((t) => !t.only || t.only === where);

@@ -153,7 +153,7 @@ export function collect(cfg: Cfg, opts: { full?: boolean; maxChars?: number } = 
   }
   if (body.length > max) body = body.slice(-max); // keep the most recent
   const file = join(OUT, `digest-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`);
-  const hubPart = hub ? `\n\n## noop (decisions & chat — how the owner judges the fleet's questions)\n${hub}\n` : "";
+  const hubPart = hub ? `\n\n## Noop (decisions & chat — how the owner judges the fleet's questions)\n${hub}\n` : "";
   writeFileSync(file, `# Owner's own words from ${sessions} sessions (${turns.length} turns, redacted)\n${hubPart}${body}\n`, { mode: 0o600 });
   return { file, turns: turns.length, sessions };
 }
@@ -171,7 +171,7 @@ Distill durable, actionable knowledge — how the owner works, judges and decide
 4. memory/projects.md / memory/release-cadence.md / memory/owner.md — correct facts (repos, cadences, tools, people roles) the digest reveals.
 5. agents/<id>/memory.md — role-specific lessons (e.g. reviewer: what the owner checks in PRs; maintainer: build/test habits).
 
-6. From the noop section: for each agent/decision category, how often did the owner pick the recommendation, override the
+6. From the Noop section: for each agent/decision category, how often did the owner pick the recommendation, override the
    judge, or reject proposals? Record per-category rules in memory/principles.md so the judge can decide them next time, and note in
    your summary which agents look ready for more autonomy (the architect proposes graduation; you never change config).
 

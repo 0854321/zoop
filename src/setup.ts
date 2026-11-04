@@ -150,7 +150,7 @@ export async function install() {
     const unit = join(homedir(), `.config/systemd/user/${SERVICE}.service`);
     mkdirSync(join(unit, ".."), { recursive: true });
     writeFileSync(unit, `[Unit]
-Description=noop fleet daemon
+Description=Noop fleet daemon
 After=network-online.target
 Wants=network-online.target
 

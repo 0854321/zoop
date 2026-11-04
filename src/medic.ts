@@ -31,7 +31,7 @@ async function context(): Promise<string> {
   ].join("\n");
 }
 
-const PROMPT = (problem: string, ctx: string, canPush: boolean) => `You are the noop MEDIC on this machine. Something is broken; fix it.
+const PROMPT = (problem: string, ctx: string, canPush: boolean) => `You are the Noop MEDIC on this machine. Something is broken; fix it.
 
 ## Problem
 ${problem}

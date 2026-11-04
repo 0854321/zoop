@@ -45,7 +45,7 @@ export async function notify(text: string, cfg: Cfg, o: NotifyOpts = {}): Promis
   // 2) phone push via ntfy (self-hostable; tap opens the chat page)
   try {
     if (n.ntfy_url) await fetch(n.ntfy_url, { method: "POST", body: text.replace(/\*/g, "").slice(0, 3000),
-      headers: { Title: "noop", ...(cfg.server?.public_url ? { Click: cfg.server.public_url } : {}), ...(n.ntfy_token ? { Authorization: `Bearer ${n.ntfy_token}` } : {}) } });
+      headers: { Title: "Noop", ...(cfg.server?.public_url ? { Click: cfg.server.public_url } : {}), ...(n.ntfy_token ? { Authorization: `Bearer ${n.ntfy_token}` } : {}) } });
   } catch (e) { console.error("ntfy failed", e); }
   try {
     if (n.slack_bot_token && n.slack_channel) {

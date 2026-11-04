@@ -1,8 +1,8 @@
-# MCP: connect Claude and ChatGPT to noop
+# MCP: connect Claude and ChatGPT to Noop
 
-noop's Cloudflare Worker serves a remote MCP server at `https://<your-noop>/mcp` (Streamable HTTP, protocol
+Noop's Cloudflare Worker serves a remote MCP server at `https://<your-noop>/mcp` (Streamable HTTP, protocol
 2025-11-25 / 2025-06-18 / 2025-03-26). Claude or ChatGPT can then read the fleet's state, talk to it the way you do
-in the noop app, and receive live events.
+in the Noop app, and receive live events.
 
 ## What it can do
 

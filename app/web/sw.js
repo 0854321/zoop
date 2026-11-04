@@ -32,7 +32,7 @@ self.addEventListener("push", (e) => {
   try {
     p = e.data ? e.data.json() : {};
   } catch {
-    p = { title: "noop", body: e.data ? e.data.text() : "" };
+    p = { title: "Noop", body: e.data ? e.data.text() : "" };
   }
   e.waitUntil(show(p));
 });
@@ -49,7 +49,7 @@ async function show(p) {
       p.badge > 0 ? await self.navigator.setAppBadge(p.badge) : await self.navigator.clearAppBadge();
     } catch {}
   }
-  await self.registration.showNotification(p.title || "noop", {
+  await self.registration.showNotification(p.title || "Noop", {
     body: p.body || "",
     tag: p.tag || p.ref || undefined,
     renotify: ask && !!(p.tag || p.ref),
@@ -97,7 +97,7 @@ async function answer(ref, value) {
     ok = r.ok;
   } catch {}
   await self.registration.showNotification(ok ? `已回复 ${ref}` : `回复 ${ref} 失败`, {
-    body: ok ? `你选了 ${value}` : "点这里打开 noop 再试一次",
+    body: ok ? `你选了 ${value}` : "点这里打开 Noop 再试一次",
     tag: `answered:${ref}`,
     icon: `${self.registration.scope}icons/192.png`,
     data: { ref, url: `${self.registration.scope}?ref=${encodeURIComponent(ref)}` },

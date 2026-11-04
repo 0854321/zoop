@@ -46,7 +46,7 @@ export interface McpHost {
 }
 
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
-const SERVER_INFO = { name: "noop", title: "noop", version: "1.0.0" };
+const SERVER_INFO = { name: "noop", title: "Noop", version: "1.0.0" };
 const LEVELS = ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"];
 const OAUTH_CODE_TTL = 5 * 60_000;
 
@@ -440,7 +440,7 @@ export class Mcp {
 
   // -------- OAuth 2.1 (authorization server + protected resource, same origin)
   resourceMeta(base: string) {
-    return { resource: `${base}/mcp`, authorization_servers: [base], scopes_supported: ["noop"], bearer_methods_supported: ["header"], resource_name: "noop" };
+    return { resource: `${base}/mcp`, authorization_servers: [base], scopes_supported: ["noop"], bearer_methods_supported: ["header"], resource_name: "Noop" };
   }
   asMeta(base: string) {
     return { issuer: base, authorization_endpoint: `${base}/oauth/authorize`, token_endpoint: `${base}/oauth/token`, registration_endpoint: `${base}/oauth/register`,
@@ -466,7 +466,7 @@ export class Mcp {
     const f: Record<string, string> = Object.fromEntries(url.searchParams);
     if (req.method === "POST") Object.assign(f, Object.fromEntries([...(await req.formData()).entries()].map(([k, v]) => [k, String(v)])));
     const client = this.client(f.client_id ?? "");
-    if (!client) return page("无法授权", `<p>未知的应用（client_id）。请在客户端里重新添加 noop。</p>`, 400);
+    if (!client) return page("无法授权", `<p>未知的应用（client_id）。请在客户端里重新添加 Noop。</p>`, 400);
     if (!client.redirect_uris.includes(f.redirect_uri)) return page("无法授权", `<p>回调地址和注册的不一致。</p>`, 400);
     const back = (q: Record<string, string>) => {
       const u = new URL(f.redirect_uri);
@@ -479,12 +479,12 @@ export class Mcp {
 
     const keep = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "scope", "resource"]
       .filter((k) => f[k]).map((k) => `<input type="hidden" name="${k}" value="${esc(f[k])}">`).join("");
-    const who = `<p><b>${esc(client.client_name)}</b> 想访问你的 noop：查看任务、决策和动态，以你的名义给团队发消息、回答决策。</p>
+    const who = `<p><b>${esc(client.client_name)}</b> 想访问你的 Noop：查看任务、决策和动态，以你的名义给团队发消息、回答决策。</p>
       <p class="muted">授权后会跳回 <code>${esc(new URL(f.redirect_uri).host)}</code>。不是你本人发起的请直接关闭页面。</p>`;
-    const emailForm = (msg = "") => page("授权 noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="send">
+    const emailForm = (msg = "") => page("授权 Noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="send">
       <label>邮箱<input name="email" type="email" required autofocus value="${esc(f.email)}"></label>
       <div class="row"><button>发送验证码</button><button name="step" value="deny" class="ghost" formnovalidate>拒绝</button></div></form>`);
-    const codeForm = (msg = "") => page("授权 noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="verify">
+    const codeForm = (msg = "") => page("授权 Noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="verify">
       <input type="hidden" name="email" value="${esc(f.email)}">
       <label>验证码（已发到 ${esc(f.email)}${f.delivery === "cli" ? "；邮件未配置，请在你的电脑上运行 <code>noop login</code> 查看" : ""}）
       <input name="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" required autofocus autocomplete="one-time-code"></label>

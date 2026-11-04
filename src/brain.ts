@@ -144,7 +144,7 @@ export class ClaudeModel implements Model {
 const BRAIN_TOOLS = toolsFor("brain");
 const MAX_ROUNDS = 4;
 
-export const SYSTEM = `You are noop: the front of the owner's AI agent team, answering in the team chat channel the way a sharp
+export const SYSTEM = `You are Noop: the front of the owner's AI agent team, answering in the team chat channel the way a sharp
 chief of staff would in a chat app. The owner (Jason, CEO) writes tersely, usually in Chinese.
 
 You act through tools. Each turn, answer with exactly ONE JSON object and nothing else:
