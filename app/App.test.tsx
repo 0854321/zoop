@@ -204,6 +204,8 @@ describe("channel", () => {
     expect(app.shows("text:手机上也正常，截图附上")).toBe(true);
     await app.type("id:task-composer", "再看下 iPad");
     await app.press("id:task-send");
+    expect(app.value("id:task-composer")).toBe(""); // reads as sent before the hub answers
+    expect(app.shows("发送中…")).toBe(false);
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "再看下 iPad", reply_to: "T-0005", thread: true });
     await app.waitUntil(() => app.value("id:task-composer") === "");
@@ -501,8 +503,7 @@ describe("images", () => {
     await app.press("id:attach");
     await app.waitFor("id:attachment");
     await app.press("id:send"); // an image alone can be sent
-    await app.waitFor("id:undo-send");
-    await app.press("id:undo-send");
+    await app.keyboard.press("mod+z");
     expect(app.count("id:attachment")).toBe(1);
     await app.wait(6000);
     expect(uploads.length).toBe(0);
@@ -536,6 +537,26 @@ describe("images", () => {
 
 describe("keyboard", () => {
   const desk = { storage: STORAGE, width: 1200, height: 800, platform: "macos" as const };
+
+  test("a sent message looks sent right away; only a failure shows, and retry sends at once", async () => {
+    let fail = true;
+    const posts: { text: string }[] = [];
+    const ok = hub(posts);
+    const network = { ...ok, [`POST ${URL}/api/messages`]: (r: { body?: string | null }) =>
+      fail ? { status: 500, body: {} } : (ok as any)[`POST ${URL}/api/messages`](r) };
+    const app = await open("./App.tsx", { ...desk, network });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "看一下日志");
+    await app.submit("id:composer");
+    await app.waitFor("text:看一下日志");
+    expect(app.shows("即将发送")).toBe(false);
+    expect(app.shows("发送中…")).toBe(false);
+    await app.waitFor("text:发送失败", { timeout: 8000 });
+    fail = false;
+    await app.press("label:重试发送");
+    await app.waitUntil(() => posts.length === 1, { timeout: 1000 }); // no second undo window
+    await app.waitUntil(() => !app.shows("发送失败"));
+  });
 
   test("Enter sends from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
