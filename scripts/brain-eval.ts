@@ -40,7 +40,7 @@ const status = () => ({ hosts: [{ host: "huacnlee-omarchy-lb", online: true, run
 let did: WriteOp[] = [];
 const rec = async (op: any) => { did.push(op); return { ok: true, id: op.id ?? "T-0300" }; };
 const st = localStore({ root, status, feed: () => feed,
-  acts: { create_task: rec, amend_task: rec, cancel_task: rec, set_priority: rec, reassign_task: rec, remember: rec, answer_decision: rec } });
+  acts: { create_task: rec, amend_task: rec, cancel_task: rec, set_priority: rec, reassign_task: rec, remember: rec, edit_memory: rec, answer_decision: rec } });
 
 type Case = { name: string; text: string; chat?: string[]; replyTo?: string; answered?: string;
   expect: (o: BrainOut, w: WriteOp[]) => boolean; want: string };
@@ -55,6 +55,7 @@ const cases: Case[] = [
   { name: "remember (shared)", text: "记住：以后 PR 的截图都放到 PR 描述里", want: "remember", expect: (_, w) => W(w, "remember").length === 1 && W(w, "create_task").length === 0 },
   { name: "remember (one agent)", text: "以后发版的 release notes 都保留 GitHub 自动生成的 New Contributors 部分，这条让 release-manager 记住", want: "remember → agents/release-manager/memory.md",
     expect: (_, w) => W(w, "remember").some((x: any) => x.file === "agents/release-manager/memory.md") },
+  { name: "delete a memory", text: "memory/taste.md 里那条 Restrained radii 的记忆记错了，删掉", want: "edit_memory or read_memory first, no remember", expect: (_, w) => W(w, "remember").length === 0 && W(w, "create_task").length === 0 },
   { name: "amend running task", text: "T-0204 顺便在 Android 上也验证一下", want: "amend_task T-0204", expect: (_, w) => W(w, "amend_task").some((x: any) => x.id === "T-0204") && W(w, "create_task").length === 0 },
   { name: "amend by context", text: "语音那个，停止按钮做成方形的", chat: ["lead: T-0204: stop button wired, testing on the iOS simulator"], want: "amend_task T-0204",
     expect: (_, w) => W(w, "amend_task").some((x: any) => x.id === "T-0204") },
