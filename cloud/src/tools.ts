@@ -58,13 +58,57 @@ const taskRow = (path: string, text: string, updated: string): TaskRow => {
   return { id: meta.id || path.split("/").pop()!.replace(/\.md$/, ""), title: meta.title ?? "", state: path.split("/")[1],
     agent: meta.agent, host: meta.claimed_by || meta.host, priority: meta.priority, repo: meta.repo, created: meta.created, updated };
 };
-export function listTasks(st: ToolStore, state = "open", query = "", limit = 50): TaskRow[] {
+export function listTasks(st: ToolStore, state = "open", query = "", limit = 50, offset = 0): TaskRow[] {
   const states = state === "all" ? TASK_STATES : state === "open" ? TASK_STATES.filter((s) => s !== "done" && s !== "failed") : [state];
   const q = query.toLowerCase();
   return states.flatMap((s) => st.list(`tasks/${s}/`).filter((f) => /^tasks\/[^/]+\/T-[^/]*\.md$/.test(f.path)).map((f) => taskRow(f.path, f.text, f.updated)))
     .filter((t) => !q || `${t.id} ${t.title} ${t.repo ?? ""} ${t.agent ?? ""}`.toLowerCase().includes(q))
-    .sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? "")).slice(0, Math.max(1, Math.min(limit, 200)));
+    .sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? "")).slice(Math.max(0, offset), Math.max(0, offset) + Math.max(1, Math.min(limit, 200)));
 }
+export function parseTaskBody(title: string | undefined, body: string) {
+  // the owner's words (a quote) or the task's own first paragraph; daemon notes ("Requeued after ...") are not the request
+  // (new requeues keep their note in meta.requeue_note; older bodies still carry "> Requeued ..." / "> Attempt N failed" quotes)
+  const NOTE = /^>?\s*(Requeued|Retried|Resumed|Attempt \d+ failed)\b/i;
+  const own = body.split("\n## ")[0].split(/\n\n+/).filter((p) => !NOTE.test(p.trim()));
+  const quote = own.join("\n\n").match(/(^|\n)> [\s\S]*?(?=\n\n[^>]|$)/)?.[0];
+  const request = (quote ?? (own.join("\n\n") || title || "")).replace(/^> ?/gm, "").trim().slice(0, 1200);
+  const runs = [...body.matchAll(/## Run (\S+) · (\S+) · (\S+)\n\*\*(\w+)\*\* — ([^\n]*)/g)]
+    .map((r) => ({ ts: r[1], host: r[2], cli: r[3], status: r[4], summary: r[5] })).slice(-5);
+  return { request, runs };
+}
+
+/** A task as the app shows it. Cancelled tasks live in rejected/, next to routine copies nobody approved. */
+const HISTORY_STATES = [...TASK_STATES, "rejected"] as const;
+const historyRow = (f: FileRow, folder: string) => {
+  const { meta: m } = parseDoc(f.text);
+  const state = folder === "waiting" && m.wake_at ? "parked" : folder === "inbox" && m.parked && m.requires ? "nohost" : folder === "rejected" ? "cancelled" : folder;
+  return { id: m.id || f.path.split("/").pop()!.replace(/\.md$/, ""), title: m.title ?? "", agent: m.agent, host: m.claimed_by, state, needs: state === "nohost" ? m.requires : undefined,
+    started: m.started, created: m.created, finished: m.finished ?? m.cancelled, updated: m.finished ?? m.cancelled ?? m.started ?? m.created ?? f.updated, attempt: m.attempt, cli: m.cli_used, model: m.model };
+};
+
+/** Every task the fleet has, newest first, a page at a time. */
+export function taskHistory(st: ToolStore, opts: { query?: string; offset?: number; limit?: number } = {}) {
+  const q = (opts.query ?? "").trim().toLowerCase();
+  const seen = new Set<string>();
+  const all = HISTORY_STATES.flatMap((s) => st.list(`tasks/${s}/`)
+    .filter((f) => /^tasks\/[^/]+\/T-[^/]*\.md$/.test(f.path) && (s !== "rejected" || /^cancelled:/m.test(f.text)))
+    .map((f) => historyRow(f, s)))
+    .filter((t) => !seen.has(t.id) && !!seen.add(t.id)) // a task copied in two folders mid-sync shows once
+    .filter((t) => !q || `${t.id} ${t.title} ${t.agent ?? ""}`.toLowerCase().includes(q))
+    .sort((a, b) => String(b.updated ?? "").localeCompare(String(a.updated ?? "")));
+  const offset = Math.max(0, Number(opts.offset) || 0), limit = Math.max(1, Math.min(Number(opts.limit) || 50, 200));
+  return { tasks: all.slice(offset, offset + limit), total: all.length };
+}
+
+/** One task for the app's task page, wherever it is. */
+export function taskInfo(st: ToolStore, id: string) {
+  for (const s of HISTORY_STATES) {
+    const f = st.read(`tasks/${s}/${id}.md`);
+    if (f) return { ...historyRow(f, s), ...parseTaskBody(parseDoc(f.text).meta.title, parseDoc(f.text).body) };
+  }
+  return null;
+}
+
 export function getTask(st: ToolStore, id: string) {
   for (const s of TASK_STATES) {
     const f = st.read(`tasks/${s}/${id}.md`);
@@ -165,7 +209,8 @@ export const TOOLS: Tool[] = [
     description: "Current state of the Noop fleet: online machines, running tasks with their latest activity, task counts per state, and decisions waiting for the owner." },
   { name: "list_tasks", title: "List tasks", annotations: RO,
     inputSchema: obj({ state: str("Which tasks: open (default: queued, running, waiting, blocked), all, or one state", { enum: ["open", "all", ...TASK_STATES] }),
-      query: str("Case-insensitive filter on id, title, repo, agent"), limit: int("Max rows (default 50, max 200)", { minimum: 1, maximum: 200 }) }),
+      query: str("Case-insensitive filter on id, title, repo, agent"), limit: int("Max rows (default 50, max 200)", { minimum: 1, maximum: 200 }),
+      offset: int("Rows to skip, to read further pages", { minimum: 0 }) }),
     description: "List the fleet's tasks (id, title, state, agent, host, repo), newest first." },
   { name: "get_task", title: "Get task", annotations: RO, inputSchema: obj({ id: str("Task id, e.g. T-0184") }, ["id"]),
     description: "One task in full: its metadata, its description/result notes, and the recent feed events about it." },
@@ -297,7 +342,7 @@ export async function runTool(st: ToolStore, name: string, a: any, base = ""): P
   }
   switch (name) {
     case "get_status": return ok(statusView(st));
-    case "list_tasks": return ok({ tasks: listTasks(st, s(a.state) || "open", s(a.query), Number(a.limit) || 50) });
+    case "list_tasks": return ok({ tasks: listTasks(st, s(a.state) || "open", s(a.query), Number(a.limit) || 50, Number(a.offset) || 0) });
     case "get_task": {
       const id = s(a.id);
       const t = TASK_ID.test(id) ? getTask(st, id) : null;

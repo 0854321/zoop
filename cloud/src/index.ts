@@ -17,6 +17,7 @@
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
 import { b64dec, b64enc, handleFiles, handleReadFiles, initFilesSchema } from "./files";
+import { taskHistory, taskInfo } from "./tools";
 import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
@@ -501,6 +502,13 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/status") return json(this.statusView());
 
     if (p === "/api/settings" && m === "GET") return json(this.get("settings") ?? { current: {}, effective: {}, options: {} });
+    if (p === "/api/tasks" && m === "GET") {
+      return json(taskHistory(this.mcp.store(), { query: url.searchParams.get("q") ?? "", offset: Number(url.searchParams.get("offset")), limit: Number(url.searchParams.get("limit")) }));
+    }
+    if (p === "/api/tasks/get" && m === "GET") {
+      const t = taskInfo(this.mcp.store(), url.searchParams.get("id") ?? "");
+      return t ? json(t) : json({ error: "not found" }, 404);
+    }
     if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it
       if (who === "machine") return json({ error: "forbidden" }, 403);
       const { id } = (await req.json().catch(() => ({}))) as { id?: string };

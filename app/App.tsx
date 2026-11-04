@@ -108,6 +108,7 @@ import {
   updateSummary,
   type UpdateLine,
   isQueued,
+  type TaskInfo,
 } from "./hub";
 
 type Config = { url: string; token: string };
@@ -1011,7 +1012,7 @@ const TONE: Record<string, "on" | "run" | "queue" | "wait" | "off" | "bad"> = { 
 /** A task's state: its label, color and mark. */
 const STATE_OF = (): Record<string, [string, string, string]> => ({
   active: ["进行中", colors.up, "●"], inbox: ["排队中", colors.info, "○"], waiting: ["等子任务", colors.warn, "○"], nohost: ["等机器", colors.warn, "○"], parked: ["等外部结果", colors.warn, "○"],
-  blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.faint, "✓"],
+  blocked: ["等你决定", colors.warn, "!"], failed: ["失败", colors.danger, "✕"], done: ["完成", colors.faint, "✓"], cancelled: ["已取消", colors.faint, "✕"],
 });
 
 /** A progress step's icon and color. */
@@ -1036,11 +1037,84 @@ function since(iso?: string, end?: string): string {
   return m < 1 ? "刚刚" : m < 60 ? `${m} 分钟` : m < 1440 ? `${Math.floor(m / 60)} 小时` : `${Math.floor(m / 1440)} 天`;
 }
 
+const HISTORY_PAGE = 50;
+
+/** 全部任务: every task the team has, newest first, a page at a time. */
+function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => void }) {
+  const tasks = signal<TaskInfo[]>([]);
+  const total = signal<number | null>(null);
+  const error = signal("");
+  const loading = signal(false);
+  const query = signal("");
+  let asked = 0; // the newest request; an older answer that lands late is dropped
+  async function load(reset: boolean) {
+    const mine = ++asked;
+    loading.set(true);
+    const offset = reset ? 0 : untracked(tasks).length;
+    const r = await props.hub.api("GET", `/api/tasks?limit=${HISTORY_PAGE}&offset=${offset}&q=${encodeURIComponent(untracked(query).trim())}`);
+    if (mine !== asked) return;
+    loading.set(false);
+    if (!r.ok) { error.set(r.status ? `读取失败（${r.status}）` : "连不上服务器"); return; }
+    error.set("");
+    const page = (r.data.tasks as TaskInfo[] | undefined) ?? [];
+    tasks.set(reset ? page : [...untracked(tasks), ...page]);
+    total.set(Number(r.data.total ?? 0));
+  }
+  void load(true);
+  return (
+    <Scroll testID="task-history" style={{ flex: 1 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 20 }}>
+        <Input
+          testID="task-search"
+          value={query()}
+          onChange={({ value }) => { query.set(value); void load(true); }}
+          placeholder="搜索编号、标题或成员"
+          class="placeholder:text-faint"
+          style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
+        />
+        <If when={error()}><Text style={{ fontSize: 14, color: colors.danger }}>{error()}</Text></If>
+        <If when={total() === 0 && !loading()}><Text style={{ fontSize: 14, color: colors.faint }}>没有符合的任务</Text></If>
+        <View>
+          <Each of={tasks()} key={(t) => t.id}>
+            {(t) => (
+              <View
+                role="button"
+                accessibilityLabel={`${t().id} ${t().title}`}
+                onPress={() => props.onTask(t().id)}
+                hoverStyle={hovered()}
+                style={{ minHeight: size.row, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, marginHorizontal: -10, borderRadius: 7 }}
+              >
+                <Dot tone={TONE[t().state ?? ""] ?? "off"} />
+                <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{t().id}</Text>
+                <Text style={{ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{t().title}</Text>
+                <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${STATE_OF()[t().state ?? ""]?.[0] ?? ""} · ${clock(t().updated ?? "")}`}</Text>
+              </View>
+            )}
+          </Each>
+        </View>
+        <If when={total() !== null && tasks().length < total()!}>
+          <View style={{ alignSelf: "flex-start" }}>
+            <Btn testID="task-more" label={loading() ? "读取中…" : `加载更多（还有 ${total()! - tasks().length} 个）`} kind="secondary" disabled={loading()} onPress={() => void load(false)} />
+          </View>
+        </If>
+      </View>
+    </Scroll>
+  );
+}
+
 function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
+  // a task past the status snapshot's newest few is read on its own
+  const older = signal<TaskInfo | null>(null);
+  const missing = signal(false);
   const t = () => {
     const s = props.hub.status();
-    return [...(s?.active ?? []), ...(s?.recent ?? [])].find((x) => x.id === props.id);
+    return [...(s?.active ?? []), ...(s?.recent ?? [])].find((x) => x.id === props.id) ?? older() ?? undefined;
   };
+  if (!untracked(t)) {
+    void props.hub.api("GET", `/api/tasks/get?id=${encodeURIComponent(props.id)}`).then((r) => {
+      if (r.ok) older.set(r.data as TaskInfo); else missing.set(true);
+    });
+  }
   const section = (title: string) => (
     <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
   );
@@ -1083,7 +1157,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     <View style={{ flex: 1 }}>
     <Scroll style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
-        <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{`${props.id} 已经不在最近的任务里了。`}</Text>}>
+        <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{missing() ? `找不到 ${props.id}。` : "读取中…"}</Text>}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <Badge label={t()!.state === "nohost" ? `等 ${needsLabel(t()!.needs)}` : STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
@@ -1366,6 +1440,8 @@ function Sidebar(props: {
   onSettings: () => void;
   rules: () => boolean;
   onRules: () => void;
+  tasks: () => boolean;
+  onTasks: () => void;
   onHelp: () => void;
   onClose?: () => void;
   chrome?: boolean;
@@ -1484,6 +1560,11 @@ function Sidebar(props: {
               )}
             </Each>
           </If>
+
+          <SideRow onPress={props.onTasks} selected={props.tasks()} title="全部任务">
+            <Icon name="layers" size={17} tint={colors.muted} />
+            <Text style={{ ...rowText(), color: colors.muted }}>全部任务</Text>
+          </SideRow>
 
           <SideHeading title="机器" count={s()?.hosts.length || undefined} />
           <Each of={s()?.hosts ?? []} key={(h) => h.host}>
@@ -2841,6 +2922,7 @@ type Route =
   | { name: "member"; id: string }
   | { name: "routine"; routine: string }
   | { name: "rules" }
+  | { name: "tasks" }
   | { name: "doc"; path: string };
 const CHANNEL: Route = { name: "channel" };
 
@@ -2862,7 +2944,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   /** A task: from a machine's page it goes on top (back returns to the machine), else in place. */
   const openTask = (id: string) => {
     const t = untracked(top);
-    if (t.name === "host") { drawer.set(false); nav.push({ name: "task", id }); }
+    if (t.name === "host" || t.name === "tasks") { drawer.set(false); nav.push({ name: "task", id }); }
     else show({ name: "task", id });
   };
   taskLink = openTask;
@@ -3324,6 +3406,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onSettings={openTeam}
       rules={() => { const n = top().name; return n === "rules" || n === "doc"; }}
       onRules={() => openRules()}
+      tasks={() => top().name === "tasks"}
+      onTasks={() => show({ name: "tasks" })}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
@@ -3680,6 +3764,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "channel": return "团队频道";
       case "team": return wide() ? "团队设置" : "设置";
       case "task": return `任务 ${r.id}`;
+      case "tasks": return "全部任务";
       case "host": return `机器 ${r.host}`;
       case "notify": return "通知";
       case "member": return r.id;
@@ -3689,7 +3774,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     }
   };
   /** The back button's label, the page below's short name. */
-  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : r.name === "rules" ? "规则与记忆" : titleOf(r));
+  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : r.name === "rules" ? "规则与记忆" : r.name === "tasks" ? "全部任务" : titleOf(r));
   const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
   const connPill = () => (
     <View
@@ -3753,6 +3838,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     switch (r.name) {
       case "channel": return channelPage();
       case "task": return <TaskDetail hub={hub} id={r.id} wide={wide()} />;
+      case "tasks": return <TaskHistory hub={hub} wide={wide()} onTask={openTask} />;
       case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
       case "team":
         return (

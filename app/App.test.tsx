@@ -336,6 +336,31 @@ describe("channel", () => {
     await app.waitFor("任务 T-0005");
   });
 
+  test("all tasks: older ones load page by page, and any of them opens", async () => {
+    const row = (i: number) => ({ id: `T-${1000 + i}`, title: `旧任务 ${i}`, agent: "lead", state: "done", updated: ts(1) });
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: {
+        ...hub([]),
+        [`GET ${URL}/api/tasks?*`]: (r: { url: string }) => {
+          const u = new globalThis.URL(r.url), offset = Number(u.searchParams.get("offset"));
+          if (u.searchParams.get("q")) return { body: { tasks: [row(70)], total: 1 } };
+          return { body: { tasks: Array.from({ length: offset ? 20 : 50 }, (_, i) => row(i + offset)), total: 70 } };
+        },
+        [`GET ${URL}/api/tasks/get?*`]: { body: { ...row(1), request: "很久以前的请求", runs: [{ ts: ts(1), host: "h", cli: "claude", status: "done", summary: "早就做完了" }] } },
+      },
+    });
+    await app.waitFor("团队频道");
+    await app.press("label:全部任务");
+    await app.waitFor("旧任务 0");
+    await app.waitFor("加载更多（还有 20 个）");
+    await app.press("id:task-more");
+    await app.waitFor("旧任务 69");
+    await app.press("label:T-1001 旧任务 1");
+    await app.waitFor("很久以前的请求");
+    await app.waitFor("早就做完了");
+  });
+
   test("a task no online machine can run says which machine it waits for", async () => {
     const nohost = { id: "T-0097", title: "在 Windows 上实测拖入文件", agent: "reviewer", state: "nohost", needs: "os:windows", created: ts(40), updated: ts(40) };
     const app = await open("./App.tsx", {

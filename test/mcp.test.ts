@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { initFilesSchema } from "../cloud/src/files";
 import { Mcp, type McpHost, okRedirect, pkceChallenge } from "../cloud/src/mcp";
+import { taskHistory, taskInfo } from "../cloud/src/tools";
 
 function sqlOf() {
   const db = new Database(":memory:");
@@ -349,4 +350,28 @@ test("redirect URIs: https or loopback only", () => {
   expect(okRedirect("http://localhost:6274/oauth/callback")).toBe(true);
   expect(okRedirect("http://example.com/cb")).toBe(false);
   expect(okRedirect("javascript:alert(1)")).toBe(false);
+});
+
+test("task history: every task in pages, newest first, and any one of them on its own", () => {
+  const files: Record<string, string> = {};
+  const doc = (id: string, extra: string, body = "") => `---\nid: ${id}\ntitle: task ${id}\nagent: lead\n${extra}\n---\n${body}\n`;
+  for (let i = 1; i <= 120; i++) { const id = `T-${String(i).padStart(4, "0")}`; files[`tasks/done/${id}.md`] = doc(id, `finished: 2026-10-01T00:${String(i % 60).padStart(2, "0")}:00Z`.replace("00:", `${String(Math.floor(i / 60)).padStart(2, "0")}:`)); }
+  files["tasks/active/T-0200.md"] = doc("T-0200", "started: 2026-11-01T00:00:00Z");
+  files["tasks/done/T-0200.md"] = doc("T-0200", "finished: 2026-09-01T00:00:00Z"); // mid-sync copy
+  files["tasks/rejected/T-0201.md"] = doc("T-0201", "cancelled: 2026-11-02T00:00:00Z");
+  files["tasks/rejected/T-0202.md"] = doc("T-0202", "approval: superseded:T-0203");
+  files["tasks/done/T-0204.md"] = doc("T-0204", "finished: 2026-08-01T00:00:00Z", "> fix it\n\n## Run 2026-08-01T00:00 · h1 · claude\n**done** — fixed");
+  const st = {
+    read: (p: string) => (files[p] ? { path: p, text: files[p], updated: "2026-01-01T00:00:00Z" } : null),
+    list: (d: string) => Object.keys(files).filter((p) => p.startsWith(d)).map((p) => ({ path: p, text: files[p], updated: "2026-01-01T00:00:00Z" })),
+  } as any;
+  const first = taskHistory(st, { limit: 50 });
+  expect(first.total).toBe(123); // 120 + T-0200 once + cancelled T-0201 + T-0204; the superseded copy stays out
+  expect(first.tasks.slice(0, 2).map((t) => [t.id, t.state])).toEqual([["T-0201", "cancelled"], ["T-0200", "active"]]);
+  const ids = new Set<string>();
+  for (let offset = 0; offset < first.total; offset += 50) for (const t of taskHistory(st, { offset, limit: 50 }).tasks) ids.add(t.id);
+  expect(ids.size).toBe(123);
+  expect(taskHistory(st, { query: "T-0204" }).tasks.map((t) => t.id)).toEqual(["T-0204"]);
+  expect(taskInfo(st, "T-0204")).toMatchObject({ state: "done", request: "fix it", runs: [{ status: "done", summary: "fixed" }] });
+  expect(taskInfo(st, "T-9999")).toBeNull();
 });

@@ -19,6 +19,8 @@ import { accountsInfo } from "./accounts";
 import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
 import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { readable, validPath } from "../cloud/src/files";
+import { parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
+import { localStore } from "./brain";
 
 export type Event = {
   id: string; ts: string; from: string; kind: "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
@@ -126,14 +128,7 @@ const STEP_KINDS: [string[], string][] = [
 /** What the app shows for a task: its request, state, timeline and results. */
 export function taskView(path: string, state: string, log: string[]) {
   const { meta: m, body } = readDoc(path);
-  // the owner's words (a quote) or the task's own first paragraph; daemon notes ("Requeued after ...") are not the request
-  // (new requeues keep their note in meta.requeue_note; older bodies still carry "> Requeued ..." / "> Attempt N failed" quotes)
-  const NOTE = /^>?\s*(Requeued|Retried|Resumed|Attempt \d+ failed)\b/i;
-  const own = body.split("\n## ")[0].split(/\n\n+/).filter((p) => !NOTE.test(p.trim()));
-  const quote = own.join("\n\n").match(/(^|\n)> [\s\S]*?(?=\n\n[^>]|$)/)?.[0];
-  const request = (quote ?? (own.join("\n\n") || m.title)).replace(/^> ?/gm, "").trim().slice(0, 1200);
-  const runs = [...body.matchAll(/## Run (\S+) · (\S+) · (\S+)\n\*\*(\w+)\*\* — ([^\n]*)/g)]
-    .map((r) => ({ ts: r[1], host: r[2], cli: r[3], status: r[4], summary: r[5] })).slice(-5);
+  const { request, runs } = parseTaskBody(m.title, body);
   const steps = log.filter((l) => l.includes(` ${m.id} `) || l.endsWith(` ${m.id}`)).slice(-12)
     .map((l) => {
       const x = l.match(/^(\S+) (\d\d:\d\d) `([^`]+)` (.*)$/);
@@ -153,6 +148,8 @@ export function taskView(path: string, state: string, log: string[]) {
 }
 
 type TaskView = ReturnType<typeof taskView>;
+
+const taskStore = () => localStore({ acts: {}, status: () => ({}), feed: () => [] });
 
 /** Per host: what it runs now, what it finished lately, and (for this machine) its AI accounts. */
 function hostViews(active: TaskView[], finished: TaskView[]) {
@@ -453,6 +450,13 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
       }
       if (url.pathname === "/api/settings" && req.method === "GET") return json(settingsView());
       if (url.pathname === "/api/settings" && req.method === "PUT") return json(await saveSettings((await req.json()) as Record<string, unknown>));
+      if (url.pathname === "/api/tasks" && req.method === "GET") {
+        return json(taskHistory(taskStore(), { query: url.searchParams.get("q") ?? "", offset: Number(url.searchParams.get("offset")), limit: Number(url.searchParams.get("limit")) }));
+      }
+      if (url.pathname === "/api/tasks/get" && req.method === "GET") {
+        const t = taskInfo(taskStore(), url.searchParams.get("id") ?? "");
+        return t ? json(t) : json({ error: "not found" }, 404);
+      }
       if (url.pathname === "/api/tasks/cancel" && req.method === "POST") {
         const { id } = (await req.json().catch(() => ({}))) as { id?: string };
         if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
