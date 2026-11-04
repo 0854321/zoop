@@ -87,6 +87,23 @@ test("writes are validated once, then performed by the store's acts", async () =
   expect(readFileSync(join(DATA, "memory/taste.md"), "utf8")).toMatch(/- Scrollbars keep the system size\. _\(owner, \d{4}-\d\d-\d\d, via chat\)_\n$/);
 });
 
+test("edit_memory corrects or deletes exactly one entry", async () => {
+  const { st } = store();
+  const f = join(DATA, "memory/principles.md");
+  writeFileSync(f, "# Principles\n- Keep it short.\n- Hide the offline notice\n  until retries fail.\n- Keep tests fast.\n");
+  const bad = async (a: any) => { const x = await runTool(st, "edit_memory", a); expect(x.ok).toBe(false); return (x as any).error as string; };
+  expect(await bad({ file: "policies/autonomy.md", match: "x" })).toContain("memory/");
+  expect(await bad({ file: "memory/nope.md", match: "x" })).toContain("not found");
+  expect(await bad({ file: "memory/principles.md", match: "offline banner" })).toContain("no line");
+  expect(await bad({ file: "memory/principles.md", match: "Keep" })).toContain("2 lines");
+  expect(await bad({ file: "memory/principles.md", match: " " })).toContain("match required");
+  const del = await runTool(st, "edit_memory", { file: "memory/principles.md", match: "offline notice" }) as any;
+  expect(del.data.deleted).toBe("- Hide the offline notice\n  until retries fail.");
+  expect(readFileSync(f, "utf8")).toBe("# Principles\n- Keep it short.\n- Keep tests fast.\n");
+  expect((await runTool(st, "edit_memory", { file: "memory/principles.md", match: "tests fast", text: "- Keep tests under a minute." })).ok).toBe(true);
+  expect(readFileSync(f, "utf8")).toBe("# Principles\n- Keep it short.\n- Keep tests under a minute.\n");
+});
+
 /** A model that plays back scripted turns and records what it was sent. */
 function scripted(turns: string[]): Model & { seen: string[] } {
   const seen: string[] = [];

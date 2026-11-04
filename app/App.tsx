@@ -10,6 +10,7 @@ import {
   host,
   Image,
   keymap,
+  lifecycle,
   locale,
   mount,
   platform,
@@ -175,6 +176,9 @@ async function loadConfig(): Promise<Boot> {
 
 type Conn = "connecting" | "live" | "offline" | "unauthorized";
 
+/** Failed reconnects in a row before the owner hears about it; anything shorter recovers silently. */
+const OFFLINE_AFTER = 5;
+
 function createHub(cfg: Config) {
   const events = signal<HubEvent[]>([]);
   const status = signal<Status | null>(null);
@@ -184,6 +188,7 @@ function createHub(cfg: Config) {
   let disposed = false;
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let failures = 0;
 
   const last = () => {
     const evs = untracked(events);
@@ -198,7 +203,7 @@ function createHub(cfg: Config) {
       const body = (await r.json()) as { events: HubEvent[] };
       events.update((evs) => merge(evs, body.events));
     } catch {
-      conn.set("offline");
+      /* the socket's retries decide when this counts as offline */
     } finally {
       loaded.set(true);
     }
@@ -217,7 +222,10 @@ function createHub(cfg: Config) {
     if (disposed || untracked(conn) === "unauthorized") return;
     const ws = new WebSocket(wsUrl(cfg.url, cfg.token));
     socket = ws;
-    ws.onopen = () => conn.set("live");
+    ws.onopen = () => {
+      failures = 0;
+      conn.set("live");
+    };
     ws.onmessage = (m: { data: unknown }) => {
       try {
         events.update((evs) => merge(evs, [JSON.parse(String(m.data)) as HubEvent]));
@@ -228,7 +236,7 @@ function createHub(cfg: Config) {
     };
     ws.onclose = () => {
       if (disposed) return;
-      if (untracked(conn) !== "unauthorized") conn.set("offline");
+      if (++failures >= OFFLINE_AFTER && untracked(conn) !== "unauthorized") conn.set("offline");
       retry = setTimeout(async () => {
         await loadFeed();
         stream();
@@ -425,6 +433,33 @@ function Btn(props: {
       <If when={props.note}>
         <Text style={{ fontSize: size.tiny, color: kind() === "primary" ? alpha(colors.onAccent, 0.7) : colors.faint }}>{props.note}</Text>
       </If>
+    </View>
+  );
+}
+
+/** The icon-only send button of a message composer: square, the same size and icon scale as the voice button beside it. */
+function SendButton(props: { disabled: boolean; onPress: () => void; testID: string }) {
+  return (
+    <View
+      testID={props.testID}
+      role="button"
+      accessibilityLabel="发送"
+      accessibilityState={{ disabled: props.disabled }}
+      onPress={() => !props.disabled && props.onPress()}
+      tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
+      hoverStyle={props.disabled ? undefined : { opacity: 0.9 }}
+      style={{
+        width: touch ? 44 : 36,
+        height: touch ? 44 : 36,
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: radius.control,
+        backgroundColor: props.disabled ? colors.raised : colors.accentFill,
+        transitionProperty: "background-color",
+        transitionDuration: 120,
+      }}
+    >
+      <Icon name="arrow-up" size={touch ? 24 : 20} tint={props.disabled ? colors.faint : colors.onAccent} />
     </View>
   );
 }
@@ -642,7 +677,7 @@ function Media(props: { hub: Hub; path: string }) {
 
 // ---------------------------------------------------------------- timeline
 
-/** A message the owner sent that the hub has not confirmed yet (optimistic send). */
+/** A message the owner sent that the hub has not confirmed yet: it reads as sent unless delivery fails. */
 type Outgoing = { id: string; ts: string; text: string; ref: string | null; files: Attachment[]; state: "held" | "sending" | "failed" };
 
 /** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
@@ -817,7 +852,7 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
   );
 }
 
-function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void; onRef?: (ref: string) => void }) {
+function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
   // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
   const ref = e.ref ?? e.text.match(/^([DLP]-[A-Z]?\d{4}) \S/)?.[1];
@@ -857,7 +892,6 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             borderRadius: 18,
             borderBottomRightRadius: 6,
             backgroundColor: tints.accent,
-            opacity: props.out ? 0.65 : 1,
             gap: 4,
           }}
         >
@@ -867,7 +901,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
         </View>
         </If>
         <If
-          when={props.out}
+          when={props.out?.state === "failed"}
           else={
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <If when={e.text.trim()}>
@@ -877,20 +911,10 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             </View>
           }
         >
-          <If when={props.out?.state === "held"}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Text style={{ fontSize: size.tiny, color: colors.faint }}>即将发送</Text>
-              <Btn label="撤销" kind="ghost" kbd={touch ? undefined : keymap.label("mod+z")} onPress={() => props.onUndo?.()} testID="undo-send" />
-            </View>
-          </If>
-          <If when={props.out?.state !== "held"}>
-          <If when={props.out?.state === "failed"} else={<Text style={{ fontSize: size.tiny, color: colors.faint }}>发送中…</Text>}>
-            <View role="button" onPress={props.onRetry} accessibilityLabel="重试发送" style={{ flexDirection: "row", gap: 6 }}>
-              <Text style={{ fontSize: size.tiny, color: colors.danger }}>发送失败</Text>
-              <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.danger }}>重试</Text>
-            </View>
-          </If>
-          </If>
+          <View role="button" onPress={props.onRetry} accessibilityLabel="重试发送" style={{ flexDirection: "row", gap: 6 }}>
+            <Text style={{ fontSize: size.tiny, color: colors.danger }}>发送失败</Text>
+            <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.danger }}>重试</Text>
+          </View>
         </If>
       </View>
     </View>
@@ -1135,27 +1159,31 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     catch { cancelling.set(false); }
   }
   // the task is its own conversation: what the owner and the team said about it, and a box to keep talking
+  const saying = signal<HubEvent[]>([]);
   const talk = computed(() => {
     const refs = new Set([props.id, ...(older()?.decisions ?? []), ...(t()?.decision ? [t()!.decision!] : [])]);
-    return merge(older()?.events ?? [], props.hub.events()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
+    return merge(merge(older()?.events ?? [], props.hub.events()), saying()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
   });
   const settled = computed(() => answeredIds(talk()));
   const text = signal("");
-  const sending = signal(false);
   const note = signal("");
   const hint = signal("");
+  let said = 0;
   async function say() {
     const v = text().trim();
-    if (!v || sending()) return;
-    sending.set(true);
+    if (!v) return;
+    // reads as sent at once; only a failure brings the words back to the box, with the reason
+    const id = `local:${++said}`;
+    saying.update((l) => [...l, { id, ts: new Date().toISOString(), from: "owner", kind: "owner", ref: props.id, thread: true, text: v }]);
+    text.set("");
     note.set("");
     try {
       await props.hub.send(v, props.id, [], true);
-      text.set("");
     } catch (e) {
+      text.update((now) => (now.trim() ? `${v}\n${now}` : v));
       note.set(String((e as Error)?.message ?? e));
     }
-    sending.set(false);
+    saying.update((l) => l.filter((x) => x.id !== id));
   }
   return (
     <View style={{ flex: 1 }}>
@@ -1275,7 +1303,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             class="placeholder:text-faint"
             style={{ flex: 1, minHeight: 36, maxHeight: 160, paddingVertical: 8, fontSize: 15, lineHeight: 21, color: colors.text, borderWidth: 0, backgroundColor: "transparent" }}
           />
-          <Btn testID="task-send" label={sending() ? "发送中…" : "发送"} kind="primary" disabled={!text().trim() || sending()} onPress={() => void say()} />
+          <SendButton testID="task-send" disabled={!text().trim()} onPress={() => void say()} />
         </View>
       </View>
     </If>
@@ -3037,7 +3065,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     composer?.focus();
   };
 
-  // A message waits a few seconds before it leaves, so a wrong tap or a typo can be taken back.
+  // A message reads as sent at once but leaves a few seconds later, so Mod+Z can still take it back.
   const UNDO_MS = 5000;
   const holds = new Map<string, ReturnType<typeof setTimeout>>();
   function send(text: string, ref: string | null, id = `local:${++seq}`, files: Attachment[] = []) {
@@ -3046,8 +3074,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     jumpToEnd();
     holds.set(id, setTimeout(() => { holds.delete(id); void deliver(id); }, UNDO_MS));
   }
-  function undo(id?: string) {
-    const o = id ? outbox().find((x) => x.id === id) : [...outbox()].reverse().find((x) => x.state === "held");
+  // Leaving the app must not strand a message that already looks sent.
+  effect(() => {
+    if (lifecycle() === "active") return;
+    for (const [id, hold] of holds) {
+      clearTimeout(hold);
+      holds.delete(id);
+      void deliver(id);
+    }
+  });
+  function undo() {
+    const o = [...outbox()].reverse().find((x) => x.state === "held");
     if (!o || !holds.has(o.id)) return false;
     clearTimeout(holds.get(o.id));
     holds.delete(o.id);
@@ -3515,7 +3552,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id, o.files); }} onUndo={() => undo(row.event.id)} onRef={pick} />;
+                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRef={pick} />;
                     }
                     return (
                       <Message
@@ -3709,59 +3746,37 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     >
                       <Icon name="image" size={18} tint={colors.muted} />
                     </View>
-                    <If when={canDictate()}>
-                      {/* while listening the mic turns into a filled stop button, so the way out is always in the same place */}
-                      <View
-                        testID="dictate"
-                        role="button"
-                        accessibilityLabel={speech() === "off" ? "语音输入" : "停止语音输入"}
-                        accessibilityState={{ selected: speech() !== "off" }}
-                        tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
-                        onPress={toggleDictation}
-                        hoverStyle={speech() === "off" ? hovered() : { opacity: 0.9 }}
-                        style={{
-                          width: touch ? 40 : 32,
-                          height: touch ? 40 : 32,
-                          borderRadius: radius.control,
-                          alignItems: "center",
-                          justifyContent: "center",
-                          backgroundColor: speech() === "off" ? undefined : colors.accentFill,
-                          transitionProperty: "background-color",
-                          transitionDuration: 120,
-                        }}
-                      >
-                        <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? 18 : 16} tint={speech() === "off" ? colors.muted : colors.onAccent} />
-                      </View>
-                    </If>
                     <If when={speech() !== "off"}>
                       <Text testID="dictating" style={{ fontSize: 13, color: colors.accent, numberOfLines: 1 }}>
                         {speech() === "on" ? "正在听…" : "正在识别…"}
                       </Text>
                     </If>
                   </View>
-                  <View
-                    testID="send"
-                    role="button"
-                    accessibilityLabel="发送"
-                    accessibilityState={{ disabled: !canSend() }}
-                    onPress={submit}
-                    tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
-                    hoverStyle={canSend() ? { opacity: 0.9 } : undefined}
-                    style={{
-                      height: touch ? 40 : 36,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 6,
-                      paddingHorizontal: 14,
-                      borderRadius: radius.control,
-                      backgroundColor: canSend() ? colors.accentFill : colors.raised,
-                      transitionProperty: "background-color",
-                      transitionDuration: 120,
-                    }}
-                  >
-                    <Text style={{ fontSize: 15, fontWeight: "600", color: canSend() ? colors.onAccent : colors.faint }}>发送</Text>
-                    <Icon name="arrow-up" size={15} tint={canSend() ? colors.onAccent : colors.faint} />
-                  </View>
+                  <If when={canDictate()}>
+                    {/* a large square target beside send, unfilled so it does not compete with send; while listening it becomes a red stop in the same place */}
+                    <View
+                      testID="dictate"
+                      role="button"
+                      accessibilityLabel={speech() === "off" ? "语音输入" : "停止语音输入"}
+                      accessibilityState={{ selected: speech() !== "off" }}
+                      tooltip={touch ? undefined : <Tip label={speech() === "off" ? "语音输入" : "停止语音输入"} />}
+                      onPress={toggleDictation}
+                      hoverStyle={speech() === "off" ? hovered() : { opacity: 0.9 }}
+                      style={{
+                        width: touch ? 44 : 36,
+                        height: touch ? 44 : 36,
+                        borderRadius: radius.control,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: speech() === "off" ? undefined : tints.danger,
+                        transitionProperty: "background-color",
+                        transitionDuration: 120,
+                      }}
+                    >
+                      <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? (touch ? 24 : 20) : (touch ? 20 : 16)} tint={speech() === "off" ? colors.text : colors.danger} />
+                    </View>
+                  </If>
+                  <SendButton testID="send" disabled={!canSend()} onPress={submit} />
                 </View>
               </View>
             </View>

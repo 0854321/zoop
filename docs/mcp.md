@@ -19,6 +19,7 @@ in the Noop app, and receive live events.
 | `amend_task` | Adds your follow-up to an open task (a waiting task is woken) |
 | `cancel_task` (destructive) / `set_priority` / `reassign_task` | Stop a task; change its priority; give a not-yet-started task to another agent |
 | `remember` | Writes a rule or preference into memory for the whole fleet or one agent |
+| `edit_memory` (destructive) | Corrects or deletes one memory entry |
 | `answer_decision` | Answers a card, like tapping an option |
 | `search` / `fetch` | ChatGPT connector / deep research shape over tasks and decisions |
 

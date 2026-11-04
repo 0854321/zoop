@@ -18,6 +18,7 @@ export type WriteOp =
   | { tool: "set_priority"; id: string; priority: Priority }
   | { tool: "reassign_task"; id: string; agent: string }
   | { tool: "remember"; text: string; file: string }
+  | { tool: "edit_memory"; file: string; match: string; text: string }
   | { tool: "answer_decision"; id: string; answer: string };
 
 export interface ToolStore {
@@ -38,8 +39,22 @@ export const TASK_STATES = ["inbox", "active", "waiting", "blocked", "failed", "
 export const TASK_ID = /^T-[\w-]*\d{4}$/, DECISION_ID = /^[DP]-[\w]*\d{4}$/;
 export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
 type Priority = (typeof PRIORITIES)[number];
-/** Where `remember` may write: the shared memory files, or one agent's memory. */
+/** Where `remember` and `edit_memory` may write: the shared memory files, or one agent's memory. */
 export const MEMORY_FILE = /^(memory\/[\w.-]+\.md|agents\/[\w-]+\/memory\.md)$/;
+
+/** Replaces the one memory entry containing `match` with `text` (empty: deletes it). An entry is a line plus its indented
+ * continuation lines. The new file text and the entry it changed, or the problem when `match` does not pick exactly one. */
+export function editMemoryEntry(file: string, match: string, text: string): { text: string; entry: string } | string {
+  const lines = file.split("\n");
+  const hits = lines.flatMap((l, i) => (l.includes(match) ? [i] : []));
+  if (!hits.length) return `no line contains "${match}"`;
+  if (hits.length > 1) return `"${match}" matches ${hits.length} lines, be more specific:\n${hits.slice(0, 5).map((i) => lines[i]).join("\n")}`;
+  const at = hits[0];
+  let end = at + 1;
+  while (end < lines.length && /^\s+\S/.test(lines[end])) end++;
+  const entry = lines.slice(at, end).join("\n");
+  return { text: [...lines.slice(0, at), ...(text ? [text] : []), ...lines.slice(end)].join("\n"), entry };
+}
 
 // ---------------------------------------------------------------- data views
 
@@ -266,6 +281,11 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ text: str("The rule or fact, one or two sentences, phrased so it is useful later (who/what it applies to, and why)"),
       file: str("memory/owner.md (who the owner is), memory/principles.md (how to work), memory/taste.md (UI/code taste), memory/projects.md, or agents/<name>/memory.md for one agent's know-how") }, ["text", "file"]),
     description: "Write a durable memory the whole fleet reads from now on: the owner's preference, a rule ('以后都这样'), a fact about a project." },
+  { name: "edit_memory", title: "Edit or delete a memory", annotations: DESTRUCTIVE, write: true,
+    inputSchema: obj({ file: str("The memory file, as listed by read_memory"),
+      match: str("Text copied from the entry, enough to pick exactly one line (find it with read_memory first)"),
+      text: str("The whole corrected entry, replacing the old one. Omit to delete the entry") }, ["file", "match"]),
+    description: "Correct or delete one existing memory entry, when the owner says it is wrong, outdated or should go. New facts go in remember." },
   { name: "answer_decision", title: "Answer a decision", annotations: RW, write: true,
     inputSchema: obj({ id: str("Decision id, e.g. D-0025"), answer: str("An option letter (A, B, …) or a free-text answer") }, ["id", "answer"]),
     description: "Answer a decision card (or change the answer the owner gave minutes ago), exactly like tapping an option in the Noop app." },
@@ -322,6 +342,15 @@ export function writeOp(name: string, a: any, st: ToolStore): WriteOp | string {
       if (!MEMORY_FILE.test(file)) return "file must be memory/<name>.md or agents/<name>/memory.md";
       if (file.startsWith("agents/") && !st.read(`agents/${file.split("/")[1]}/profile.md`)) return `unknown agent in ${file}`;
       return { tool: name, text: text.slice(0, 2000), file };
+    }
+    case "edit_memory": {
+      const file = s(a.file), match = s(a.match), text = s(a.text).replace(/\s*\n\s*/g, " ").slice(0, 2000);
+      if (!match) return "match required";
+      if (!MEMORY_FILE.test(file)) return "file must be memory/<name>.md or agents/<name>/memory.md";
+      const row = st.read(file);
+      if (!row) return `${file} not found`;
+      const edit = editMemoryEntry(row.text, match, text);
+      return typeof edit === "string" ? edit : { tool: name, file, match, text };
     }
     case "answer_decision": {
       const id = s(a.id), answer = s(a.answer);

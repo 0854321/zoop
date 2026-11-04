@@ -338,7 +338,7 @@ export class Mcp {
             capabilities: { tools: { listChanged: false }, resources: { subscribe: true, listChanged: true }, logging: {} },
             instructions: "noop is the owner's AI agent fleet. Read state with get_status / list_tasks / list_decisions / get_feed. "
               + "Talk to the fleet with send_message, hand it work with create_task, adjust work with amend_task / set_priority / reassign_task / cancel_task, "
-              + "answer decision cards with answer_decision, write durable memory with remember (read it with read_memory). "
+              + "answer decision cards with answer_decision, write durable memory with remember, correct or delete it with edit_memory (read it with read_memory). "
               + "Live events arrive as notifications/message on the GET stream (resumable with Last-Event-ID); without notifications, poll with wait_for_events." });
         }
         case "ping": return ok({});
