@@ -10,6 +10,7 @@ import {
   host,
   Image,
   keymap,
+  lifecycle,
   locale,
   mount,
   platform,
@@ -649,7 +650,7 @@ function Media(props: { hub: Hub; path: string }) {
 
 // ---------------------------------------------------------------- timeline
 
-/** A message the owner sent that the hub has not confirmed yet (optimistic send). */
+/** A message the owner sent that the hub has not confirmed yet: it reads as sent unless delivery fails. */
 type Outgoing = { id: string; ts: string; text: string; ref: string | null; files: Attachment[]; state: "held" | "sending" | "failed" };
 
 /** Each agent's own color and mark, the same everywhere it appears (stable by its id). */
@@ -824,7 +825,7 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
   );
 }
 
-function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onUndo?: () => void; onRef?: (ref: string) => void }) {
+function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
   // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
   const ref = e.ref ?? e.text.match(/^([DLP]-[A-Z]?\d{4}) \S/)?.[1];
@@ -864,7 +865,6 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             borderRadius: 18,
             borderBottomRightRadius: 6,
             backgroundColor: tints.accent,
-            opacity: props.out ? 0.65 : 1,
             gap: 4,
           }}
         >
@@ -874,7 +874,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
         </View>
         </If>
         <If
-          when={props.out}
+          when={props.out?.state === "failed"}
           else={
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <If when={e.text.trim()}>
@@ -884,20 +884,10 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             </View>
           }
         >
-          <If when={props.out?.state === "held"}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Text style={{ fontSize: size.tiny, color: colors.faint }}>即将发送</Text>
-              <Btn label="撤销" kind="ghost" kbd={touch ? undefined : keymap.label("mod+z")} onPress={() => props.onUndo?.()} testID="undo-send" />
-            </View>
-          </If>
-          <If when={props.out?.state !== "held"}>
-          <If when={props.out?.state === "failed"} else={<Text style={{ fontSize: size.tiny, color: colors.faint }}>发送中…</Text>}>
-            <View role="button" onPress={props.onRetry} accessibilityLabel="重试发送" style={{ flexDirection: "row", gap: 6 }}>
-              <Text style={{ fontSize: size.tiny, color: colors.danger }}>发送失败</Text>
-              <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.danger }}>重试</Text>
-            </View>
-          </If>
-          </If>
+          <View role="button" onPress={props.onRetry} accessibilityLabel="重试发送" style={{ flexDirection: "row", gap: 6 }}>
+            <Text style={{ fontSize: size.tiny, color: colors.danger }}>发送失败</Text>
+            <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.danger }}>重试</Text>
+          </View>
         </If>
       </View>
     </View>
@@ -1142,27 +1132,31 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     catch { cancelling.set(false); }
   }
   // the task is its own conversation: what the owner and the team said about it, and a box to keep talking
+  const saying = signal<HubEvent[]>([]);
   const talk = computed(() => {
     const refs = new Set([props.id, ...(older()?.decisions ?? []), ...(t()?.decision ? [t()!.decision!] : [])]);
-    return merge(older()?.events ?? [], props.hub.events()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
+    return merge(merge(older()?.events ?? [], props.hub.events()), saying()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
   });
   const settled = computed(() => answeredIds(talk()));
   const text = signal("");
-  const sending = signal(false);
   const note = signal("");
   const hint = signal("");
+  let said = 0;
   async function say() {
     const v = text().trim();
-    if (!v || sending()) return;
-    sending.set(true);
+    if (!v) return;
+    // reads as sent at once; only a failure brings the words back to the box, with the reason
+    const id = `local:${++said}`;
+    saying.update((l) => [...l, { id, ts: new Date().toISOString(), from: "owner", kind: "owner", ref: props.id, thread: true, text: v }]);
+    text.set("");
     note.set("");
     try {
       await props.hub.send(v, props.id, [], true);
-      text.set("");
     } catch (e) {
+      text.update((now) => (now.trim() ? `${v}\n${now}` : v));
       note.set(String((e as Error)?.message ?? e));
     }
-    sending.set(false);
+    saying.update((l) => l.filter((x) => x.id !== id));
   }
   return (
     <View style={{ flex: 1 }}>
@@ -1282,7 +1276,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             class="placeholder:text-faint"
             style={{ flex: 1, minHeight: 36, maxHeight: 160, paddingVertical: 8, fontSize: 15, lineHeight: 21, color: colors.text, borderWidth: 0, backgroundColor: "transparent" }}
           />
-          <Btn testID="task-send" label={sending() ? "发送中…" : "发送"} kind="primary" disabled={!text().trim() || sending()} onPress={() => void say()} />
+          <Btn testID="task-send" label="发送" kind="primary" disabled={!text().trim()} onPress={() => void say()} />
         </View>
       </View>
     </If>
@@ -3044,7 +3038,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     composer?.focus();
   };
 
-  // A message waits a few seconds before it leaves, so a wrong tap or a typo can be taken back.
+  // A message reads as sent at once but leaves a few seconds later, so Mod+Z can still take it back.
   const UNDO_MS = 5000;
   const holds = new Map<string, ReturnType<typeof setTimeout>>();
   function send(text: string, ref: string | null, id = `local:${++seq}`, files: Attachment[] = []) {
@@ -3053,8 +3047,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     jumpToEnd();
     holds.set(id, setTimeout(() => { holds.delete(id); void deliver(id); }, UNDO_MS));
   }
-  function undo(id?: string) {
-    const o = id ? outbox().find((x) => x.id === id) : [...outbox()].reverse().find((x) => x.state === "held");
+  // Leaving the app must not strand a message that already looks sent.
+  effect(() => {
+    if (lifecycle() === "active") return;
+    for (const [id, hold] of holds) {
+      clearTimeout(hold);
+      holds.delete(id);
+      void deliver(id);
+    }
+  });
+  function undo() {
+    const o = [...outbox()].reverse().find((x) => x.state === "held");
     if (!o || !holds.has(o.id)) return false;
     clearTimeout(holds.get(o.id));
     holds.delete(o.id);
@@ -3522,7 +3525,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => { const o = out(); if (o) send(o.text, o.ref, o.id, o.files); }} onUndo={() => undo(row.event.id)} onRef={pick} />;
+                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRef={pick} />;
                     }
                     return (
                       <Message
