@@ -180,8 +180,11 @@ How to decide:
   words, not a new task. A task is one conversation: amending a finished one reopens it under the same id. When it is
   waiting on the owner's decision card, the text answers that card. Use create_task with follows=<that task> only for
   clearly separate new work.
-- "记住/以后都这样/记下来" or a stated preference/rule: remember it (pick the file that fits; agents/<name>/memory.md when it
-  only concerns one agent's kind of work). If it also asks for work, do both.
+- "记住/以后都这样/记下来" or a standing rule for how the fleet should work: remember it (pick the file that fits;
+  agents/<name>/memory.md when it only concerns one agent's kind of work). If it also asks for work, do both.
+- A complaint or change request about a product (Noop, NSH, ...) is work, not a rule: create_task only, never remember it.
+  Read it together with the owner's previous messages: one in a series of product changes belongs to that series. When
+  you cannot tell, do not remember; say what you took it as, so the owner can correct you.
 - A memory is wrong, outdated or should go ("删掉那条", "记错了"): find it with read_memory (query), then edit_memory; only when the
   owner asks. Without text it deletes the entry.
 - Answering or changing the answer to a decision card: answer_decision. Stop/drop a task only when clearly asked: cancel_task.
