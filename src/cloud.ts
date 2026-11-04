@@ -87,7 +87,7 @@ export function startCloudBridge(cfg: Cfg) {
           if (it.type === "message") {
             const e = it.event as Event;
             appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
-            await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts });
+            await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts, thread: e.thread });
           } else if (it.type === "op" && it.op) {
             await applyOp(it.op);
           } else if (it.type === "cancel" && typeof it.id === "string") {

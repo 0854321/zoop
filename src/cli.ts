@@ -20,7 +20,7 @@ import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
 import { answerFromChat, appendEvent, cancelTask, drainInbound, feed, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setApplyOp, setCancelTask, setUpdateFleet, onSettingsSaved, startServer, status as hubStatus } from "./server";
-import { type BrainOut, ClaudeModel, SYSTEM, dataActs, localStore, logBrain, think } from "./brain";
+import { reopenTask, type BrainOut, ClaudeModel, SYSTEM, dataActs, localStore, logBrain, think } from "./brain";
 import { runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
@@ -595,10 +595,22 @@ async function daemon(cfg: Cfg) {
   if (isPrimary(cfg, host)) startCloudBridge(cfg);
   const appendFollowUp = (tid: string, text: string) => locked(async () => {
     await _pull();
-    for (const dir of ["inbox", "active", "waiting"]) {
+    for (const dir of ["inbox", "active", "waiting", "blocked", "done", "failed"]) {
       const f = P("tasks", dir, `${tid}.md`);
       if (!existsSync(f)) continue;
       const { meta, body } = readDoc(f);
+      // waiting on the owner's card: what they write on the task is their answer to it
+      if (dir === "blocked" && meta.decision && existsSync(P("decisions", "open", `${meta.decision}.md`))) {
+        answerFromChat(String(meta.decision), text, false);
+        return String(meta.title ?? tid);
+      }
+      if (dir === "blocked" || dir === "done" || dir === "failed") { // a task is a conversation: talking to a finished one continues it, under the same id
+        reopenTask(f, text);
+        journal(host, `💬 ${tid} reopened by owner: ${text.slice(0, 80)}`);
+        await _commitPush(`[${host}] reopen ${tid}`);
+        queueMicrotask(() => void planInbox(cfg, host).then(wakeDaemon).catch(() => {}));
+        return String(meta.title ?? tid);
+      }
       const added = `${body}\n\n${FOLLOW_UP} ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n`;
       if (dir === "waiting") { // parked until its sub-tasks finish: the owner's new message is acted on now, not then
         const kids = meta.children ? ` Its sub-tasks (${meta.children}) may still be open: check them, don't start them again.` : "";
@@ -645,7 +657,7 @@ async function daemon(cfg: Cfg) {
   }));
   // A new task from the owner's chat (created by the chat brain, or by create_task over MCP). It carries the channel's
   // recent conversation and the task it continues, so terse follow-ups ("不行，…", "这个细节记下来") keep their meaning.
-  let chatNow: { text: string; chat: string[]; reply?: string } | null = null; // the owner message the brain is handling
+  let chatNow: { text: string; chat: string[]; reply?: string; thread?: boolean } | null = null; // the owner message the brain is handling
   const createOwnerTask = (op: { title: string; details?: string; repo?: string; agent?: string; follows?: string }) => locked(async () => {
     await _pull();
     const m = chatNow;
@@ -669,8 +681,13 @@ async function daemon(cfg: Cfg) {
     status: hubStatus, feed: () => feed("", 2000),
     acts: {
       ...dataActs(host),
-      create_task: createOwnerTask,
-      amend_task: async (op) => { const title = await appendFollowUp(op.id, op.text); return title ? { ok: true, id: op.id, title } : { ok: false, error: `${op.id} is not open` }; },
+      // said on a task's page: it stays in that conversation, however the model read it
+      create_task: async (op) => {
+        const m = chatNow;
+        const title = m?.thread && m.reply ? await appendFollowUp(m.reply, m.text) : "";
+        return title ? { ok: true, id: m!.reply, title } : createOwnerTask(op);
+      },
+      amend_task: async (op) => { const title = await appendFollowUp(op.id, op.text); return title ? { ok: true, id: op.id, title } : { ok: false, error: `${op.id} cannot be continued` }; },
       cancel_task: async (op) => { const r = await cancelTask(op.id); return { ok: r === "cancelled", id: op.id, result: r }; },
       answer_decision: async (op) => {
         const open = existsSync(P("decisions", "open", `${op.id}.md`));
@@ -683,11 +700,11 @@ async function daemon(cfg: Cfg) {
   setApplyOp((op) => runTool(store, op?.tool, op));
   const model = new ClaudeModel(String(cfg.router?.model ?? "claude-haiku-5-5"), String(cfg.router?.cli ?? "claude"), (cfg.router?.timeout_seconds ?? 45) * 1000);
   if (isPrimary(cfg, host) && Bun.which(String(cfg.router?.cli ?? "claude"))) model.warm(SYSTEM);
-  if (isPrimary(cfg, host)) startServer(cfg, async (text, { reply, answered, sentAt }) => {
+  if (isPrimary(cfg, host)) startServer(cfg, async (text, { reply, answered, sentAt, thread }) => {
     const got = Date.now();
     const m = { text, replyTo: reply, answered, chat: recentChat(text), sentAt };
-    chatNow = { text, chat: m.chat, reply };
-    const post = (r: string, ref?: string) => appendEvent({ from: "hub", kind: "system", text: r.slice(0, 2000), ...(ref ? { ref } : {}) });
+    chatNow = { text, chat: m.chat, reply, thread };
+    const post = (r: string, ref?: string) => appendEvent({ from: "hub", kind: "system", text: r.slice(0, 2000), ...(ref ? { ref } : {}), ...(thread ? { thread } : {}) });
     let out: BrainOut;
     try {
       out = await think(m, store, model, post);
@@ -695,9 +712,8 @@ async function daemon(cfg: Cfg) {
     } catch (err) {
       // no model (CLI missing, logged out, timeout): the message still becomes work, silently — never lost, never canned
       console.error(`chat brain: ${err}`);
-      const r = reply && ["inbox", "active", "waiting"].some((d) => existsSync(P("tasks", d, `${reply}.md`)))
-        ? await store.act({ tool: "amend_task", id: reply, text })
-        : await store.act({ tool: "create_task", title: text.split("\n")[0].slice(0, 80) });
+      const amended = reply ? await store.act({ tool: "amend_task", id: reply, text }) : null;
+      const r = amended?.ok ? amended : await store.act({ tool: "create_task", title: text.split("\n")[0].slice(0, 80) });
       out = { reply: "", calls: [{ tool: "fallback", args: {}, ok: !!r.ok, result: r }], rounds: 0, ms: { model: [], total: Date.now() - got }, fallback: true };
     } finally { chatNow = null; }
     logBrain(m, out, got);

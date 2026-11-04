@@ -225,8 +225,8 @@ export class Hub extends DurableObject<Env> {
     for (const w of [...this.inboxWaiters]) w();
   }
 
-  ownerMessage(text: string, ref?: string, attachments?: string[]): Ev {
-    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(attachments?.length ? { attachments } : {}) });
+  ownerMessage(text: string, ref?: string, attachments?: string[], thread = false): Ev {
+    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(attachments?.length ? { attachments } : {}), ...(thread ? { thread } : {}) });
     this.toInbox({ type: "message", event: ev });
     if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id });
     return ev;
@@ -476,13 +476,13 @@ export class Hub extends DurableObject<Env> {
     }
 
     if (p === "/api/messages" && m === "POST") {
-      const { text = "", reply_to, attachments } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown };
+      const { text = "", reply_to, attachments, thread } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown };
       const files = ownerAttachments(attachments);
       if (files === null) return json({ error: "bad attachments" }, 400);
       if (files.some((f) => !this.sql.exec("SELECT 1 FROM media WHERE id = ? LIMIT 1", f.slice(7)).toArray().length))
         return json({ error: "attachment not found" }, 400);
       if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
-      return json(this.ownerMessage(text, reply_to, files));
+      return json(this.ownerMessage(text, reply_to, files, thread === true && /^T-/.test(reply_to ?? "")));
     }
 
     // The owner's images for a message (paste / drop / pick in the app): images only, ≤ 10 MB, kept with the media.
@@ -507,7 +507,11 @@ export class Hub extends DurableObject<Env> {
     }
     if (p === "/api/tasks/get" && m === "GET") {
       const t = taskInfo(this.mcp.store(), url.searchParams.get("id") ?? "");
-      return t ? json(t) : json({ error: "not found" }, 404);
+      if (!t) return json({ error: "not found" }, 404);
+      // its whole conversation, however far back: the feed the app holds only has the newest events
+      const refs = [t.id, ...t.decisions];
+      const rows = this.sql.exec(`SELECT json FROM events WHERE json_extract(json, '$.ref') IN (${refs.map(() => "?").join(",")}) ORDER BY seq`, ...refs).toArray();
+      return json({ ...t, events: rows.map((r) => JSON.parse(r.json as string)) });
     }
     if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it
       if (who === "machine") return json({ error: "forbidden" }, 403);

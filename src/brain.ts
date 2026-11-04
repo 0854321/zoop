@@ -7,7 +7,7 @@
 // Credential locality: the model runs here, under the owner's own `claude` login. The Cloudflare Worker never sees it:
 // owner messages reach this daemon over the existing owner→fleet inbox (long-polled, so within milliseconds), and the
 // reply goes back as a normal feed event.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { DATA, HOME_DIR, P, _commitPush, _pull, journal, locked, now, readDoc, writeDoc } from "./core";
 import { type Ev, type FileRow, type ToolStore, type WriteOp, isWrite, listDecisions, listRoutines, listTasks, runTool, toolsFor, writeOp } from "../cloud/src/tools";
@@ -37,6 +37,14 @@ export function localStore(o: { acts: Acts; status: () => any; feed: () => { ts:
       return fn(op);
     },
   };
+}
+
+/** A task is one conversation: the owner's message on a finished task puts it back in the queue, same id, its runs as context. */
+export function reopenTask(file: string, text: string) {
+  const { meta, body } = readDoc(file);
+  writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, status: undefined, finished: undefined, wake_at: undefined, decision: undefined, attempt: undefined, resumed: "yes" },
+    `${body}\n\n## Owner follow-up ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n\nReopened by the owner's message above: the earlier runs are your context, act on it now.\n`);
+  unlinkSync(file);
 }
 
 /** Writes that only touch task metadata or memory files: done right here (git-synced data repo). */
@@ -157,8 +165,10 @@ How to decide:
 - Real work (code, PR review, release prep, investigation, anything that takes more than a minute): create_task with a
   clear title and the owner's request in details (quote it; add the context that the agent needs, e.g. which PR/repo,
   and "follows" when it continues or corrects a task from the channel). Agents do the work; you never claim to do it.
-- About a task that is still open (queued, running, waiting): amend_task on it with the owner's words, not a new task.
-  About a finished task (corrections, "不行", "再…"): create_task with follows=<that task>.
+- About an existing task, open or finished (corrections, "不行", "再…", more requirements): amend_task on it with the owner's
+  words, not a new task. A task is one conversation: amending a finished one reopens it under the same id. When it is
+  waiting on the owner's decision card, the text answers that card. Use create_task with follows=<that task> only for
+  clearly separate new work.
 - "记住/以后都这样/记下来" or a stated preference/rule: remember it (pick the file that fits; agents/<name>/memory.md when it
   only concerns one agent's kind of work). If it also asks for work, do both.
 - Answering or changing the answer to a decision card: answer_decision. Stop/drop a task only when clearly asked: cancel_task.

@@ -205,9 +205,36 @@ describe("channel", () => {
     await app.type("id:task-composer", "再看下 iPad");
     await app.press("id:task-send");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "再看下 iPad", reply_to: "T-0005" });
+    expect(posts[0]).toEqual({ text: "再看下 iPad", reply_to: "T-0005", thread: true });
     await app.waitUntil(() => app.value("id:task-composer") === "");
     await app.waitFor("text:再看下 iPad");
+  });
+
+  test("a task's conversation stays on its page: the main channel skips it, old messages load, and its cards can be answered there", async () => {
+    const posts: unknown[] = [];
+    const said = [
+      { id: "e20", ts: ts(20), from: "owner", kind: "owner", ref: "T-0005", thread: true, text: "只在任务里说的话" },
+      { id: "e21", ts: ts(21), from: "hub", kind: "system", ref: "T-0005", thread: true, text: "任务里的回复" },
+      { id: "e22", ts: ts(22), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "主要结果在主会话" },
+    ];
+    const net = {
+      ...hub(posts, said),
+      [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0005", title: "t", agent: "lead", state: "done", decisions: ["D-0701"], events: [
+        { id: "e1", ts: ts(1), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "很久以前的对话" },
+        { id: "e2", ts: ts(2), from: "dev@linux-box", kind: "decision", ref: "D-0701", text: "要合并吗？", options: ["A: 合并", "B: 等"] },
+      ] } },
+    };
+    const app = await open("./App.tsx", { storage: STORAGE, network: net, width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("text:主要结果在主会话");
+    expect(app.shows("text:只在任务里说的话")).toBe(false);
+    expect(app.shows("text:任务里的回复")).toBe(false);
+    await app.press("id:task-chip-T-0005 >> nth=0");
+    await app.waitFor("text:很久以前的对话");
+    expect(app.shows("text:只在任务里说的话")).toBe(true);
+    expect(app.shows("text:任务里的回复")).toBe(true);
+    await app.press("text:/A: 合并/");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toEqual({ text: "D-0701 A", reply_to: "D-0701", thread: true });
   });
 
     test("a decision's PR references are links, host-lettered ids are chips, option buttons shorten PR links", async () => {

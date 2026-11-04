@@ -9,6 +9,8 @@ export type HubEvent = {
   kind: Kind;
   text: string;
   ref?: string;
+  /** Said inside a task's own conversation: on the task page, not in the main channel. */
+  thread?: boolean;
   options?: string[];
   attachments?: string[];
 };

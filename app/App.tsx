@@ -246,13 +246,13 @@ function createHub(cfg: Config) {
     return ((await r.json()) as { url: string }).url;
   }
 
-  async function send(text: string, replyTo: string | null, files: Attachment[] = []) {
+  async function send(text: string, replyTo: string | null, files: Attachment[] = [], thread = false) {
     const attachments: string[] = [];
     for (const f of files) attachments.push(await upload(f));
     const r = await fetch(`${cfg.url}/api/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ text, ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}) }),
+      body: JSON.stringify({ text, ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}), ...(thread ? { thread } : {}) }),
     });
     if (r.status === 401) conn.set("unauthorized");
     if (!r.ok) throw new Error(`发送失败（${r.status}）`);
@@ -1104,17 +1104,16 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
 
 function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   // a task past the status snapshot's newest few is read on its own
-  const older = signal<TaskInfo | null>(null);
+  const older = signal<(TaskInfo & { decisions?: string[]; events?: HubEvent[] }) | null>(null);
   const missing = signal(false);
   const t = () => {
     const s = props.hub.status();
     return [...(s?.active ?? []), ...(s?.recent ?? [])].find((x) => x.id === props.id) ?? older() ?? undefined;
   };
-  if (!untracked(t)) {
-    void props.hub.api("GET", `/api/tasks/get?id=${encodeURIComponent(props.id)}`).then((r) => {
-      if (r.ok) older.set(r.data as TaskInfo); else missing.set(true);
-    });
-  }
+  // always read: the page shows the task's whole conversation, and the app only holds the newest events
+  void props.hub.api("GET", `/api/tasks/get?id=${encodeURIComponent(props.id)}`).then((r) => {
+    if (r.ok) older.set(r.data as TaskInfo); else missing.set(true);
+  });
   const section = (title: string) => (
     <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
   );
@@ -1136,17 +1135,22 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     catch { cancelling.set(false); }
   }
   // the task is its own conversation: what the owner and the team said about it, and a box to keep talking
-  const talk = () => props.hub.events().filter((e) => e.ref === props.id && !(isHub(e.from) && e.kind === "system"));
+  const talk = computed(() => {
+    const refs = new Set([props.id, ...(older()?.decisions ?? []), ...(t()?.decision ? [t()!.decision!] : [])]);
+    return merge(older()?.events ?? [], props.hub.events()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
+  });
+  const settled = computed(() => answeredIds(talk()));
   const text = signal("");
   const sending = signal(false);
   const note = signal("");
+  const hint = signal("");
   async function say() {
     const v = text().trim();
     if (!v || sending()) return;
     sending.set(true);
     note.set("");
     try {
-      await props.hub.send(v, props.id);
+      await props.hub.send(v, props.id, [], true);
       text.set("");
     } catch (e) {
       note.set(String((e as Error)?.message ?? e));
@@ -1198,7 +1202,11 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             {section("对话")}
             <View testID="task-talk" style={{ gap: 14 }}>
               <Each of={talk()} key={(e) => e.id}>
-                {(e) => (
+                {(e) => isAsk(e()) ? (
+                  <Message hub={props.hub} event={e()} answered={settled} target={() => null}
+                    onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true).catch((err) => note.set(String((err as Error)?.message ?? err)))}
+                    onReply={() => hint.set("在下面的输入框写你的指示，会作为这张卡片的回答。")} />
+                ) : (
                   <View style={{ gap: 3 }}>
                     <Text style={{ fontSize: 13, color: colors.faint }}>
                       <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? "你" : displayName(e().from)}</Text>
@@ -1251,6 +1259,9 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 10, paddingBottom: 16 }}>
         <If when={note()}>
           <Text style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>
+        </If>
+        <If when={hint() && !note()}>
+          <Text style={{ fontSize: 13, color: colors.muted }}>{hint()}</Text>
         </If>
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 14, paddingRight: 6, paddingVertical: 6, borderRadius: radius.card, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}>
           <Input
@@ -2970,7 +2981,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   /** The timeline: the hub's events and the messages on their way. */
   const shown = computed(() =>
     merge(
-      hub.events().filter((e) => !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))),
+      hub.events().filter((e) => !e.thread && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))),
       outbox().map((o) => ({
         id: o.id, ts: o.ts, from: "owner", kind: "owner" as const, text: o.text, ref: o.ref ?? undefined,
         attachments: o.files.length ? o.files.map((f) => f.preview) : undefined,
@@ -2984,7 +2995,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const divider = signal<string | null | undefined>(undefined);
   effect(() => {
     if (untracked(divider) !== undefined || !hub.loaded() || seen() === undefined) return;
-    divider.set(firstUnread(hub.events(), seen() ?? null));
+    divider.set(firstUnread(hub.events().filter((e) => !e.thread), seen() ?? null));
   });
   const timeline = computed((): (Row | { key: string; unread: true })[] => {
     const r = rows(shown());

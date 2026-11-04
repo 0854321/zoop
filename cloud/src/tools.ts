@@ -104,7 +104,10 @@ export function taskHistory(st: ToolStore, opts: { query?: string; offset?: numb
 export function taskInfo(st: ToolStore, id: string) {
   for (const s of HISTORY_STATES) {
     const f = st.read(`tasks/${s}/${id}.md`);
-    if (f) return { ...historyRow(f, s), ...parseTaskBody(parseDoc(f.text).meta.title, parseDoc(f.text).body) };
+    if (!f) continue;
+    // the cards it asked: they belong to its conversation
+    const decisions = ["open", "closed"].flatMap((w) => st.list(`decisions/${w}/`)).map((d) => parseDoc(d.text).meta).filter((m) => m.task === id && m.id).map((m) => String(m.id));
+    return { ...historyRow(f, s), ...parseTaskBody(parseDoc(f.text).meta.title, parseDoc(f.text).body), decisions };
   }
   return null;
 }
@@ -248,8 +251,8 @@ export const TOOLS: Tool[] = [
       follows: str("Optional: the task (T-…) this continues or corrects; the new task reads its result") }, ["title"]),
     description: "Hand a piece of work to the fleet. An agent picks it up, does it and reports back in the feed. Use for anything that takes more than a quick answer (code, reviews, releases, research)." },
   { name: "amend_task", title: "Add to a task", annotations: RW, write: true,
-    inputSchema: obj({ id: str("An open task (queued, running or waiting), e.g. T-0184"), text: str("What to add or change, in the owner's words") }, ["id", "text"]),
-    description: "Add the owner's follow-up to an open task: an extra requirement, a correction, more context. The running agent gets it; a waiting task is woken." },
+    inputSchema: obj({ id: str("A task, open or finished, e.g. T-0184"), text: str("What to add or change, in the owner's words") }, ["id", "text"]),
+    description: "Add the owner's follow-up to a task: an extra requirement, a correction, more context. The running agent gets it; a waiting task is woken; a finished task reopens under the same id; a task waiting on a decision card takes it as the answer." },
   { name: "cancel_task", title: "Cancel a task", annotations: DESTRUCTIVE, write: true,
     inputSchema: obj({ id: str("Task id, e.g. T-0184") }, ["id"]),
     description: "Cancel a task (queued, waiting, blocked or running; its sub-tasks too). Only when the owner clearly asks to stop or drop it." },
@@ -291,7 +294,7 @@ export function writeOp(name: string, a: any, st: ToolStore): WriteOp | string {
     case "amend_task": {
       const id = s(a.id);
       if (!TASK_ID.test(id) || !s(a.text)) return "id (T-…) and text required";
-      if (!open(id, ["inbox", "active", "waiting"])) return `${id} is not open (queued, running or waiting); create a task that follows it instead`;
+      if (!open(id, ["inbox", "active", "waiting", "blocked", "done", "failed"])) return `${id} cannot be continued (unknown or cancelled); create a task instead`;
       return { tool: name, id, text: s(a.text).slice(0, 20_000) };
     }
     case "cancel_task": {
