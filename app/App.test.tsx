@@ -388,6 +388,13 @@ describe("channel", () => {
     await app.waitFor("早就做完了");
   });
 
+  test("a dropped connection stays quiet until reconnecting keeps failing", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]) });
+    await app.waitFor("id:composer");
+    expect(app.shows("text:/连接断开了/")).toBe(false);
+    await app.waitUntil(() => app.shows("text:/连接断开了/"), { timeout: 30_000 });
+  });
+
   test("a task no online machine can run says which machine it waits for", async () => {
     const nohost = { id: "T-0097", title: "在 Windows 上实测拖入文件", agent: "reviewer", state: "nohost", needs: "os:windows", created: ts(40), updated: ts(40) };
     const app = await open("./App.tsx", {
