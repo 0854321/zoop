@@ -19,7 +19,7 @@ export type Acts = { [K in WriteOp["tool"]]?: (op: Extract<WriteOp, { tool: K }>
 
 export function localStore(o: { acts: Acts; status: () => any; feed: () => { ts: string; [k: string]: any }[]; root?: string }): ToolStore {
   const root = o.root ?? DATA;
-  const row = (abs: string): FileRow => ({ path: relative(root, abs), text: readFileSync(abs, "utf8"), updated: statSync(abs).mtime.toISOString() });
+  const row = (abs: string): FileRow => ({ path: relative(root, abs).replaceAll("\\", "/"), text: readFileSync(abs, "utf8"), updated: statSync(abs).mtime.toISOString() });
   const walk = (dir: string): string[] => {
     if (!existsSync(dir)) return [];
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(join(dir, e.name)) : e.name.endsWith(".md") || e.name.endsWith(".toml") ? [join(dir, e.name)] : []);

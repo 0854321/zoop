@@ -19,7 +19,7 @@ beforeAll(async () => {
   mkdirSync(hosts.a, { recursive: true }); mkdirSync(hosts.b, { recursive: true });
   t = await sync.fakeTransport(join(W, "worker.sqlite"), "test");
 });
-afterAll(() => rmSync(W, { recursive: true, force: true }));
+afterAll(() => { try { rmSync(W, { recursive: true, force: true }); } catch {} }); // Windows keeps the open worker.sqlite locked
 
 test("push, pull, binary-safe, ignored paths", async () => {
   const bin = new Uint8Array(256).map((_, i) => i);

@@ -20,7 +20,7 @@ trap {
 
 Write-Host "`nnoop — your own AI team`n"
 Step "bun"
-if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { Run { irm bun.sh/install.ps1 | iex }; $env:Path += ";$HOME\.bun\bin" }
+if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { Run { irm bun.sh/install.ps1 | iex }; $env:Path += ";$HOME\.bun\bin" } else { Run { bun upgrade } }  # an old bun cannot read a newer bun.lock
 Ok (bun --version)
 Step "noop"
 if (Test-Path "$App\.git") { Run { git -C $App pull -q --ff-only } } else { Run { git clone -q https://github.com/huacnlee/noop.git $App } }

@@ -29,7 +29,7 @@ trap on_fail ERR
 printf "\n%snoop%s — your own AI team\n\n" "$B" "$N"
 
 step "git";  command -v git >/dev/null || { printf "%s✗%s install git first\n" "$R" "$N"; exit 1; }; ok
-step "bun";  if ! command -v bun >/dev/null; then run bash -c "curl -fsSL https://bun.sh/install | bash"; export PATH="$HOME/.bun/bin:$PATH"; fi; ok "$(bun --version)"
+step "bun";  if ! command -v bun >/dev/null; then run bash -c "curl -fsSL https://bun.sh/install | bash"; export PATH="$HOME/.bun/bin:$PATH"; else run bun upgrade; fi; ok "$(bun --version)"
 step "noop"
 if [ -d "$APP/.git" ]; then run git -C "$APP" pull -q --ff-only || true; else run git clone -q "$REPO" "$APP"; fi
 (cd "$APP" && run bun install --frozen-lockfile)
