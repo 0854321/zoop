@@ -565,6 +565,31 @@ describe("keyboard", () => {
     await app.waitUntil(() => !app.shows("发送失败"));
   });
 
+  test("a just-sent message can be recalled by its button: the words return and nothing is posted", async () => {
+    const posts: { text: string }[] = [];
+    const app = await open("./App.tsx", { ...desk, network: hub(posts) });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "发错了");
+    await app.submit("id:composer");
+    await app.waitFor("text:发错了");
+    expect(app.shows("即将发送")).toBe(false);
+    await app.press("id:recall-send");
+    await app.waitUntil(() => app.value("id:composer") === "发错了");
+    await app.wait(6000);
+    expect(posts.length).toBe(0);
+  });
+
+  test("the recall button goes away once the message has left", async () => {
+    const posts: { text: string }[] = [];
+    const app = await open("./App.tsx", { ...desk, network: hub(posts) });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "看一下");
+    await app.submit("id:composer");
+    await app.waitFor("id:recall-send");
+    await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
+    await app.waitUntil(() => !app.shows("id:recall-send"));
+  });
+
   test("Enter sends from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { ...desk, network: hub(posts) });

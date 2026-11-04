@@ -852,7 +852,7 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
   );
 }
 
-function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onRef?: (ref: string) => void }) {
+function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onRecall?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
   // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
   const ref = e.ref ?? e.text.match(/^([DLP]-[A-Z]?\d{4}) \S/)?.[1];
@@ -906,6 +906,12 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <If when={e.text.trim()}>
                 <MsgActions id={e.id} text={/^[DLP]-[A-Z]?\d{4} \S/.test(e.text) && !e.text.includes("\n") ? answerText(e.text) : e.text} show={() => touch || over()} align="flex-end" />
+              </If>
+              {/* only while it can still be taken back; the row keeps its height when this goes */}
+              <If when={props.out?.state === "held"}>
+                <View role="button" testID="recall-send" accessibilityLabel="撤回" onPress={() => props.onRecall?.()} hoverStyle={hovered()} style={{ height: 28, paddingHorizontal: 6, borderRadius: 6, justifyContent: "center", cursor: "pointer" }}>
+                  <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.muted }}>撤回</Text>
+                </View>
               </If>
               <Text style={{ fontSize: size.tiny, color: colors.faint }}>{timeOf(e.ts)}</Text>
             </View>
@@ -3065,7 +3071,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     composer?.focus();
   };
 
-  // A message reads as sent at once but leaves a few seconds later, so Mod+Z can still take it back.
+  // A message reads as sent at once but leaves a few seconds later, so 撤回 (or Mod+Z) can still take it back.
   const UNDO_MS = 5000;
   const holds = new Map<string, ReturnType<typeof setTimeout>>();
   function send(text: string, ref: string | null, id = `local:${++seq}`, files: Attachment[] = []) {
@@ -3083,8 +3089,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       void deliver(id);
     }
   });
-  function undo() {
-    const o = [...outbox()].reverse().find((x) => x.state === "held");
+  function undo(id?: string) {
+    const o = id ? outbox().find((x) => x.id === id) : [...outbox()].reverse().find((x) => x.state === "held");
     if (!o || !holds.has(o.id)) return false;
     clearTimeout(holds.get(o.id));
     holds.delete(o.id);
@@ -3552,7 +3558,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     }
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRef={pick} />;
+                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRecall={() => undo(row.event.id)} onRef={pick} />;
                     }
                     return (
                       <Message
