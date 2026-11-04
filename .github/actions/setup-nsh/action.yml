@@ -7,7 +7,7 @@ inputs:
     description: The longbridge/nsh commit to build
     required: true
   target:
-    description: linux, windows, macos, ios or android
+    description: linux, windows, macos, ios, android or web
     required: true
 runs:
   using: composite
@@ -87,6 +87,17 @@ runs:
             install -d "$out/runtime/android/release"
             cp target/android/release/classes.dex "$out/runtime/android/release/"
             cp -R target/android/release/lib "$out/runtime/android/release/" ;;
+          web)
+            # As `cargo xtask dist` makes it. Its C code (zstd) needs an `ar` that knows WebAssembly objects.
+            rustup target add wasm32-unknown-unknown
+            AR_wasm32_unknown_unknown=llvm-ar cargo build --profile web --locked -p nsh-platform-web \
+              --no-default-features --features browser,linkable --target wasm32-unknown-unknown
+            install -d "$out/runtime/web/browser"
+            cp target/wasm32-unknown-unknown/web/nsh_platform_web.wasm "$out/runtime/web/nsh-browser.wasm"
+            cp crates/nsh-platform-web/web/nsh.js "$out/runtime/web/"
+            cp crates/nsh-platform-web/web/browser/*.js crates/nsh-platform-web/web/browser/*.txt "$out/runtime/web/browser/"
+            two_face="$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "two-face") | .manifest_path')"
+            cp "$(dirname "$two_face")/generated/syntaxes-fancy-newlines.bin" "$out/runtime/web/nsh-syntaxes.bin" ;;
           *) echo "::error::unknown target $TARGET"; exit 1 ;;
         esac
 

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the web package the hub and the Worker serve (dist/web/noop), then adds what
+# Builds the web package the hub and the Worker serve (dist/web/noop; machines download a release's
+# instead, see src/webclient.ts, and leave one built here alone), then adds what
 # `nsh package` has no place for: the push service worker at the site's root (its scope is the
 # whole app), a stable icon URL for notifications, and the manifest's colors (the gallery's page).
 set -e
@@ -9,8 +10,8 @@ NSH="${NSH:-$HOME/work/nsh/target/debug/nsh}"
 OUT="dist/web/noop"
 TMP="dist/.web-build"
 rm -rf "$TMP"
-"$NSH" package --target web -o "$TMP"
-rm -rf "$OUT"
+"$NSH" package --target web -o "$TMP" "$@"
+rm -rf "$OUT" dist/web/.release
 mkdir -p dist/web
 mv "$TMP"/* "$OUT"
 rmdir "$TMP"

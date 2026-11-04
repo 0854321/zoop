@@ -1,6 +1,6 @@
 # Packages the client apps. A tag `vX.Y.Z` publishes them as a GitHub release; pull requests touching this and
 # running it by hand only build them (workflow artifacts). Asset names carry no version, so
-# `releases/latest/download/<asset>`, which install-client.sh and install-client.ps1 use, always resolves.
+# `releases/latest/download/<asset>`, which install-client.sh, install-client.ps1 and src/webclient.ts use, always resolves.
 name: release
 on:
   push:
@@ -11,6 +11,7 @@ on:
       - .github/actions/setup-nsh/**
       - install-client.sh
       - install-client.ps1
+      - app/build-web.sh
   workflow_dispatch:
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
           - { target: macos, os: macos-15, asset: Noop-macos-arm64.zip, installer: install-client.sh }
           - { target: ios, os: macos-15, asset: Noop-ios-unsigned.ipa }
           - { target: android, os: ubuntu-24.04, asset: Noop-android.apk }
+          - { target: web, os: ubuntu-24.04, asset: Noop-web.tar.gz }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +73,12 @@ jobs:
               echo "::error::a release needs the secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEY_ALIAS and ANDROID_KEYSTORE_PASSWORD"
               exit 1
             fi
+          fi
+          if [ "$TARGET" = web ]; then
+            (cd app && NSH=nsh ./build-web.sh "${args[@]}")
+            tar -czf "assets/$ASSET" -C app/dist/web/noop .
+            ls -l assets
+            exit 0
           fi
           (cd app && nsh package --target "$TARGET" -o "$out" "${args[@]}")
           case "$TARGET" in

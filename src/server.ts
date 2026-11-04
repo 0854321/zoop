@@ -21,6 +21,7 @@ import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/
 import { readable, validPath } from "../cloud/src/files";
 import { parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
 import { localStore } from "./brain";
+import { ensureWebClient } from "./webclient";
 
 export type Event = {
   id: string; ts: string; from: string; kind: "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
@@ -408,6 +409,7 @@ export function readDataFile(path: string, root = DATA) {
 }
 
 export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
+  if (process.env.NODE_ENV !== "test") void ensureWebClient(); // served as soon as it lands
   const s = cfg.server ?? {};
   if (s.enabled === false) return;
   if (!s.token) { console.error("server: set [server].token in config.local.toml to enable the chat API"); return; }
@@ -424,7 +426,7 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
     port: s.port ?? 8787,
     async fetch(req, srv) {
       const url = new URL(req.url);
-      // The NSH client's web package (app: `nsh package --target web -o dist/web`) when built; else web/index.html.
+      // The NSH client's web package (from the latest release, or `app/build-web.sh`) when present; else web/index.html.
       if (existsSync(join(NSH_WEB, "index.html")) && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/media/")) {
         const rel = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
         const f = join(NSH_WEB, rel);

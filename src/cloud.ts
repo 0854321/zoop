@@ -9,6 +9,7 @@ import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { writeHubToml } from "./sync";
+import { ensureWebClient } from "./webclient";
 import { type Event, MEDIA, appendEvent, applyOp, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
 
 const base = (cfg: Cfg) => String(cfg.cloud?.url ?? "").replace(/\/$/, "");
@@ -140,7 +141,7 @@ export async function cloudDeploy(cfg: Cfg) {
     return fail("先登录你自己的 Cloudflare 账号（免费版即可）：\n  bunx wrangler login\n然后重新运行：hub cloud deploy");
   }
   if (!cfg.server?.token) return fail("缺少 [server] token，先运行 hub init");
-  if (!existsSync(join(CODE, "app", "dist", "web", "noop", "index.html"))) console.log("提示：客户端网页还没构建，Worker 只提供接口");
+  if (!(await ensureWebClient())) return fail("客户端网页下载失败，Worker 没有部署。请检查网络后重新运行：noop cloud deploy");
   const name = cfg.cloud?.name ?? "noop";
   console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
   const dep = await $`${wr} deploy --name ${name}`.cwd(dir).env(env).quiet().nothrow();

@@ -38,7 +38,7 @@
 | `src/sessions.ts` | learning the owner from local Claude/Codex history (redacted, never uploaded raw) |
 | `src/setup.ts` | init, join, install as a service, self-update with rollback |
 | `cloud/` | the Worker: `index.ts` (routes, auth, feed), `files.ts`, `smtp.ts`, `push.ts` |
-| `app/` | the NSH client; build the web package with `app/build-web.sh` |
+| `app/` | the NSH client; machines download the web package from the latest release (`src/webclient.ts`), and `app/build-web.sh` builds it locally |
 | `templates/` | default config, agents, policies and memory seeded into a new install |
 
 Machine-local files live in `HOME_DIR` (`$NOOP_HOME`, else `~/.noop`, falling back to an existing `~/.agent-hub`): `noop.toml` (Worker URL + machine token), `sync.json`, `data/` (the mirror), accounts, logs.
