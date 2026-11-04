@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { due } from "../src/cli";
 import { matches, signature, type Cfg } from "../src/core";
-import { parseResult } from "../src/runner";
+import { parseResult, runAgent } from "../src/runner";
 
 test("routine schedule", () => {
   const t = new Date("2026-11-02T19:05:00"); // Monday
@@ -218,4 +220,17 @@ test("a reply to an agent's message goes to the brain with that task, never as a
   await handleOwnerMessage("等等，选 B");
   expect(calls.at(-1)).toEqual(["等等，选 B", { reply: undefined, answered: "D-0001" }]);
   expect(drainInbound()).toEqual([{ id: "D-0001", answer: "A", source: "chat" }]);
+});
+
+test("a result block survives a later turn from a background task notification", async () => {
+  const lines = [
+    { type: "result", result: "still compiling" },
+    { type: "result", result: '```json\n{"status":"done","summary":"tested"}\n```' },
+    { type: "result", result: "that notification changes nothing" },
+  ].map((l) => JSON.stringify(l)).join("\n");
+  const cfg = { clis: { fake: { command: ["sh", "-c", 'printf "%s\\n" "$1"', "stream-json", lines] } } } as unknown as Cfg;
+  const log = `${tmpdir()}/noop-run-${process.pid}.log`;
+  const res = parseResult(await runAgent("fake", "", tmpdir(), cfg, log));
+  rmSync(log, { force: true });
+  expect(res).toMatchObject({ status: "done", summary: "tested" });
 });

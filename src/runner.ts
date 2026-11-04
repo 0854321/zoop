@@ -160,7 +160,12 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
       }
     } else if (e.type === "user") {
       for (const c of e.message?.content ?? []) if (c.type === "tool_result") inFlight.delete(c.tool_use_id);
-    } else if (e.type === "result") resultText = typeof e.result === "string" ? e.result : "";
+    } else if (e.type === "result") {
+      // a background task finishing starts another turn with its own result, so keep every turn's text: the real report
+      // may be followed by "that notification changes nothing"
+      const text = typeof e.result === "string" ? e.result : "";
+      resultText = resultText === undefined ? text : `${resultText}\n\n${text}`;
+    }
   };
   const read = async (stream: ReadableStream<Uint8Array>, lines: boolean) => {
     const dec = new TextDecoder();
