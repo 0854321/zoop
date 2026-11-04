@@ -31,4 +31,10 @@ bun cloud/test/run.ts http://127.0.0.1:8799      # file sync harness (see cloud/
 
 App: `cd app && ~/work/nsh/target/debug/nsh test` and `./build-web.sh`.
 
+## Releasing the client apps
+
+Push a tag `vX.Y.Z`. [release.yml](.github/workflows/release.yml) packages Linux, Windows, macOS, iOS and Android and publishes them as a GitHub release; pull requests that change the workflow or the installers build them without publishing. The tag sets the app version and the run number sets the build number.
+
+The workflow builds nsh from the commit in `NSH_REF` and caches it; a commit not yet cached takes a while on each runner. Android signing uses the secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS` and `ANDROID_KEYSTORE_PASSWORD`. Keep that key: Android refuses an update signed with another one. The iOS package is unsigned.
+
 Do not run tests against a production Worker or a live `DATA` directory.

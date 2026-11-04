@@ -1,0 +1,97 @@
+name: Set up nsh
+description: >
+  Puts on PATH an nsh CLI with the runtime for one target, built from a pinned commit and cached.
+  It is the layout of an nsh release (bin/ and runtime/), so packaging needs no Rust once cached.
+inputs:
+  ref:
+    description: The longbridge/nsh commit to build
+    required: true
+  target:
+    description: linux, windows, macos, ios or android
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.nsh-dist
+        key: nsh-dist-${{ runner.os }}-${{ inputs.target }}-${{ inputs.ref }}
+
+    # `nsh package` needs a JDK and the SDK's platform for Android, cached or not.
+    - if: inputs.target == 'android'
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "17"
+    - if: inputs.target == 'android'
+      shell: bash
+      run: |
+        if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]; then
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" > /dev/null || true
+        fi
+        test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: longbridge/nsh
+        ref: ${{ inputs.ref }}
+        path: .nsh-src
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: dtolnay/rust-toolchain@stable
+
+    - if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang llvm libclang-dev pkg-config
+        [ "$TARGET" != linux ] || sudo apt-get install -y libgtk-4-dev
+    - if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+      shell: bash
+      run: |
+        # QuickJS is C: bindgen needs libclang, which the image's LLVM has.
+        echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+        # rustc can overflow its default stack on the `windows` crate.
+        echo "RUST_MIN_STACK=268435456" >> "$GITHUB_ENV"
+
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: .nsh-src
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        out="$HOME/.nsh-dist"
+        exe=""; [ "$RUNNER_OS" != Windows ] || exe=.exe
+        cargo build --release --locked -p nsh-cli
+        install -d "$out/bin"
+        cp "target/release/nsh$exe" "$out/bin/"
+        case "$TARGET" in
+          linux)
+            # noop shows no web views, so the app needs only GTK 4 and not WebKitGTK.
+            cargo build --release --locked -p nsh-linux-app --no-default-features --features js
+            install -d "$out/runtime/linux"; cp target/release/nsh-linux-app "$out/runtime/linux/" ;;
+          windows)
+            cargo build --release --locked -p nsh-windows-app
+            install -d "$out/runtime/windows"; cp target/release/nsh-windows-app.exe "$out/runtime/windows/" ;;
+          macos)
+            cargo build --release --locked -p nsh-macos-app
+            install -d "$out/runtime/macos"; cp target/release/nsh-macos-app "$out/runtime/macos/" ;;
+          ios)
+            cargo build --release --locked -p nsh-ios-app --target aarch64-apple-ios
+            install -d "$out/runtime/ios/iphoneos"; cp target/aarch64-apple-ios/release/nsh-ios-app "$out/runtime/ios/iphoneos/" ;;
+          android)
+            cargo xtask android --release
+            install -d "$out/runtime/android/release"
+            cp target/android/release/classes.dex "$out/runtime/android/release/"
+            cp -R target/android/release/lib "$out/runtime/android/release/" ;;
+          *) echo "::error::unknown target $TARGET"; exit 1 ;;
+        esac
+
+    - shell: bash
+      run: |
+        bin="$HOME/.nsh-dist/bin"
+        [ "$RUNNER_OS" != Windows ] || bin="$(cygpath -w "$bin")"
+        echo "$bin" >> "$GITHUB_PATH"

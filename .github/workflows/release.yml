@@ -1,0 +1,145 @@
+# Packages the client apps. A tag `vX.Y.Z` publishes them as a GitHub release; pull requests touching this and
+# running it by hand only build them (workflow artifacts). Asset names carry no version, so
+# `releases/latest/download/<asset>`, which install-client.sh and install-client.ps1 use, always resolves.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/actions/setup-nsh/**
+      - install-client.sh
+      - install-client.ps1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The app needs nsh's `speech` capability, which is newer than nsh v0.3.0: built from this commit (cached,
+  # a cold build takes a while). Use a release of nsh here once one has it.
+  NSH_REF: b13c8c293f9e72bee3b0af65dcc7b878f155e574
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  package:
+    name: package (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux, os: ubuntu-24.04, asset: Noop-linux-x86_64.tar.gz, installer: install-client.sh }
+          - { target: windows, os: windows-latest, asset: Noop-windows-x86_64.zip, installer: install-client.ps1 }
+          - { target: macos, os: macos-15, asset: Noop-macos-arm64.zip, installer: install-client.sh }
+          - { target: ios, os: macos-15, asset: Noop-ios-unsigned.ipa }
+          - { target: android, os: ubuntu-24.04, asset: Noop-android.apk }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nsh
+        with:
+          ref: ${{ env.NSH_REF }}
+          target: ${{ matrix.target }}
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          NSH_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          args=(--build "$GITHUB_RUN_NUMBER")
+          [ "$GITHUB_REF_TYPE" != tag ] || args+=(--app-version "${GITHUB_REF_NAME#v}")
+          out="$RUNNER_TEMP/out"
+          mkdir -p assets
+          if [ "$TARGET" = android ]; then
+            if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+              keystore="$RUNNER_TEMP/release.jks"
+              base64 --decode <<< "$ANDROID_KEYSTORE_BASE64" > "$keystore"
+              args+=(--keystore "$keystore" --key-alias "$ANDROID_KEY_ALIAS")
+            elif [ "$GITHUB_REF_TYPE" = tag ]; then
+              # Each debug key differs, and Android refuses an update signed with another key.
+              echo "::error::a release needs the secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEY_ALIAS and ANDROID_KEYSTORE_PASSWORD"
+              exit 1
+            fi
+          fi
+          (cd app && nsh package --target "$TARGET" -o "$out" "${args[@]}")
+          case "$TARGET" in
+            linux) mv "$out/Noop.tar.gz" "assets/$ASSET" ;;
+            windows) mv "$out/Noop.zip" "assets/$ASSET" ;;
+            macos) ditto -c -k --keepParent "$out/Noop.app" "assets/$ASSET" ;;
+            ios)
+              # Unsigned: sign it with your own Apple ID to install it (Sideloadly, AltStore).
+              mkdir "$out/Payload" && mv "$out/Noop.app" "$out/Payload/"
+              (cd "$out" && zip -qry - Payload) > "assets/$ASSET" ;;
+            android) mv "$out/Noop.apk" "assets/$ASSET" ;;
+          esac
+          ls -l assets
+
+      - name: Try the installer on this package
+        if: matrix.installer != ''
+        env:
+          ASSET: ${{ matrix.asset }}
+          INSTALLER: ${{ matrix.installer }}
+        run: |
+          (cd assets && { command -v sha256sum > /dev/null && sha256sum "$ASSET" || shasum -a 256 "$ASSET"; } > SHA256SUMS)
+          python=python3; command -v python3 > /dev/null || python=python
+          (cd assets && exec "$python" -m http.server 8765 > /dev/null 2>&1) &
+          server=$!
+          trap 'kill "$server" 2> /dev/null || true' EXIT
+          sleep 2
+          export NOOP_CLIENT_BASE_URL=http://127.0.0.1:8765
+          case "$RUNNER_OS" in
+            Windows)
+              powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTALLER"
+              test -f "$LOCALAPPDATA/Programs/Noop/Noop.exe" ;;
+            macOS)
+              bash "$INSTALLER"
+              codesign --verify --deep --strict /Applications/Noop.app ;;
+            Linux)
+              bash "$INSTALLER"
+              test -x "$HOME/.local/share/noop-client/Noop"
+              test -x "$HOME/.local/bin/noop-client"
+              grep -q "^Exec=$HOME/.local/share/noop-client/Noop" "$HOME/.local/share/applications/dev.noop.app.desktop" ;;
+          esac
+          rm assets/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: assets/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" * --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" * --verify-tag --generate-notes --title "noop $GITHUB_REF_NAME"
+          fi

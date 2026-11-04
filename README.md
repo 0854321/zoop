@@ -31,6 +31,25 @@ curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install.sh | bas
 irm https://raw.githubusercontent.com/huacnlee/noop/main/install.ps1 | iex
 ```
 
+## Client apps
+
+The noop app talks to your noop from any device. It is optional: your noop address also works in a browser.
+
+```bash
+# macOS (Apple silicon, macOS 14+) and Linux (x86_64, GTK 4.14+, such as Ubuntu 24.04)
+curl -fsSL https://raw.githubusercontent.com/huacnlee/noop/main/install-client.sh | bash
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/huacnlee/noop/main/install-client.ps1 | iex
+```
+
+Run the same command again to update.
+
+- **Android** (9+): download [Noop-android.apk](https://github.com/huacnlee/noop/releases/latest/download/Noop-android.apk) on your phone and open it.
+- **iOS** (15+): [Noop-ios-unsigned.ipa](https://github.com/huacnlee/noop/releases/latest/download/Noop-ios-unsigned.ipa) is not signed, so sign and install it with your own Apple ID using a tool such as Sideloadly or AltStore.
+
 ## Use
 
 Open your noop address on any device and sign in with a code sent to your email. On your phone, add it to the home screen and turn on notifications.
