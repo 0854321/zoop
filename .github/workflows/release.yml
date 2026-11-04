@@ -21,9 +21,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The app needs nsh's `speech` capability, which is newer than nsh v0.3.0: built from this commit (cached,
-  # a cold build takes a while). Use a release of nsh here once one has it.
-  NSH_REF: 8ec26daf3b312afd9a04de7be27bd44930e18ca8
+  # Built from the commit of nsh v0.4.0, the first release with the `speech` capability the app needs (cached,
+  # a cold build takes a while).
+  NSH_REF: e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3
 
 defaults:
   run:
