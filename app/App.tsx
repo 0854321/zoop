@@ -437,6 +437,33 @@ function Btn(props: {
   );
 }
 
+/** The icon-only send button of a message composer: square, the same size and icon scale as the voice button beside it. */
+function SendButton(props: { disabled: boolean; onPress: () => void; testID: string }) {
+  return (
+    <View
+      testID={props.testID}
+      role="button"
+      accessibilityLabel="发送"
+      accessibilityState={{ disabled: props.disabled }}
+      onPress={() => !props.disabled && props.onPress()}
+      tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
+      hoverStyle={props.disabled ? undefined : { opacity: 0.9 }}
+      style={{
+        width: touch ? 44 : 36,
+        height: touch ? 44 : 36,
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: radius.control,
+        backgroundColor: props.disabled ? colors.raised : colors.accentFill,
+        transitionProperty: "background-color",
+        transitionDuration: 120,
+      }}
+    >
+      <Icon name="arrow-up" size={touch ? 24 : 20} tint={props.disabled ? colors.faint : colors.onAccent} />
+    </View>
+  );
+}
+
 function Dot(props: { tone: "on" | "run" | "queue" | "wait" | "off" | "bad" }) {
   const color = () => ({ on: colors.up, run: colors.up, queue: colors.info, wait: colors.warn, off: colors.faint, bad: colors.danger })[props.tone];
   return <View style={{ width: 8, height: 8, borderRadius: 4, flexShrink: 0, backgroundColor: color() }} />;
@@ -1276,7 +1303,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
             class="placeholder:text-faint"
             style={{ flex: 1, minHeight: 36, maxHeight: 160, paddingVertical: 8, fontSize: 15, lineHeight: 21, color: colors.text, borderWidth: 0, backgroundColor: "transparent" }}
           />
-          <Btn testID="task-send" label="发送" kind="primary" disabled={!text().trim()} onPress={() => void say()} />
+          <SendButton testID="task-send" disabled={!text().trim()} onPress={() => void say()} />
         </View>
       </View>
     </If>
@@ -3749,29 +3776,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                       <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? (touch ? 24 : 20) : (touch ? 20 : 16)} tint={speech() === "off" ? colors.text : colors.danger} />
                     </View>
                   </If>
-                  <View
-                    testID="send"
-                    role="button"
-                    accessibilityLabel="发送"
-                    accessibilityState={{ disabled: !canSend() }}
-                    onPress={submit}
-                    tooltip={touch ? undefined : <Tip label="发送" shortcut="Enter" />}
-                    hoverStyle={canSend() ? { opacity: 0.9 } : undefined}
-                    style={{
-                      height: touch ? 44 : 36,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 6,
-                      paddingHorizontal: 14,
-                      borderRadius: radius.control,
-                      backgroundColor: canSend() ? colors.accentFill : colors.raised,
-                      transitionProperty: "background-color",
-                      transitionDuration: 120,
-                    }}
-                  >
-                    <Text style={{ fontSize: 15, fontWeight: "600", color: canSend() ? colors.onAccent : colors.faint }}>发送</Text>
-                    <Icon name="arrow-up" size={15} tint={canSend() ? colors.onAccent : colors.faint} />
-                  </View>
+                  <SendButton testID="send" disabled={!canSend()} onPress={submit} />
                 </View>
               </View>
             </View>
