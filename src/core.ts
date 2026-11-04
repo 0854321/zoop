@@ -353,7 +353,7 @@ export function precedents(n = 30): string {
 }
 
 export function signature(agent: string, host: string, cfg: Cfg) {
-  return `🤖 Noop (${agent}) · AI agent acting for @${cfg.owner?.github ?? "owner"}`;
+  return `🤖 [Noop](https://huacnlee.github.io/noop) (${agent}) · AI agent acting for @${cfg.owner?.github ?? "owner"}`;
 }
 
 export function agentName(agent: string): string {

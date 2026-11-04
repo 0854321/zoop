@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { due } from "../src/cli";
-import { matches } from "../src/core";
+import { matches, signature, type Cfg } from "../src/core";
 import { parseResult } from "../src/runner";
 
 test("routine schedule", () => {
@@ -20,6 +20,13 @@ test("capability matching", () => {
   expect(matches({ requires: "os:macos" }, caps)).toBe(false);
   expect(matches({ host: "pc", requires: "gpu" }, caps)).toBe(true);
   expect(matches({ host: "mbp" }, caps)).toBe(false);
+});
+
+test("external signature links the Noop name to its site", () => {
+  const cfg = { owner: { github: "huacnlee" } } as Cfg;
+  expect(signature("lead", "host", cfg)).toBe(
+    "🤖 [Noop](https://huacnlee.github.io/noop) (lead) · AI agent acting for @huacnlee",
+  );
 });
 
 test("result parsing", () => {
