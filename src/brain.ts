@@ -10,7 +10,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { DATA, HOME_DIR, P, _commitPush, _pull, journal, locked, now, readDoc, writeDoc } from "./core";
-import { type Ev, type FileRow, type ToolStore, type WriteOp, isWrite, listDecisions, listRoutines, listTasks, runTool, toolsFor, writeOp } from "../cloud/src/tools";
+import { type Ev, type FileRow, type ToolStore, type WriteOp, isWrite, listDecisions, listRoutines, listTasks, editMemoryEntry, runTool, toolsFor, writeOp } from "../cloud/src/tools";
 
 // ---------------------------------------------------------------- the local tool store (the data repo on this machine)
 
@@ -83,6 +83,17 @@ export function dataActs(host: string, io = { pull: _pull, push: _commitPush }):
       journal(host, `🧠 remembered in ${op.file}: ${op.text.slice(0, 80)}`);
       await push(`[${host}] memory ${op.file}`);
       return { ok: true, file: op.file };
+    }),
+    edit_memory: (op) => locked(async () => {
+      await pull();
+      const f = P(...op.file.split("/"));
+      if (!existsSync(f)) return { ok: false, error: `${op.file} not found` };
+      const edit = editMemoryEntry(readFileSync(f, "utf8"), op.match, op.text);
+      if (typeof edit === "string") return { ok: false, error: edit };
+      writeFileSync(f, edit.text);
+      journal(host, `🧠 ${op.text ? "edited" : "deleted"} in ${op.file}: ${edit.entry.replace(/\s*\n\s*/g, " ").slice(0, 300)}`);
+      await push(`[${host}] memory ${op.file}`);
+      return { ok: true, file: op.file, [op.text ? "replaced" : "deleted"]: edit.entry };
     }),
   };
 }
@@ -171,6 +182,8 @@ How to decide:
   clearly separate new work.
 - "记住/以后都这样/记下来" or a stated preference/rule: remember it (pick the file that fits; agents/<name>/memory.md when it
   only concerns one agent's kind of work). If it also asks for work, do both.
+- A memory is wrong, outdated or should go ("删掉那条", "记错了"): find it with read_memory (query), then edit_memory; only when the
+  owner asks. Without text it deletes the entry.
 - Answering or changing the answer to a decision card: answer_decision. Stop/drop a task only when clearly asked: cancel_task.
   Priority / who does it: set_priority / reassign_task.
 - Merging, releases, deploys, settings, money, messages to people: you cannot; create_task and the agent asks the owner
