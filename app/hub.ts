@@ -9,6 +9,7 @@ export type HubEvent = {
   kind: Kind;
   text: string;
   ref?: string;
+  priority?: string;
   /** Said inside a task's own conversation: on the task page, not in the main channel. */
   thread?: boolean;
   options?: string[];
@@ -301,7 +302,7 @@ export function slashQuery(draft: string): string | null {
   return m ? m[1] : null;
 }
 
-// ---------------------------------------------------------------- notifications (Web Push; PUT /api/settings notify_prefs)
+// ---------------------------------------------------------------- notifications (PUT /api/settings notify_prefs; the rules are in notify.ts)
 
 export const NOTIFY_KINDS = [
   ["decision", "决策"],

@@ -25,7 +25,7 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard } from "nsh";
+  windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
@@ -111,10 +111,11 @@ import {
   isQueued,
   type TaskInfo,
 } from "./hub";
+import { notificationFor, type NotifyRules } from "./notify";
 
 type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
-const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked" };
+const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked", notifyOff: "hub.notifyOff" };
 const touch = !(platform.idiom === "desktop" || platform.idiom === "mac");
 /** iOS and Android draw the pages' headers (title, back, swipe back); the desktops and the web show the app's. */
 const systemHeader = platform.os === "ios" || platform.os === "android";
@@ -1779,17 +1780,46 @@ function Group(props: { title: string; hint?: string; children: JSX.Element }) {
   );
 }
 
-// ---------------------------------------------------------------- notifications (Web Push through host.js)
+// ---------------------------------------------------------------- notifications (Web Push through host.js; the system's in an installed app)
+
+/** In an installed app (no page host) NSH shows the system's notifications; they appear while the app runs. */
+const systemNotifications = () => !host.available();
+/** The notifications this run showed, by id, to take them back. Ones without an event to open start with `noop:`. */
+const showing = new Set<string>();
+const closeNotification = (id: string) => {
+  if (!showing.delete(id)) return;
+  Notifications.close(id).catch(() => {});
+};
+function clearNotification(ref: string) {
+  if (systemNotifications()) closeNotification(ref);
+  else hostCall("clearNotifications", { ref });
+}
+function setBadge(count: number) {
+  if (systemNotifications()) Notifications.setBadge(count).catch(() => {}); // iOS refuses it before the permission
+  else hostCall("setBadge", { count });
+}
+const DEVICES: Record<string, string> = { macos: "Mac", ios: "iPhone", android: "Android", windows: "Windows", linux: "Linux" };
 
 type PushInfo = { supported: boolean; ios: boolean; standalone: boolean; permission: string; subscribed: boolean; endpoint: string | null; device: string };
 type Note = { text: string; tone: "ok" | "bad" } | null;
+
+async function systemInfo(): Promise<PushInfo | null> {
+  try {
+    const permission = await Notifications.permission();
+    if (permission === "unavailable") return null;
+    const off = !!(await Storage.getItem(KEYS.notifyOff));
+    return { supported: true, ios: false, standalone: true, permission, subscribed: permission === "granted" && !off, endpoint: null, device: DEVICES[platform.os] ?? "本设备" };
+  } catch {
+    return null;
+  }
+}
 
 /** This device's push state and the steps that change it (the permission prompt needs the press that calls `enable`). */
 function createPush(hub: Hub) {
   const info = signal<PushInfo | null>(null);
   const busy = signal(false);
   const note = signal<Note>(null);
-  const refresh = async () => info.set(await hostCall<PushInfo>("pushState"));
+  const refresh = async () => info.set(systemNotifications() ? await systemInfo() : await hostCall<PushInfo>("pushState"));
   refresh();
 
   async function run(work: () => Promise<string>) {
@@ -1806,6 +1836,13 @@ function createPush(hub: Hub) {
   }
   const enable = () =>
     run(async () => {
+      if (systemNotifications()) {
+        const permission = await Notifications.requestPermission();
+        if (permission === "denied") throw new Error("通知被拦截了：请在系统设置里允许 Noop 发通知，再回来开启");
+        if (permission !== "granted") throw new Error("没有开启通知");
+        await Storage.removeItem(KEYS.notifyOff);
+        return "已开启：需要你决定的事会发到系统通知";
+      }
       // Ask the browser first, while the press still counts as the user's gesture.
       const v = hub.api("GET", "/api/push/vapid");
       const key = (await v).data.publicKey;
@@ -1820,12 +1857,22 @@ function createPush(hub: Hub) {
     });
   const disable = () =>
     run(async () => {
+      if (systemNotifications()) {
+        await Storage.setItem(KEYS.notifyOff, "1");
+        for (const id of [...showing]) closeNotification(id);
+        return "已关闭这台设备的通知";
+      }
       const r = await hostCall<{ endpoint: string | null }>("pushDisable");
       if (r?.endpoint) await hub.api("POST", "/api/push/unsubscribe", { endpoint: r.endpoint });
       return "已关闭这台设备的通知";
     });
   const test = () =>
     run(async () => {
+      if (systemNotifications()) {
+        showing.add("noop:test");
+        if (!(await Notifications.show({ id: "noop:test", title: "Noop", body: "测试通知：系统通知已开通。" }))) throw new Error("系统没有接收这条通知");
+        return "测试通知已发出";
+      }
       const r = await hub.api("POST", "/api/push/test");
       if (!r.ok) throw new Error(`测试通知发送失败（${r.status || "连不上服务器"}）`);
       return "测试通知已发出，几秒内会到";
@@ -1859,7 +1906,7 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
   const { prefs, setPrefs, state } = notifyModel(push, () => props.view, props.save);
   const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
   return (
-    <Group title="通知" hint="需要你拍板的事推送到手机；通知上可以直接选择选项。">
+    <Group title="通知" hint={systemNotifications() ? "Noop 运行时，需要你拍板的事会发系统通知，点开直接到这一条。" : "需要你拍板的事推送到手机；通知上可以直接选择选项。"}>
       <View style={{ gap: 12, paddingHorizontal: 16, paddingVertical: 14 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <Dot tone={push.info()?.subscribed ? "on" : push.info()?.permission === "denied" ? "bad" : "off"} />
@@ -1875,7 +1922,7 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
           </View>
         </If>
         <If when={push.info()?.permission === "denied" && !push.needsHomeScreen()}>
-          <Text style={{ fontSize: 14, lineHeight: 21, color: colors.muted }}>在浏览器的网站设置（或系统设置 → 通知）里允许 Noop，然后刷新页面再开启。</Text>
+          <Text style={{ fontSize: 14, lineHeight: 21, color: colors.muted }}>{systemNotifications() ? "在系统设置 → 通知里允许 Noop，再回来开启。" : "在浏览器的网站设置（或系统设置 → 通知）里允许 Noop，然后刷新页面再开启。"}</Text>
         </If>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           <If
@@ -2166,10 +2213,10 @@ function notifyModel(push: Push, view: () => SettingsView | null, save: (patch: 
   const setPrefs = (change: Partial<NotifyPrefs>) => save(notifyPatch({ ...prefs(), ...change, tz }));
   const state = () => {
     const i = push.info();
-    if (!i) return "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
+    if (!i) return systemNotifications() ? "这个环境还不能发系统通知（可以在手机浏览器打开 hub 的网页接收推送）" : "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
     if (push.needsHomeScreen()) return "iPhone 需要先把 Noop 添加到主屏幕";
     if (!i.supported) return "这个浏览器不支持网页推送";
-    if (i.permission === "denied") return "通知被浏览器拦截了";
+    if (i.permission === "denied") return systemNotifications() ? "通知被系统拦截了" : "通知被浏览器拦截了";
     return i.subscribed ? "已开启" : "未开启";
   };
   /** The short form for a row's value. */
@@ -3306,7 +3353,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   const canSend = () => !!draft().trim() || attachments().length > 0;
   const answer = (ref: string, c: string) => {
-    hostCall("clearNotifications", { ref });
+    clearNotification(ref);
     return send(`${ref} ${c}`, null);
   };
 
@@ -3318,7 +3365,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const back = !untracked(onChannel);
     nav.popToRoot();
     chosen.set(ref);
-    hostCall("clearNotifications", { ref });
+    clearNotification(ref);
     // back from another page the channel lays out first
     setTimeout(() => toCard(ref, 4), back ? 120 : 0);
   }
@@ -3341,7 +3388,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // Opened from a notification (`?ref=`), or one clicked while the app is open: show that event.
   let openRef = props.openRef ?? null;
   effect(() => {
-    if (!openRef || !hub.loaded()) return;
+    const loaded = hub.loaded();
+    if (!openRef || !loaded) return;
     const ref = openRef;
     openRef = null;
     setTimeout(() => pick(ref), 300);
@@ -3352,11 +3400,56 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       if (ref) setTimeout(() => pick(ref), 50);
     });
   }
-  // The app's badge and the page's title count the decisions waiting.
+  // The app's badge and the page's title count the decisions waiting. iOS needs the permission, so it follows that too.
   effect(() => {
     const n = pending().length;
-    if (hub.loaded()) hostCall("setBadge", { count: n });
+    push.info();
+    if (hub.loaded()) setBadge(n);
   });
+  if (systemNotifications()) {
+    // A press can start the app; before the timeline loads the effect above opens it.
+    cleanup(Notifications.on("press", ({ id }) => {
+      if (id.startsWith("noop:")) return;
+      if (untracked(hub.loaded)) setTimeout(() => pick(id), 50);
+      else openRef = id;
+    }));
+    // Back in the app: the owner may have changed the permission in the system's settings.
+    effect(() => {
+      if (lifecycle() === "active") void push.refresh();
+    });
+    // While the app is not in front, what would reach a browser as Web Push shows as a system notification.
+    let latest: string | null = null;
+    effect(() => {
+      const evs = hub.events();
+      if (!hub.loaded()) return;
+      const last = evs[evs.length - 1]?.ts ?? "";
+      if (latest === null) {
+        latest = last;
+        return;
+      }
+      const since: string = latest;
+      const fresh = evs.filter((e) => e.ts > since);
+      if (!fresh.length) return;
+      latest = last;
+      if (untracked(lifecycle) === "active" || !untracked(push.info)?.subscribed) return;
+      void hub.api("GET", "/api/settings").then((r) => {
+        const prefs = (r.data.current as { notify_prefs?: NotifyRules } | undefined)?.notify_prefs ?? {};
+        // Waking from sleep can bring many: the latest few say enough, the badge counts the rest.
+        for (const e of fresh.slice(-5)) {
+          const note = notificationFor(e, prefs);
+          if (!note) continue;
+          const id = e.ref ?? `noop:${e.kind}`;
+          showing.add(id);
+          void Notifications.show({ id, ...note });
+        }
+      });
+    });
+    // Answered, here or on another device: the notification has done its job.
+    effect(() => {
+      const done = answered();
+      for (const id of [...showing]) if (done.has(id)) closeNotification(id);
+    });
+  }
   // This device has seen what reached the bottom.
   effect(() => {
     const evs = shown();
@@ -3384,12 +3477,12 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.set(null), 6000);
   });
-  // After the first login on a phone: once, a gentle suggestion to turn notifications on.
+  // After the first login on a phone or in an installed app: once, a gentle suggestion to turn notifications on.
   const asked = signal(true);
   Storage.getItem(KEYS.notifyAsked).then((v) => asked.set(!!v));
   const suggest = () => {
     const i = push.info();
-    return touch && !asked() && !!i && !i.subscribed && ((i.supported && i.permission === "default") || push.needsHomeScreen());
+    return (touch || systemNotifications()) && !asked() && !!i && !i.subscribed && ((i.supported && i.permission === "default") || push.needsHomeScreen());
   };
   const dismissSuggest = () => {
     asked.set(true);
@@ -3509,7 +3602,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     <Icon name="bell" size={20} tint={colors.accent} />
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>开启通知？</Text>
-                      <Text style={{ fontSize: 13.5, lineHeight: 19, color: colors.muted }}>需要你拍板时第一时间推送到这台手机，通知上就能直接选。</Text>
+                      <Text style={{ fontSize: 13.5, lineHeight: 19, color: colors.muted }}>{systemNotifications() ? "需要你拍板时发系统通知，点开直接到这一条。" : "需要你拍板时第一时间推送到这台手机，通知上就能直接选。"}</Text>
                     </View>
                     <View style={{ gap: 6 }}>
                       <Btn
@@ -4260,7 +4353,8 @@ function Connected(props: { config: Config; openRef: string | null; onExpired: (
         const off = await hostCall<{ endpoint: string | null }>("pushDisable");
         if (off?.endpoint) await hub.api("POST", "/api/push/unsubscribe", { endpoint: off.endpoint });
         await hostCall("setSession", { session: null });
-        hostCall("setBadge", { count: 0 });
+        for (const id of [...showing]) closeNotification(id);
+        setBadge(0);
         await hub.logout();
         props.onLogout();
       }}

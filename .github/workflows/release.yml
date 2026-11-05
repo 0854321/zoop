@@ -22,9 +22,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Built from the commit of nsh v0.4.0, the first release with the `speech` capability the app needs (cached,
+  # Built from the commit that finished `Notifications` on every platform (nsh#931, #932, #933), after v0.4.0; move to the next release once it is out (cached,
   # a cold build takes a while).
-  NSH_REF: e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3
+  NSH_REF: 8226a75323e9c5ab44d8631fb18d01a6a0b0854e
 
 defaults:
   run:

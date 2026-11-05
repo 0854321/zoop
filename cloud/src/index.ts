@@ -31,6 +31,7 @@ async function cfMail(binding: SendEmail, from: string, to: string, subject: str
 }
 import { sendPush, type PushSub, type Vapid } from "./push";
 import { CORS, Mcp } from "./mcp";
+import { notificationFor, type NotifyRules } from "../../app/notify";
 
 interface Env {
   HUB: DurableObjectNamespace<Hub>; HUB_TOKEN: string; ASSETS: Fetcher;
@@ -41,21 +42,6 @@ interface Env {
   HUB_VAPID_PUBLIC?: string;  // b64url raw P-256 point
   HUB_VAPID_PRIVATE?: string; // JWK JSON
 }
-
-const PUSH_KINDS = ["decision", "menu", "proposals", "login", "notice"] as const;
-const TITLES: Record<string, string> = { decision: "需要你拍板", menu: "可以选下一步", proposals: "新的提议", login: "登录提醒", notice: "Noop" };
-/** "23:00-08:00" in tz → is it quiet now? */
-function inQuiet(range: string | undefined, tz: string | undefined, now = new Date()) {
-  const m = range?.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (!m) return false;
-  let hm: string;
-  try { hm = new Intl.DateTimeFormat("en-GB", { timeZone: tz || "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now); }
-  catch { hm = now.toISOString().slice(11, 16); }
-  const [h, mi] = hm.split(":").map(Number), t = h * 60 + mi;
-  const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
-  return a <= b ? t >= a && t < b : t >= a || t < b;
-}
-const plain = (s: string) => s.replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>\[\]]/g, "").replace(/\(https?:[^)]*\)/g, "").replace(/\s+/g, " ").trim();
 
 const json = (d: unknown, status = 200) => Response.json(d, { status });
 const CHUNK = 1_000_000; // SQLite row limit is 2 MB
@@ -242,20 +228,15 @@ export class Hub extends DurableObject<Env> {
   /** Which events become a phone notification, honoring settings.current.notify_prefs. */
   notification(ev: Ev): { payload: Record<string, unknown>; urgency: "normal" | "high" } | null {
     const kind = ev.kind;
-    if (!(PUSH_KINDS as readonly string[]).includes(kind)) return null; // never system / owner
-    if (kind === "notice" && /^hub(@|$)/.test(String(ev.from ?? ""))) return null; // hub's own housekeeping
-    const prefs = (this.get("settings")?.current?.notify_prefs ?? {}) as { kinds?: Record<string, boolean>; quiet_hours?: string; tz?: string };
-    if (prefs.kinds?.[kind] === false) return null;
-    const urgent = kind === "decision" && ev.priority === "urgent";
-    if (inQuiet(prefs.quiet_hours, prefs.tz) && kind !== "login" && !urgent) return null;
+    const note = notificationFor(ev, (this.get("settings")?.current?.notify_prefs ?? {}) as NotifyRules);
+    if (!note) return null;
     const ref = typeof ev.ref === "string" ? ev.ref : undefined;
     const opts = Array.isArray(ev.options) ? (ev.options as unknown[]).map((o) => String(o).slice(0, 20)).slice(0, 3) : [];
     const decisions = (this.get("status")?.decisions ?? []) as { held?: boolean }[];
-    const body = plain(String(ev.text ?? ""));
     return {
       urgency: kind === "decision" || kind === "login" ? "high" : "normal",
       payload: {
-        title: TITLES[kind] ?? "Noop", body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
+        ...note,
         ref, kind, options: kind === "decision" || kind === "menu" ? opts : [],
         url: ref ? `/?ref=${encodeURIComponent(ref)}` : "/", tag: ref ?? kind,
         badge: decisions.filter((d) => !d.held).length,

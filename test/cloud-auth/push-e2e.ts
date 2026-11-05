@@ -76,7 +76,7 @@ ok(got.length === 1 && got[0].h.get("urgency") === "normal", "agent notice → p
 // prefs: notice off; quiet hours all day → only login + urgent decisions
 const now = new Date(), hh = (d: Date) => d.toISOString().slice(11, 16);
 const quiet = `${hh(new Date(now.getTime() - 3600_000))}-${hh(new Date(now.getTime() + 3600_000))}`;
-await fetch(BASE + "/api/host/state", { method: "PUT", headers: { ...M, "content-type": "application/json" }, body: JSON.stringify({ settings: { current: { notify_prefs: { kinds: { notice: false }, quiet_hours: quiet, tz: "UTC" } } } }) });
+await fetch(BASE + "/api/host/state", { method: "PUT", headers: { ...M, "content-type": "application/json" }, body: JSON.stringify({ settings: { current: { notify_prefs: { kinds: { result: false }, quiet_hours: quiet, tz: "UTC" } } } }) });
 got.length = 0;
 await post("/api/events", { kind: "notice", from: "lead@box", text: "n" }, M);
 await post("/api/events", { kind: "decision", from: "lead@box", text: "normal", ref: "D-3" }, M);
