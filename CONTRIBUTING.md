@@ -37,6 +37,8 @@ Website: see [website/README.md](website/README.md). `website/` is the public pr
 
 Push a tag `vX.Y.Z`. [release.yml](.github/workflows/release.yml) packages Linux, Windows, macOS, iOS, Android and the web client and publishes them as a GitHub release, and machines pick up the web client from it; pull requests that change the workflow or the installers build them without publishing. The tag sets the app version and the run number sets the build number.
 
+The release also carries `latest.json` and versioned archives (`Noop-<version>-<os>-<arch>`): installed desktop apps update from them through `nsh/updater`, and the Android app gets a link to the APK. Keep the unversioned assets too, the installers use them.
+
 The workflow builds nsh from the commit in `NSH_REF` and caches it; a commit not yet cached takes a while on each runner. Android signing uses the secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEY_ALIAS` and `ANDROID_KEYSTORE_PASSWORD`. Keep that key: Android refuses an update signed with another one. The iOS package is unsigned.
 
 Do not run tests against a production Worker or a live `DATA` directory.

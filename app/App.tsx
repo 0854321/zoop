@@ -30,6 +30,8 @@ import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
+import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
+import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
 import {
   alpha,
   colors,
@@ -115,7 +117,7 @@ import { notificationFor, type NotifyRules } from "./notify";
 
 type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
-const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked", notifyOff: "hub.notifyOff" };
+const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked", notifyOff: "hub.notifyOff", draft: "hub.draft" };
 const touch = !(platform.idiom === "desktop" || platform.idiom === "mac");
 /** iOS and Android draw the pages' headers (title, back, swipe back); the desktops and the web show the app's. */
 const systemHeader = platform.os === "ios" || platform.os === "android";
@@ -1508,6 +1510,7 @@ function Sidebar(props: {
   onCollapse?: () => void;
   home: () => boolean;
   onHome: () => void;
+  onRestart: () => void;
 }) {
   const s = () => props.hub.status();
   // the hub closes a decision on its next tick: one the channel already shows answered leaves the list now
@@ -1649,6 +1652,7 @@ function Sidebar(props: {
           </If>
         </View>
       </Scroll>
+      <UpdateRow onRestart={props.onRestart} />
       <View
         style={{
           minHeight: 56,
@@ -1673,6 +1677,60 @@ function Sidebar(props: {
         <ToolButton icon="sliders" label="设置" shortcut={keymap.label("mod+,")} onPress={props.onSettings} testID="settings" />
       </View>
     </View>
+  );
+}
+
+// ---------------------------------------------------------------- app updates
+
+const appUpdate = signal<UpdateState>({ kind: "none" });
+const updates = createUpdates(
+  { check: checkForUpdate, download: () => downloadUpdate(), install: installAndRestart },
+  (state) => appUpdate.set(state),
+);
+/** The first check waits for the app to settle; nsh/updater answers null where apps do not update (the web, a dev run). */
+function watchUpdates() {
+  const first = setTimeout(() => void updates.check(), 5000);
+  const timer = setInterval(() => void updates.check(), CHECK_EVERY_MS);
+  cleanup(() => { clearTimeout(first); clearInterval(timer); });
+}
+
+/** Above the sidebar's footer, only when there is something to press. */
+function UpdateRow(props: { onRestart: () => void }) {
+  const state = () => appUpdate();
+  const version = () => { const u = state(); return u.kind === "none" ? "" : u.version; };
+  const label = () => {
+    const u = state();
+    if (u.kind === "link") return `下载新版本 ${u.version}`;
+    if (u.kind === "installing") return "正在更新…";
+    if (u.kind === "failed") return "更新失败，点此重试";
+    return `重启以更新到 ${version()}`;
+  };
+  const press = () => {
+    const u = state();
+    if (u.kind === "link") void openUrl(u.url).catch(() => {});
+    else if (u.kind !== "installing") props.onRestart();
+  };
+  return (
+    <If when={state().kind !== "none"}>
+      <View
+        role="button"
+        testID="app-update"
+        accessibilityLabel={label()}
+        onPress={press}
+        class="active:bg-raised"
+        style={{ minHeight: touch ? 44 : 36, justifyContent: "center", gap: 2, paddingHorizontal: 18, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.sidebarBorder }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <If when={state().kind === "installing"}>
+            <Spinner size={12} tint={colors.muted} />
+          </If>
+          <Text style={{ flexShrink: 1, fontSize: 13.5, color: state().kind === "installing" ? colors.muted : colors.info, numberOfLines: 1 }}>{label()}</Text>
+        </View>
+        <If when={state().kind === "failed"}>
+          <Text style={{ fontSize: 12, lineHeight: 16, color: colors.muted, numberOfLines: 2 }}>{(state() as { message?: string }).message}</Text>
+        </If>
+      </View>
+    </If>
   );
 }
 
@@ -3141,14 +3199,28 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     jumpToEnd();
     holds.set(id, setTimeout(() => { holds.delete(id); void deliver(id); }, UNDO_MS));
   }
-  // Leaving the app must not strand a message that already looks sent.
-  effect(() => {
-    if (lifecycle() === "active") return;
-    for (const [id, hold] of holds) {
+  function deliverHeld() {
+    return [...holds].map(([id, hold]) => {
       clearTimeout(hold);
       holds.delete(id);
-      void deliver(id);
-    }
+      return deliver(id);
+    });
+  }
+  // Leaving the app must not strand a message that already looks sent.
+  effect(() => {
+    if (lifecycle() !== "active") deliverHeld();
+  });
+  // An update restarts the app: what looks sent leaves first, and what is being typed comes back.
+  async function restartToUpdate() {
+    await Promise.allSettled(deliverHeld());
+    if (draft()) await Storage.setItem(KEYS.draft, draft());
+    await updates.install();
+    await Storage.removeItem(KEYS.draft); // the install failed: this run still holds the draft
+  }
+  Storage.getItem(KEYS.draft).then((v) => {
+    if (!v) return;
+    if (!untracked(draft)) draft.set(v);
+    void Storage.removeItem(KEYS.draft);
   });
   function undo(id?: string) {
     const o = id ? outbox().find((x) => x.id === id) : [...outbox()].reverse().find((x) => x.state === "held");
@@ -3556,6 +3628,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const connTone = () => (hub.conn() === "live" ? "on" : hub.conn() === "unauthorized" ? "bad" : hub.conn() === "offline" ? "wait" : "off");
   const sidebar = (inDrawer: boolean) => (
     <Sidebar
+      onRestart={() => void restartToUpdate()}
       hub={hub}
       target={target}
       onPick={pick}
@@ -4368,6 +4441,7 @@ function App() {
     Window.setTitleBar({ style: "hidden", height: size.bar });
   }
   Scrollbar.setTheme(scrollbarTheme);
+  watchUpdates();
   const ready = signal(false);
   const config = signal<Config | null>(null);
   const url = signal("");

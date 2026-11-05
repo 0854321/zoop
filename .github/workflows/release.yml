@@ -22,9 +22,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Built from the commit that finished `Notifications` on every platform (nsh#931, #932, #933), after v0.4.0; move to the next release once it is out (cached,
+  # Built from the commit that added `nsh/updater` (nsh#922), after v0.4.0; move to the next release once it is out (cached,
   # a cold build takes a while).
-  NSH_REF: 2ab3b6bc27f151afd5d932c63746a8b4b15a00e9
+  NSH_REF: 12af3d778b588c2837267ff6aaed678eb5ad72a2
 
 defaults:
   run:
@@ -82,9 +82,9 @@ jobs:
           fi
           (cd app && nsh package --target "$TARGET" -o "$out" "${args[@]}")
           case "$TARGET" in
-            linux) mv "$out/Noop.tar.gz" "assets/$ASSET" ;;
-            windows) mv "$out/Noop.zip" "assets/$ASSET" ;;
-            macos) ditto -c -k --keepParent "$out/Noop.app" "assets/$ASSET" ;;
+            linux) mv "$out/Noop.tar.gz" "assets/$ASSET"; mv "$out"/Noop-*.tar.gz assets/ ;;
+            windows) mv "$out/Noop.zip" "assets/$ASSET"; mv "$out"/Noop-*.zip assets/ ;;
+            macos) ditto -c -k --keepParent "$out/Noop.app" "assets/$ASSET"; mv "$out"/Noop-*.tar.gz assets/ ;;
             ios)
               # Unsigned: sign it with your own Apple ID to install it (Sideloadly, AltStore).
               mkdir "$out/Payload" && mv "$out/Noop.app" "$out/Payload/"
@@ -124,7 +124,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: assets/${{ matrix.asset }}
+          path: assets/
           if-no-files-found: error
 
   publish:
@@ -134,10 +134,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nsh
+        with:
+          ref: ${{ env.NSH_REF }}
+          target: linux
       - uses: actions/download-artifact@v4
         with:
           path: assets
           merge-multiple: true
+      # The apps fetch `releases/latest/download/latest.json` and the versioned archives next to it (nsh/updater).
+      # The installers keep using the unversioned assets. An APK cannot replace itself: Android gets a link.
+      - name: Write the update manifest
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          jq --arg version "$version" '.version = $version' app/nsh.json > "$RUNNER_TEMP/nsh.json"
+          mv "$RUNNER_TEMP/nsh.json" app/nsh.json
+          nsh update-manifest assets/Noop-"$version"-*.tar.gz assets/Noop-"$version"-*.zip --entry app --out assets \
+            --link "android=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Noop-android.apk"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

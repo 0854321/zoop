@@ -3,6 +3,9 @@
   "id": "dev.noop.app",
   "version": "0.1.0",
   "build": 1,
+  "updater": {
+    "github": "huacnlee/noop"
+  },
   "appearance": "system",
   "theme": "theme.json",
   "web": {
