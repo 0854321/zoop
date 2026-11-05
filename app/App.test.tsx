@@ -1,4 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
+import { URL as ParsedURL } from "url";
 
 const URL = "http://hub.test:8787";
 const STORAGE = { "hub.url": URL, "hub.token": "tok" };
@@ -162,6 +163,35 @@ describe("login", () => {
 });
 
 describe("channel", () => {
+  test("virtualized timeline recycles messages and jumps to an off-screen decision", async () => {
+    const many = Array.from({ length: 90 }, (_, i) => ({
+      id: `long-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Long timeline message ${i}`,
+    }));
+    const app = await open("./App.tsx", { storage: STORAGE, width: 390, height: 800, platform: "ios", network: hub([], many) });
+    await app.waitFor("Long timeline message 89");
+    expect(app.shows("Long timeline message 0")).toBe(false);
+    await app.scroll("id:timeline", -20000);
+    await app.waitFor("Long timeline message 0");
+    expect(app.shows("Long timeline message 89")).toBe(false);
+    await app.scroll("id:timeline", 20000);
+    await app.waitFor("Long timeline message 89");
+    expect(app.shows("Long timeline message 0")).toBe(false);
+  });
+  test("proposal selection survives a recycled timeline cell", async () => {
+    const proposal = { id: "proposal-long", ts: ts(8), from: "hub", kind: "proposals", ref: "P-0900", text: "请选择\n1. 保存选择" };
+    const many = Array.from({ length: 90 }, (_, i) => ({ id: `recycle-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Recycled message ${i}` }));
+    const app = await open("./App.tsx", { storage: STORAGE, width: 390, height: 800, platform: "ios", network: hub([], [proposal, ...many]) });
+    await app.waitFor("Recycled message 89");
+    await app.scroll("id:timeline", -20000);
+    await app.waitFor("id:proposal-P-0900-1");
+    await app.press("id:proposal-P-0900-1");
+    await app.waitFor("批准所选（1）");
+    await app.scroll("id:timeline", 20000);
+    await app.waitFor("Recycled message 89");
+    await app.scroll("id:timeline", -20000);
+    await app.waitFor("批准所选（1）");
+  });
+
   test("a message's avatar sits in the name's row on a phone, and in its own column when wide", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 390, height: 800, platform: "ios" });
     await app.waitFor("text:/修好了/");
@@ -223,7 +253,7 @@ describe("channel", () => {
   });
 
   test("a task's conversation stays on its page: the main channel skips it, old messages load, and its cards can be answered there", async () => {
-    const posts: unknown[] = [];
+    const posts: { text: string; reply_to?: string }[] = [];
     const said = [
       { id: "e20", ts: ts(20), from: "owner", kind: "owner", ref: "T-0005", thread: true, text: "只在任务里说的话" },
       { id: "e21", ts: ts(21), from: "hub", kind: "system", ref: "T-0005", thread: true, text: "任务里的回复" },
@@ -335,7 +365,7 @@ describe("channel", () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
     await app.waitFor("id:opt-D-0001-B");
-    await app.press("text:其他指示… >> nth=0");
+    await app.press("id:other-D-0001");
     await app.waitFor("回复 D-0001");
     await app.type("id:composer", "先等一周");
     await app.keyboard.press("mod+enter");
@@ -365,7 +395,7 @@ describe("channel", () => {
 
   test("a machine in the sidebar opens its page, and its tasks open theirs", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
-    await app.waitFor("团队频道");
+    await app.waitFor("主会话");
     await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
     await app.waitFor("机器 linux-box");
     await app.waitFor("运行中");
@@ -382,14 +412,14 @@ describe("channel", () => {
       network: {
         ...hub([]),
         [`GET ${URL}/api/tasks?*`]: (r: { url: string }) => {
-          const u = new globalThis.URL(r.url), offset = Number(u.searchParams.get("offset"));
+          const u = new ParsedURL(r.url), offset = Number(u.searchParams.get("offset"));
           if (u.searchParams.get("q")) return { body: { tasks: [row(70)], total: 1 } };
           return { body: { tasks: Array.from({ length: offset ? 20 : 50 }, (_, i) => row(i + offset)), total: 70 } };
         },
         [`GET ${URL}/api/tasks/get?*`]: { body: { ...row(1), request: "很久以前的请求", runs: [{ ts: ts(1), host: "h", cli: "claude", status: "done", summary: "早就做完了" }] } },
       },
     });
-    await app.waitFor("团队频道");
+    await app.waitFor("主会话");
     await app.press("label:全部任务");
     await app.waitFor("旧任务 0");
     await app.waitFor("加载更多（还有 20 个）");
@@ -425,7 +455,7 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [parked, ...status.recent] } } },
     });
-    await app.waitFor("等外部结果");
+    await app.waitFor("等待");
     await app.press("label:T-0236 · 等外部结果");
     await app.waitFor("id:cancel-task");
   });
@@ -664,7 +694,7 @@ describe("keyboard", () => {
     // Escape pops back to the channel, one page at a time.
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("团队设置"));
-    expect(app.shows("团队频道")).toBe(true);
+    expect(app.shows("主会话")).toBe(true);
   });
 });
 
@@ -723,7 +753,7 @@ describe("team settings", () => {
       { host: { max_parallel: 5 } },
     ]);
     await app.waitFor("text:5");
-    await app.press("label:返回频道");
+    await app.press("label:返回主会话");
     await app.waitFor("id:composer");
   });
 
@@ -833,29 +863,29 @@ describe("notifications", () => {
     await app.waitFor("text:/通知被拦截了/");
   });
 
-  test("iPhone in Safari: add to the home screen first", async () => {
+  test("iPhone in Safari: notification setup is in settings", async () => {
     const app = await open("./App.tsx", {
       storage: STORAGE,
       host: { handlers: browser(device({ supported: false, ios: true, permission: "unsupported", device: "iPhone · Safari" })) },
       network: server(newLog()),
     });
-    await app.waitFor("id:notify-banner");
-    await app.press("id:notify-banner-enable");
+    await app.waitFor("id:composer");
+    expect(app.shows("id:notify-banner")).toBe(false);
+    await app.press("id:settings-top");
+    await app.press("id:settings-notify");
     await app.waitFor("text:/选「添加到主屏幕」/");
     expect(app.enabled("id:push-enable")).toBe(false);
-    expect(app.storage()["hub.notifyAsked"]).toBe("1");
   });
 
-  test("the phone banner shows once and enables from its button", async () => {
+  test("notification setup enables from settings", async () => {
     const log = newLog();
     const app = await open("./App.tsx", { storage: STORAGE, host: { handlers: browser(device()) }, network: server(log) });
-    await app.waitFor("id:notify-banner");
-    await app.press("id:notify-banner-enable");
-    await app.waitUntil(() => log.subs.length === 1);
+    await app.waitFor("id:composer");
     expect(app.shows("id:notify-banner")).toBe(false);
-    const again = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, host: { handlers: browser(device()) }, network: server(newLog()) });
-    await again.waitFor("id:composer");
-    expect(again.shows("id:notify-banner")).toBe(false);
+    await app.press("id:settings-top");
+    await app.press("id:settings-notify");
+    await app.press("id:push-enable");
+    await app.waitUntil(() => log.subs.length === 1);
   });
 
   test("badge, unread divider, and a notification opening an event", async () => {
@@ -954,6 +984,16 @@ describe("voice input", () => {
   });
 });
 
+test("clicking outside the macOS composer collapses an empty draft", async () => {
+  const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 1100, height: 760, platform: "macos", network: hub([]) });
+  await app.waitFor("id:composer");
+  expect(app.shows("id:send")).toBe(false);
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:send");
+  await app.press("label:主会话");
+  await app.waitUntil(() => !app.shows("id:send"));
+});
+
 describe("phones", () => {
   const view = () => ({
     current: {},
@@ -979,6 +1019,53 @@ describe("phones", () => {
       },
     };
   }
+
+  test("phone settings checks a model immediately while saving", async () => {
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios",
+      network: { ...settingsServer([]), [`PUT ${URL}/api/settings`]: { body: view(), delay: 5000 } },
+    });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:member-reporter");
+    await app.press("id:member-reporter");
+    await app.waitFor("id:phone-member");
+    await app.press("id:cli-reporter-claude");
+    expect(app.shows("id:choice-check-cli-reporter-claude")).toBe(true);
+    expect(app.shows("id:settings-note")).toBe(false);
+  });
+
+  test("phone model keeps the accepted selection when effective settings are stale", async () => {
+    const stale = { ...view(), current: { clis: { agents: { reporter: ["claude"] } } } };
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios",
+      network: { ...settingsServer([]), [`PUT ${URL}/api/settings`]: { body: stale } },
+    });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:member-reporter");
+    await app.press("id:member-reporter");
+    await app.waitFor("id:phone-member");
+    await app.press("id:cli-reporter-claude");
+    await app.wait(200);
+    expect(app.shows("id:choice-check-cli-reporter-claude")).toBe(true);
+  });
+
+  test("phone settings shows an error when saving fails", async () => {
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios",
+      network: { ...settingsServer([]), [`PUT ${URL}/api/settings`]: { status: 500, body: "error" } },
+    });
+    await app.waitFor("id:composer");
+    await app.press("id:settings-top");
+    await app.waitFor("id:member-reporter");
+    await app.press("id:member-reporter");
+    await app.waitFor("id:phone-member");
+    await app.press("id:cli-reporter-claude");
+    await app.waitFor("id:settings-note");
+    expect(app.shows("id:settings-note")).toBe(true);
+    expect(app.shows("id:choice-check-cli-reporter-claude")).toBe(false);
+  });
 
   test("iOS settings allows logout", async () => {
     const log = newLog();
@@ -1028,7 +1115,20 @@ describe("phones", () => {
     });
   }
 
-  test("the drawer is a sheet from the left; a machine opens its page and back returns to the channel", async () => {
+  test("a horizontal swipe opens the phone sidebar", async () => {
+    const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios", network: settingsServer([]) });
+    await app.waitFor("id:composer");
+    await app.drag("id:channel-swipe", { x: 0, y: -100 });
+    expect(app.shows("id:drawer")).toBe(false);
+    await app.drag("id:channel-swipe", { x: -100, y: 0 });
+    expect(app.shows("id:drawer")).toBe(false);
+    await app.drag("id:channel-swipe", { x: 100, y: 0 });
+    await app.waitFor("id:drawer");
+    await app.drag("id:drawer", { x: -100, y: 0 });
+    await app.waitUntil(() => !app.shows("id:drawer"));
+  });
+
+  test("the sidebar opens from the left; a machine opens its page and back returns to the channel", async () => {
     const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios", network: hub([]) });
     await app.waitFor("id:composer");
     expect(app.shows("待你决定")).toBe(false);
@@ -1047,7 +1147,7 @@ describe("phones", () => {
     await app.waitFor("id:composer");
     await app.press("id:settings-top");
     await app.waitFor("id:phone-settings");
-    await app.press("label:返回频道");
+    await app.press("label:返回主会话");
     await app.waitUntil(() => !app.shows("id:phone-settings"));
     expect(app.shows("id:composer")).toBe(true);
   });
@@ -1082,7 +1182,7 @@ describe("rules and memory", () => {
     const reads: string[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: rulesServer(reads) });
     await app.waitFor("id:composer");
-    await app.press("label:团队规则与记忆");
+    await app.press("label:记忆");
     await app.waitFor("id:rules-policies");
     for (const t of ["规则", "我的偏好", "Agents", "决策先例", "fleet", "projects/app", "owner", "dev · 档案", "dev · 记忆", "暂无内容"]) expect(app.shows(`id:rules >> text:${t}`)).toBe(true);
     expect(app.shows("text:notes")).toBe(false);
@@ -1091,7 +1191,7 @@ describe("rules and memory", () => {
     expect(app.shows("text:先写测试再改代码")).toBe(true);
     expect(app.shows("text:id: fleet")).toBe(false);
     expect(reads).toEqual(["policies/fleet.md"]);
-    await app.press("label:返回规则与记忆");
+    await app.press("label:返回记忆");
     await app.waitFor("id:rules");
   });
 

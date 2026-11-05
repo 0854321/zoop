@@ -63,6 +63,7 @@ export interface Palette {
   warn: string;
   danger: string;
   up: string;
+  switchOn: string;
   down: string;
 }
 
@@ -108,6 +109,7 @@ export const colors: Palette = tokens<keyof Palette>({
   warn: "warn",
   danger: "destructive",
   up: "up",
+  switchOn: "switch-on",
   down: "down",
 });
 

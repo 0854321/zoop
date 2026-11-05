@@ -4,6 +4,7 @@
 // sidebar + toolbar layout; sized up for reading a chat all day (16 pt text, 40 pt controls).
 import {
   cleanup,
+  createAnimatedValue,
   colorScheme,
   computed,
   effect,
@@ -12,12 +13,15 @@ import {
   keymap,
   lifecycle,
   locale,
+  LayoutAnimation,
+  List,
+  type ListRef,
   mount,
   platform,
+  reduceMotion,
   safeArea,
   Scroll,
-  type ScrollRef,
-  type ViewRef,
+  type Signal,
   setColorScheme,
   signal,
   Storage,
@@ -28,7 +32,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
 import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
@@ -117,7 +121,7 @@ import { notificationFor, type NotifyRules } from "./notify";
 
 type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
-const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyAsked: "hub.notifyAsked", notifyOff: "hub.notifyOff", draft: "hub.draft" };
+const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyOff: "hub.notifyOff", draft: "hub.draft" };
 const touch = !(platform.idiom === "desktop" || platform.idiom === "mac");
 /** iOS and Android draw the pages' headers (title, back, swipe back); the desktops and the web show the app's. */
 const systemHeader = platform.os === "ios" || platform.os === "android";
@@ -347,7 +351,7 @@ function Kbd(props: { k: string; on?: string }) {
 }
 
 /** A quiet icon button of the toolbars and the sidebar (the gallery's ToolButton, at 36 pt). */
-function ToolButton(props: { icon: IconName; label: string; shortcut?: string; on?: boolean; onPress: () => void; testID?: string }) {
+function ToolButton(props: { icon: IconName; label: string; shortcut?: string; on?: boolean; onPress: () => void; testID?: string; noTooltip?: boolean; compact?: boolean }) {
   return (
     <View
       onPress={props.onPress}
@@ -355,11 +359,11 @@ function ToolButton(props: { icon: IconName; label: string; shortcut?: string; o
       testID={props.testID}
       accessibilityLabel={props.label}
       accessibilityState={props.on === undefined ? undefined : { selected: props.on }}
-      tooltip={<Tip label={props.label} shortcut={props.shortcut} />}
+      tooltip={props.noTooltip ? undefined : <Tip label={props.label} shortcut={props.shortcut} />}
       hoverStyle={hovered()}
       activeStyle={{ backgroundColor: alpha(colors.text, 0.09) }}
       focusStyle={focusRing()}
-      style={{ width: touch ? 44 : 36, height: touch ? 44 : 36, alignItems: "center", justifyContent: "center", borderRadius: radius.control, borderWidth: 1, borderColor: "transparent" }}
+      style={{ width: touch ? 44 : 32, height: touch ? 44 : 32, alignItems: "center", justifyContent: "center", borderRadius: radius.control, borderCurve: "continuous", borderWidth: 1, borderColor: "transparent" }}
     >
       <Icon name={props.icon} size={18} tint={props.on ? colors.accent : colors.muted} />
     </View>
@@ -367,6 +371,9 @@ function ToolButton(props: { icon: IconName; label: string; shortcut?: string; o
 }
 
 type BtnKind = "primary" | "secondary" | "ghost" | "dashed" | "danger";
+
+/** Shared edge for controls and grouped settings surfaces. */
+const surfaceEdge = () => colors.line;
 
 /** A labelled button: the gallery's raised / accent-filled look, 38 pt (44 on touch). */
 function Btn(props: {
@@ -393,7 +400,7 @@ function Btn(props: {
           ? { backgroundColor: "transparent", borderColor: "transparent" }
           : kind() === "dashed"
             ? { backgroundColor: "transparent", borderColor: colors.fieldBorder, borderStyle: "dashed" }
-            : { backgroundColor: colors.surface, borderColor: colors.border };
+            : { backgroundColor: colors.surface, borderColor: surfaceEdge() };
   return (
     <View
       role="button"
@@ -416,7 +423,8 @@ function Btn(props: {
         paddingHorizontal: 14,
         paddingVertical: 6,
         borderRadius: radius.control,
-        borderWidth: 1,
+        borderCurve: "continuous",
+        borderWidth: 0.5,
         opacity: props.disabled ? 0.45 : 1,
         transitionProperty: "background-color, border-color, opacity",
         transitionDuration: 120,
@@ -432,7 +440,7 @@ function Btn(props: {
       <If when={!props.busy && props.icon}>
         <Icon name={props.icon!} size={16} tint={fg()} />
       </If>
-      <Text style={{ flexShrink: 1, fontSize: 15, lineHeight: 21, fontWeight: kind() === "primary" ? "600" : "500", color: fg() }}>{props.label}</Text>
+      <Text style={{ flexShrink: 1, textAlign: "center", fontSize: 15, lineHeight: 21, fontWeight: kind() === "primary" ? "600" : "500", color: fg() }}>{props.label}</Text>
       <If when={props.note}>
         <Text style={{ fontSize: size.tiny, color: kind() === "primary" ? alpha(colors.onAccent, 0.7) : colors.faint }}>{props.note}</Text>
       </If>
@@ -459,10 +467,16 @@ const glass = (tint: string, cornerRadius: number): ViewStyle => ({
 /** The floating surface of a message composer, which the conversation scrolls under. */
 const composerGlass = (active = false): ViewStyle => ({
   ...glass(colors.field, 24),
+  ...(platform.os === "ios" ? { backgroundColor: alpha(colors.field, 0.25) } : {}),
+  boxShadow: "0 4px 16px rgba(0,0,0,0.06)",
+  borderWidth: platform.os === "ios" || platform.os === "macos" ? 0 : 1,
   borderColor: alpha(colors.text, active ? 0.22 : 0.1),
   transitionProperty: "border-color",
   transitionDuration: 120,
 });
+
+/** Links use a quiet, underlined accent shared by the app's themes. */
+const linkColor = () => token("link");
 
 /** The icon-only send button of a message composer: a circle, the same size and icon scale as the voice button beside it. */
 function SendButton(props: { disabled: boolean; onPress: () => void; testID: string }) {
@@ -481,12 +495,11 @@ function SendButton(props: { disabled: boolean; onPress: () => void; testID: str
         alignItems: "center",
         justifyContent: "center",
         borderRadius: touch ? 22 : 18,
-        backgroundColor: props.disabled ? alpha(colors.text, 0.08) : colors.accentFill,
-        transitionProperty: "background-color",
-        transitionDuration: 120,
       }}
     >
-      <Icon name="arrow-up" size={touch ? 24 : 20} tint={props.disabled ? colors.faint : colors.onAccent} />
+      <View style={{ width: touch ? 32 : 28, height: touch ? 32 : 28, borderRadius: touch ? 16 : 14, alignItems: "center", justifyContent: "center", backgroundColor: colors.accentFill }}>
+        <Icon name="arrow-up" size={touch ? 18 : 16} tint={colors.onAccent} />
+      </View>
     </View>
   );
 }
@@ -654,7 +667,7 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
         root: { gap: 8, fontSize, lineHeight, color: small ? colors.muted : colors.text },
         code: { fontFamily: MONO, fontSize: small ? 13 : 14.5, color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
         emphasis: { fontStyle: "normal", fontWeight: "600" },
-        link: { color: colors.info },
+        link: { color: linkColor(), textDecorationColor: token("link-underline") },
       }}
     />
   );
@@ -664,8 +677,8 @@ function Media(props: { hub: Hub; path: string }) {
   const src = mediaUrl(props.hub.cfg.url, props.hub.cfg.token, props.path);
   const ratio = signal(16 / 10);
   const zoomed = signal(false);
-  const frame: ViewStyle = { borderRadius: radius.inset, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inset };
-  if (isVideo(props.path)) return <Video src={src} controls paused style={{ ...frame, width: "100%", maxWidth: 480, aspectRatio: 16 / 9 }} />;
+  const frame: ViewStyle = { borderRadius: radius.inset, backgroundColor: colors.inset };
+  if (isVideo(props.path)) return <Video src={src} controls paused style={{ ...frame, borderWidth: 1, borderColor: colors.border, width: "100%", maxWidth: 480, aspectRatio: 16 / 9 }} />;
   // a thumbnail that keeps the timeline readable; press it to see the full image
   const THUMB = 240;
   const size = () => (ratio() >= 1 ? { width: THUMB, height: THUMB / ratio() } : { width: THUMB * ratio(), height: THUMB });
@@ -787,11 +800,13 @@ function proposalsOf(text: string): Proposal[] {
 }
 
 /** An approval batch as a checklist: tick what may start, then approve. */
-function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: string, choice: string) => void; onReply: (ref: string) => void }) {
+function ProposalList(props: { event: HubEvent; selection: Map<string, Signal<Set<string>>>; done: boolean; onAnswer: (ref: string, choice: string) => void; onReply: (ref: string) => void }) {
   const e = props.event;
   const items = proposalsOf(e.text);
-  const picked = signal<Set<string>>(new Set());
-  const toggle = (n: string) => picked.update((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x; });
+  let picked = props.selection.get(e.id);
+  if (!picked) { picked = signal<Set<string>>(new Set()); props.selection.set(e.id, picked); }
+  const selection = picked;
+  const toggle = (n: string) => selection.update((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x; });
   const answer = (c: string) => props.onAnswer(e.ref!, c);
   return (
     <>
@@ -801,7 +816,7 @@ function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: s
       <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
         <Each of={items}>
           {(it) => {
-            const on = () => picked().has(it().n);
+            const on = () => selection().has(it().n);
             return (
               <View
                 role="checkbox"
@@ -826,12 +841,12 @@ function ProposalList(props: { event: HubEvent; done: boolean; onAnswer: (ref: s
       </View>
       <If when={!props.done}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 16 }}>
-          <Btn testID={`approve-${e.ref}`} label={picked().size ? `批准所选（${picked().size}）` : "批准所选"} kind="primary" disabled={!picked().size}
-            onPress={() => answer([...picked()].sort((a, b) => +a - +b).join(","))} />
+          <Btn testID={`approve-${e.ref}`} label={selection().size ? `批准所选（${selection().size}）` : "批准所选"} kind="primary" disabled={!selection().size}
+            onPress={() => answer([...selection()].sort((a, b) => +a - +b).join(","))} />
           <Btn testID={`opt-${e.ref}-all`} label="全部批准" kind="secondary" onPress={() => answer("all")} />
           <Btn testID={`opt-${e.ref}-none`} label="都不要" kind="ghost" onPress={() => answer("none")} />
           <View style={{ flex: 1 }} />
-          <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+          <Btn testID={`other-${e.ref}`} label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
         </View>
       </If>
     </>
@@ -871,15 +886,15 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
       t = setTimeout(() => copied.set(false), 1500);
     }, () => {});
   };
-  const btn = { width: 28, height: 28, borderRadius: 6, alignItems: "center", justifyContent: "center", cursor: "pointer" } as const;
+  const btn = () => ({ width: touch ? 44 : 32, height: touch ? 44 : 32, borderRadius: radius.control, borderCurve: "continuous" as const, alignItems: "center" as const, justifyContent: "center" as const, cursor: "pointer" as const });
   return (
-    <View style={{ flexDirection: "row", alignSelf: props.align ?? "flex-start", gap: 2, height: 28, marginLeft: props.align === "flex-end" ? 0 : -6, opacity: props.show() || copied() ? 1 : 0, transitionProperty: "opacity", transitionDuration: 120 }}>
-      <View role="button" testID={`copy-${props.id}`} accessibilityLabel={copied() ? "已复制" : "复制"} tooltip={<Tip label="复制" />} onPress={copy} hoverStyle={hovered()} style={btn}>
-        <Icon name={copied() ? "check" : "copy"} size={15} tint={colors.muted} />
+    <View style={{ flexDirection: "row", alignSelf: props.align ?? "flex-start", gap: 2, height: touch ? 44 : 32, marginLeft: props.align === "flex-end" ? 0 : -6, opacity: props.show() || copied() ? 1 : 0, transitionProperty: "opacity", transitionDuration: 120 }}>
+      <View role="button" testID={`copy-${props.id}`} accessibilityLabel={copied() ? "已复制" : "复制"} onPress={copy} hoverStyle={hovered()} style={btn()}>
+        <Icon name={copied() ? "check" : "copy"} size={18} tint={colors.muted} />
       </View>
       <If when={props.onReply}>
-        <View role="button" testID={`reply-${props.id}`} accessibilityLabel="回复" tooltip={<Tip label="回复" />} onPress={() => props.onReply?.()} hoverStyle={hovered()} style={btn}>
-          <Icon name="reply" size={15} tint={colors.muted} />
+        <View role="button" testID={`reply-${props.id}`} accessibilityLabel="回复" onPress={() => props.onReply?.()} hoverStyle={hovered()} style={btn()}>
+          <Icon name="reply" size={18} tint={colors.muted} />
         </View>
       </If>
     </View>
@@ -969,9 +984,10 @@ function Message(props: {
   target: () => string | null;
   onAnswer: (ref: string, choice: string) => void;
   onReply: (ref: string, note?: string) => void;
-  cardRef?: (r: ViewRef) => void;
+  selection?: Map<string, Signal<Set<string>>>;
 }) {
   const e = props.event;
+  const selection = props.selection ?? new Map<string, Signal<Set<string>>>();
   const ask = isAsk(e);
   // an agent's message about a task can be replied to: the reply goes to that task
   const replyable = !ask && !isHub(e.from) && !!e.ref && /^T-\d{4,}$/.test(e.ref);
@@ -1001,13 +1017,13 @@ function Message(props: {
   const wide = () => windowSize().width >= WIDE;
   if (isHub(e.from) && !ask && e.kind === "system" && !e.attachments?.length)
     return (
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: wide() ? 50 : 0 }} ref={(r) => props.cardRef?.(r)}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: wide() ? 50 : 0 }}>
         <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
         <View selectable style={{ flex: 1, minWidth: 0 }}><Rich text={e.text} quiet /></View>
       </View>
     );
   return (
-    <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} ref={(r) => props.cardRef?.(r)} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
+    <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
       <If when={wide()}><Avatar testID={`avatar-column-${e.id}`} from={e.from} /></If>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
@@ -1037,7 +1053,7 @@ function Message(props: {
               </If>
             </View>
             {e.kind === "proposals" && proposalsOf(e.text).length ? (
-              <ProposalList event={e} done={done()} onAnswer={props.onAnswer} onReply={props.onReply} />
+              <ProposalList event={e} selection={selection} done={done()} onAnswer={props.onAnswer} onReply={props.onReply} />
             ) : (
             <>
             <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 14 }}>{body}</View>
@@ -1054,7 +1070,7 @@ function Message(props: {
                   />
                 )}
               </Each>
-              <Btn label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+              <Btn testID={`other-${e.ref}`} label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
               <If when={e.ref!.startsWith("D-") && !done()}>
                 <Btn testID={`ignore-${e.ref}`} label="忽略" kind="dashed" onPress={() => props.onAnswer(e.ref!, IGNORE)} />
               </If>
@@ -1559,28 +1575,27 @@ function Sidebar(props: {
         // the floating panel starts below the window's top: its row stays centered on the title bar, level with the window controls
         style={{ height: props.chrome ? size.bar - sidebarInset : size.bar, paddingBottom: props.chrome ? sidebarInset : 0, flexDirection: "row", alignItems: "center", gap: 10, paddingLeft: (props.chrome && hasWindow ? Math.max(0, titleBar().left - sidebarInset) : 0) + 18, paddingRight: 10 }}
       >
-        <Mark size={24} />
         <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Noop</Text>
         <If when={props.onClose}>
           <ToolButton icon="close" label="收起菜单" onPress={() => props.onClose?.()} />
         </If>
         <If when={props.onCollapse}>
-          <ToolButton icon="sidebar" label="隐藏侧栏" shortcut={keymap.label("mod+b")} onPress={() => props.onCollapse?.()} />
+          <ToolButton icon="sidebar" label="隐藏侧栏" noTooltip compact onPress={() => props.onCollapse?.()} />
         </If>
       </View>
       <Scroll style={{ flex: 1 }}>
         <View style={{ paddingBottom: 16, gap: 1 }}>
           <View style={{ paddingTop: 8 }}>
-            <SideRow onPress={props.onHome} selected={props.home()} title="团队频道">
+            <SideRow onPress={props.onHome} selected={props.home()} title="主会话">
               <Icon name="chat" size={17} tint={props.home() ? colors.text : colors.muted} />
-              <Text style={{ ...rowText(), fontWeight: "600" }}>团队频道</Text>
+              <Text style={{ ...rowText(), fontWeight: "600" }}>主会话</Text>
               <If when={waits().length}>
                 <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${waits().length} 待决定`}</Text>
               </If>
             </SideRow>
-            <SideRow onPress={props.onRules} selected={props.rules()} title="团队规则与记忆">
+            <SideRow onPress={props.onRules} selected={props.rules()} title="记忆">
               <Icon name="scroll" size={17} tint={props.rules() ? colors.text : colors.muted} />
-              <Text style={rowText()}>团队规则与记忆</Text>
+              <Text style={rowText()}>记忆</Text>
             </SideRow>
           </View>
           <SideHeading title="待你决定" count={waits().length || undefined} accent />
@@ -1633,7 +1648,7 @@ function Sidebar(props: {
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : a().state === "parked" ? "等外部结果" : a().state === "nohost" ? `等 ${needsLabel((a() as { needs?: string }).needs)}` : "排队中"}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : a().state === "parked" ? "等待" : a().state === "nohost" ? `等 ${needsLabel((a() as { needs?: string }).needs)}` : "排队中"}</Text>
                 </SideRow>
               )}
             </Each>
@@ -1689,19 +1704,14 @@ function Sidebar(props: {
           paddingLeft: 18,
           paddingRight: 10,
           paddingBottom: touch ? safeArea().bottom : 0,
-          borderTopWidth: 1,
-          borderTopColor: alpha(colors.text, 0.08),
         }}
       >
         <View style={{ flex: 1, gap: 1 }}>
-          <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text }}>团队频道</Text>
+          <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text }}>主会话</Text>
           <Text style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{props.hub.cfg.url.replace(/^https?:\/\//, "")}</Text>
         </View>
-        <If when={!touch}>
-          <ToolButton icon="tooltip" label="快捷键" shortcut="?" onPress={props.onHelp} />
-        </If>
-        <ToolButton icon={isDark() ? "sun" : "moon"} label={isDark() ? "浅色外观" : "深色外观"} onPress={toggleTheme} testID="theme" />
-        <ToolButton icon="sliders" label="设置" shortcut={keymap.label("mod+,")} onPress={props.onSettings} testID="settings" />
+        <ToolButton icon={isDark() ? "sun" : "moon"} label={isDark() ? "浅色外观" : "深色外观"} noTooltip onPress={toggleTheme} testID="theme" />
+        <ToolButton icon="settings" label="设置" shortcut={keymap.label("mod+,")} onPress={props.onSettings} testID="settings" />
       </View>
     </View>
   );
@@ -1780,16 +1790,32 @@ function Chip(props: { label: string; on: boolean; onPress: () => void; testID?:
         alignItems: "center",
         paddingHorizontal: 12,
         borderRadius: radius.control,
-        borderWidth: 1,
-        borderColor: props.on ? alpha(colors.accent, 0.5) : colors.border,
+        borderCurve: "continuous",
+        borderWidth: 0.5,
+        borderColor: props.on ? alpha(colors.text, 0.2) : surfaceEdge(),
         backgroundColor: props.on ? tints.accent : colors.surface,
         transitionProperty: "background-color, border-color",
         transitionDuration: 120,
       }}
     >
-      <Text style={{ fontSize: 14, fontWeight: props.on ? "600" : "400", color: props.on ? colors.accent : colors.text }}>{props.label}</Text>
+      <Text style={{ textAlign: "center", fontSize: 14, fontWeight: props.on ? "600" : "400", color: props.on ? colors.accent : colors.text }}>{props.label}</Text>
     </View>
   );
+}
+
+/** A shared stepper for the per-machine parallel limit. */
+function ParallelInput(props: { value: number; onChange: (value: number) => void }) {
+  return <NumberInput
+    testID="parallel" accessibilityLabel="每台机器同时运行的任务数" value={props.value} min={1} max={32}
+    onChange={({ value }) => { if (value != null && value >= 1 && value <= 32 && value !== props.value) props.onChange(value); }}
+    style={{ flexDirection: "row", alignItems: "center", height: touch ? 44 : 36, borderRadius: radius.control, borderCurve: "continuous", backgroundColor: colors.raised }}
+    inputStyle={{ width: 40, textAlign: "center", fontSize: 16, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] }}
+    decrementButtonClass="active:opacity-50 disabled:opacity-30" incrementButtonClass="active:opacity-50 disabled:opacity-30"
+    decrementButtonStyle={{ width: touch ? 44 : 36, height: touch ? 44 : 36, alignItems: "center", justifyContent: "center" }}
+    incrementButtonStyle={{ width: touch ? 44 : 36, height: touch ? 44 : 36, alignItems: "center", justifyContent: "center" }}
+    decrementButton={<View testID="parallel-dec"><Icon name="minus" size={16} tint={colors.text} /></View>}
+    incrementButton={<View testID="parallel-inc"><Icon name="plus" size={16} tint={colors.text} /></View>}
+  />;
 }
 
 /** A settings section: the gallery's Card (a title above one flat surface). */
@@ -1810,14 +1836,14 @@ function Dropdown(props: { label: string; value: string; options: DropdownOption
       align="end"
       offset={6}
       margin={8}
-      popupStyle={{ minWidth: 260, maxWidth: 340, padding: 4, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}
+      popupStyle={{ minWidth: 260, maxWidth: 340, padding: 4, borderRadius: radius.control, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface }}
       trigger={
         <View
           role="button"
           testID={props.testID}
           accessibilityLabel={`${props.label}：${props.value}`}
           hoverStyle={hovered()}
-          style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingLeft: 11, paddingRight: 9, borderRadius: radius.control, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}
+          style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingLeft: 11, paddingRight: 9, borderRadius: radius.control, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface }}
         >
           <Text style={{ fontSize: 13, color: colors.faint }}>{props.label}</Text>
           <Text style={{ fontSize: 14, fontWeight: "500", color: colors.text }}>{props.value}</Text>
@@ -1860,7 +1886,7 @@ function Group(props: { title: string; hint?: string; children: JSX.Element }) {
         <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>{props.title}</Text>
         {props.hint ? <Text style={{ fontSize: 13.5, lineHeight: 20, color: colors.muted }}>{props.hint}</Text> : null}
       </View>
-      <View style={{ borderRadius: radius.card, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, overflow: "hidden" }}>{props.children}</View>
+      <View style={{ borderRadius: radius.card, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), overflow: "hidden" }}>{props.children}</View>
     </View>
   );
 }
@@ -1989,7 +2015,7 @@ function Steps(props: { steps: string[] }) {
 function NotifySettings(props: { push: Push; view: SettingsView | null; save: (patch: Record<string, unknown>) => void; wide: boolean }) {
   const push = props.push;
   const { prefs, setPrefs, state } = notifyModel(push, () => props.view, props.save);
-  const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
+  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: surfaceEdge() });
   return (
     <Group title="通知" hint={systemNotifications() ? "Noop 运行时，需要你拍板的事会发系统通知，点开直接到这一条。" : "需要你拍板的事推送到手机；通知上可以直接选择选项。"}>
       <View style={{ gap: 12, paddingHorizontal: 16, paddingVertical: 14 }}>
@@ -2023,7 +2049,7 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
         </If>
       </View>
       <If when={props.view}>
-        <View style={row}>
+        <View style={row()}>
           <Text style={{ fontSize: 14, fontWeight: "600", color: colors.muted }}>推送哪些</Text>
           <Each of={NOTIFY_KINDS as unknown as [NotifyKind, string][]}>
             {(k) => (
@@ -2039,7 +2065,7 @@ function NotifySettings(props: { push: Push; view: SettingsView | null; save: (p
             )}
           </Each>
         </View>
-        <View style={row}>
+        <View style={row()}>
           <View style={{ gap: 2 }}>
             <Text style={{ fontSize: 14, fontWeight: "600", color: colors.muted }}>免打扰时段</Text>
             <Text style={{ fontSize: 13, color: colors.faint }}>这段时间只记下，不推送（时区 {prefs().tz}）</Text>
@@ -2067,21 +2093,64 @@ function createSettings(hub: Hub) {
   const view = signal<SettingsView | null>(null);
   const error = signal("");
   const saved = signal("");
+  const saving = signal(0);
+  let writes = Promise.resolve();
+  let revision = 0;
+  let confirmed: SettingsView | null = null;
+  const pending: { patch: Record<string, unknown> }[] = [];
+  function merge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+    const result = { ...base };
+    for (const [key, value] of Object.entries(patch)) {
+      const previous = result[key];
+      result[key] = value && typeof value === "object" && !Array.isArray(value)
+        ? merge(previous && typeof previous === "object" && !Array.isArray(previous) ? previous as Record<string, unknown> : {}, value as Record<string, unknown>)
+        : value;
+    }
+    return result;
+  }
+  function displayed(v: SettingsView): SettingsView {
+    const current = v.current as { clis?: { agents?: Record<string, string[]> }; autonomy?: { agents?: Record<string, string> }; routines?: Record<string, { enabled?: boolean; every?: string }>; host?: { max_parallel?: number } };
+    return { ...v, effective: { ...v.effective,
+      agents: v.effective.agents.map((a) => ({ ...a, clis: current.clis?.agents?.[a.id] ?? a.clis, autonomy: current.autonomy?.agents?.[a.id] ?? a.autonomy })),
+      routines: v.effective.routines.map((r) => ({ ...r, ...current.routines?.[r.name] })),
+      max_parallel: current.host?.max_parallel ?? v.effective.max_parallel,
+    } };
+  }
+  function refresh() {
+    if (!confirmed) return;
+    const current = pending.reduce((state, item) => merge(state, item.patch), confirmed.current);
+    view.set(displayed({ ...confirmed, current }));
+  }
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
   cleanup(() => clearTimeout(savedTimer));
   const load = () => {
     error.set("");
-    hub.settings().then((v) => view.set(v), (e) => error.set(String(e?.message ?? e)));
+    const started = revision;
+    hub.settings().then((v) => { if (started === revision && !saving()) { confirmed = v; refresh(); } }, (e) => { if (started === revision && !saving()) error.set(String(e?.message ?? e)); });
   };
   async function save(patch: Record<string, unknown>) {
+    revision++;
     error.set("");
+    saved.set("");
+    clearTimeout(savedTimer);
+    saving.update((n) => n + 1);
+    const item = { patch };
+    pending.push(item);
+    refresh();
     try {
-      view.set(await hub.settings(patch));
-      saved.set("已保存");
-      clearTimeout(savedTimer);
-      savedTimer = setTimeout(() => saved.set(""), 1600);
+      const request = writes.then(() => hub.settings(patch));
+      writes = request.then(() => {}, () => {});
+      confirmed = await request;
     } catch (e) {
       error.set(e instanceof Error ? e.message : String(e));
+    } finally {
+      pending.splice(pending.indexOf(item), 1);
+      refresh();
+      saving.update((n) => n - 1);
+      if (!saving() && !error()) {
+        saved.set("已保存");
+        savedTimer = setTimeout(() => saved.set(""), 1600);
+      }
     }
   }
   // the command being added in 常用指令 (kept here: the settings page may be laid out again while typing)
@@ -2089,7 +2158,7 @@ function createSettings(hub: Hub) {
   const commandDraft = { name: signal(""), text: signal(""), editing: signal<string | undefined>(undefined), note: signal("") };
   /** The section the wide settings page shows (its sidebar picks it). */
   const tab = signal<SettingsTab>("notify");
-  return { view, error, saved, load, save, commandDraft, tab };
+  return { view, error, saved, saving, load, save, commandDraft, tab };
 }
 type Settings = ReturnType<typeof createSettings>;
 
@@ -2112,14 +2181,14 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
   const { view, error, saved, save } = props.settings;
   props.settings.load();
   const eff = () => view()?.effective;
-  const row: ViewStyle = { gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.line };
+  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: surfaceEdge() });
   const chips: ViewStyle = { flexDirection: "row", flexWrap: "wrap", gap: 6 };
 
   const tab = props.settings.tab;
   const on = (k: SettingsTab) => tab() === k;
   return (
     <View style={{ flex: 1, flexDirection: "row" }}>
-      <View testID="settings-nav" role="tablist" style={{ width: 208, gap: 2, paddingHorizontal: 10, paddingVertical: 20, borderRightWidth: 1, borderRightColor: colors.line }}>
+      <View testID="settings-nav" role="tablist" style={{ width: 208, gap: 2, paddingHorizontal: 10, paddingVertical: 20, borderRightWidth: 0.5, borderRightColor: surfaceEdge() }}>
         <Each of={[...SETTINGS_TABS]}>
           {(x) => (
             <View
@@ -2139,8 +2208,8 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
       </View>
     <Scroll style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 28, paddingHorizontal: props.wide ? 32 : 16, paddingTop: props.wide ? 28 : 18, paddingBottom: 48 }}>
-        <If when={error() || saved()}>
-          <Text testID="settings-note" style={{ alignSelf: "flex-end", fontSize: 13.5, color: error() ? colors.danger : colors.up }}>{error() || saved()}</Text>
+        <If when={error() || props.settings.saving() || saved()}>
+          <Text testID="settings-note" style={{ alignSelf: "flex-end", fontSize: 13.5, color: error() ? colors.danger : colors.up }}>{error() || (props.settings.saving() ? "正在保存…" : saved())}</Text>
         </If>
         <If when={on("notify")}>
           <NotifySettings push={props.push} view={view()} save={save} wide={props.wide} />
@@ -2153,7 +2222,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
               <Group title="成员" hint="团队里的每个角色。模型决定由谁来干活，自主程度决定多大的事要先问你。">
                 <Each of={e().agents} key={(a) => a.id}>
                   {(a, i) => (
-                    <View testID={`member-${a().id}`} style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: i() === 0 ? 0 : 1, borderTopColor: colors.line }}>
+                    <View testID={`member-${a().id}`} style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: i() === 0 ? 0 : 0.5, borderTopColor: surfaceEdge() }}>
                       <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 12 }}>
                         <Avatar from={a().id} />
                         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -2196,7 +2265,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
               <Group title="例行任务" hint="定时生成任务的规则：开关和运行时间">
                 <Each of={e().routines} key={(r) => r.name}>
                   {(r, i) => (
-                    <View style={{ ...row, flexDirection: "row", alignItems: "center", gap: 12, borderTopWidth: i() === 0 ? 0 : 1 }}>
+                    <View style={{ ...row(), flexDirection: "row", alignItems: "center", gap: 12, borderTopWidth: i() === 0 ? 0 : 0.5 }}>
                       <Toggle
                         testID={`routine-${r().name}`}
                         label={r().name}
@@ -2232,11 +2301,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
               <Group title="并行">
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
                   <Text style={{ flex: 1, fontSize: 15.5, color: colors.text }}>每台机器同时运行的任务数</Text>
-                  <Chip label="−" on={false} testID="parallel-dec" accessibilityLabel="减少" onPress={() => save(patches.maxParallel(Math.max(1, (e().max_parallel ?? 2) - 1)))} />
-                  <Text style={{ width: 36, textAlign: "center", fontSize: 17, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] }} testID="parallel">
-                    {String(e().max_parallel ?? "—")}
-                  </Text>
-                  <Chip label="+" on={false} testID="parallel-inc" accessibilityLabel="增加" onPress={() => save(patches.maxParallel(Math.min(32, (e().max_parallel ?? 2) + 1)))} />
+                  <ParallelInput value={e().max_parallel ?? 2} onChange={(value) => save(patches.maxParallel(value))} />
                 </View>
               </Group>
               </If>
@@ -2260,7 +2325,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
         </Group>
         </If>
         <If when={on("rules")}>
-        <Group title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
+        <Group title="记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
           <SetRow first label="查看规则与记忆" chevron onPress={props.onRules} testID="settings-rules" />
         </Group>
         </If>
@@ -2287,15 +2352,9 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
 
 /** What the notification settings show and change, for both layouts. */
 function notifyModel(push: Push, view: () => SettingsView | null, save: (patch: Record<string, unknown>) => void) {
-  const tz = (() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
-    } catch {
-      return "Asia/Shanghai";
-    }
-  })();
+  const tz = "Asia/Singapore";
   const prefs = () => notifyPrefsOf(view(), tz);
-  const setPrefs = (change: Partial<NotifyPrefs>) => save(notifyPatch({ ...prefs(), ...change, tz }));
+  const setPrefs = (change: Partial<NotifyPrefs>) => save(notifyPatch({ ...prefs(), ...change }));
   const state = () => {
     const i = push.info();
     if (!i) return systemNotifications() ? "这个环境还不能发系统通知（可以在手机浏览器打开 hub 的网页接收推送）" : "这个环境不支持网页推送（请用手机浏览器打开 hub 的网页）";
@@ -2321,7 +2380,7 @@ function Section(props: { title?: string; hint?: string; testID?: string; childr
       <If when={props.title}>
         <Text style={{ paddingHorizontal: 32, fontSize: 13, color: colors.muted }}>{props.title}</Text>
       </If>
-      <View style={{ marginHorizontal: 16, borderRadius: radius.card, borderCurve: "continuous", backgroundColor: colors.surface, overflow: "hidden" }}>{props.children}</View>
+      <View style={{ marginHorizontal: 16, borderRadius: radius.card, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), overflow: "hidden", backgroundColor: colors.surface }}>{props.children}</View>
       <If when={props.hint}>
         <Text style={{ paddingHorizontal: 32, fontSize: 13, lineHeight: 18, color: colors.faint }}>{props.hint}</Text>
       </If>
@@ -2331,7 +2390,7 @@ function Section(props: { title?: string; hint?: string; testID?: string; childr
 
 /** The hairline above every row of a section but its first, inset to the text. */
 function Hairline(props: { inset?: number }) {
-  return <View style={{ position: "absolute", top: 0, left: props.inset ?? 16, right: 0, height: 0.5, backgroundColor: colors.border }} />;
+  return <View style={{ position: "absolute", top: 0, left: props.inset ?? 16, right: 0, height: 0.5, backgroundColor: surfaceEdge() }} />;
 }
 
 /** A row of a section, at least 48 pt tall: a label (and a line under it), then a value, a control or a chevron. */
@@ -2346,7 +2405,7 @@ function RevLink(props: { host: HostInfo }) {
         testID={`rev-${props.host.host}`}
         accessibilityLabel={`版本 ${short()}`}
         onPress={props.host.rev_url ? () => void openUrl(props.host.rev_url!).catch(() => {}) : undefined}
-        style={{ fontFamily: MONO, fontSize: 13, color: props.host.rev_url ? colors.accent : colors.muted }}
+        style={{ fontFamily: MONO, fontSize: 13, color: props.host.rev_url ? linkColor() : colors.muted }}
       >
         {short()}
       </Text>
@@ -2450,7 +2509,7 @@ function CommandEditor(props: { settings: Settings }) {
       style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16, pointerEvents: "box-none" }}
     >
       <View style={{ width: "100%", maxWidth: 560, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, overflow: "hidden" }}>
-        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 20, paddingRight: 10, height: 56, borderBottomWidth: 1, borderBottomColor: colors.line }}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 20, paddingRight: 10, height: 56, borderBottomWidth: 0.5, borderBottomColor: surfaceEdge() }}>
           <Text style={{ flex: 1, fontSize: 17, fontWeight: "600", color: colors.text }}>{isNew() ? "新建指令" : "编辑指令"}</Text>
           <ToolButton icon="close" label="关闭" shortcut="Esc" onPress={close} />
         </View>
@@ -2648,7 +2707,7 @@ function Choices(props: { label: string; choices: Choice[]; selected: string | n
             </View>
             <View style={{ width: 20, alignItems: "center" }}>
               <If when={c().id === props.selected}>
-                <Icon name="check" size={17} tint={colors.info} />
+                <View testID={`choice-check-${c().testID}`}><Icon name="check" size={17} tint={colors.info} /></View>
               </If>
             </View>
           </Radio>
@@ -2659,19 +2718,22 @@ function Choices(props: { label: string; choices: Choice[]; selected: string | n
 }
 
 /** A page of sections on the grouped background. */
-function Grouped(props: { testID?: string; children: JSX.Element }) {
+function Grouped(props: { testID?: string; settings?: Settings; children: JSX.Element }) {
   return (
-    <Scroll testID={props.testID} style={{ flex: 1, backgroundColor: colors.background }}>
-      <View style={{ width: "100%", maxWidth: 640, alignSelf: "center", gap: 28, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>{props.children}</View>
-    </Scroll>
+    <View style={{ flex: 1, backgroundColor: platform.os === "ios" ? (isDark() ? "#1c1c1e" : "#f2f2f2") : colors.background }}>
+      <If when={props.settings}><SaveNote settings={props.settings!} /></If>
+      <Scroll testID={props.testID} style={{ flex: 1 }}>
+        <View style={{ width: "100%", maxWidth: 640, alignSelf: "center", gap: 28, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>{props.children}</View>
+      </Scroll>
+    </View>
   );
 }
 
 function SaveNote(props: { settings: Settings }) {
   return (
-    <If when={props.settings.error() || props.settings.saved()}>
-      <Text testID="settings-note" style={{ paddingHorizontal: 32, fontSize: 13, color: props.settings.error() ? colors.danger : colors.up }}>
-        {props.settings.error() || props.settings.saved()}
+    <If when={props.settings.error()}>
+      <Text testID="settings-note" style={{ paddingHorizontal: 32, paddingVertical: 8, fontSize: 13, color: props.settings.error() ? colors.danger : colors.up }}>
+        {props.settings.error()}
       </Text>
     </If>
   );
@@ -2697,14 +2759,13 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
     if (r.action === "logout") props.onDisconnect();
   }
   return (
-    <Grouped testID="phone-settings">
+    <Grouped testID="phone-settings" settings={props.settings}>
       <Section title="通知" hint="需要你拍板的事推送到这台设备；通知上可以直接选择选项。">
         <SetRow first label="通知" value={notify.short()} chevron onPress={() => props.onOpen({ name: "notify" })} testID="settings-notify" />
       </Section>
-      <Section title="团队规则与记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
+      <Section title="记忆" hint="团队做事依据的规则、你的偏好、成员档案和决策先例。只读。">
         <SetRow first label="规则与记忆" chevron onPress={() => props.onOpen({ name: "rules" })} testID="settings-rules" />
       </Section>
-      <SaveNote settings={props.settings} />
       <If when={eff()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>{error() ? "设置读取失败" : "读取中…"}</Text>}>
         {(e) => (
           <View style={{ gap: 28 }}>
@@ -2744,24 +2805,7 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
                 first
                 label="同时运行"
                 trailing={
-                  <NumberInput
-                    testID="parallel"
-                    accessibilityLabel="每台机器同时运行的任务数"
-                    value={e().max_parallel ?? 2}
-                    min={1}
-                    max={32}
-                    onChange={({ value }) => {
-                      if (value != null && value >= 1 && value <= 32 && value !== untracked(eff)?.max_parallel) save(patches.maxParallel(value));
-                    }}
-                    style={{ flexDirection: "row", alignItems: "center", height: 36, borderRadius: radius.control, backgroundColor: colors.raised }}
-                    inputStyle={{ width: 40, textAlign: "center", fontSize: 17, fontWeight: "600", color: colors.text, fontVariant: ["tabular-nums"] }}
-                    decrementButtonClass="active:opacity-50 disabled:opacity-30"
-                    incrementButtonClass="active:opacity-50 disabled:opacity-30"
-                    decrementButtonStyle={{ width: 44, height: 36, alignItems: "center", justifyContent: "center" }}
-                    incrementButtonStyle={{ width: 44, height: 36, alignItems: "center", justifyContent: "center" }}
-                    decrementButton={<Icon name="minus" size={16} tint={colors.text} />}
-                    incrementButton={<Icon name="plus" size={16} tint={colors.text} />}
-                  />
+                  <ParallelInput value={e().max_parallel ?? 2} onChange={(value) => save(patches.maxParallel(value))} />
                 }
               />
             </Section>
@@ -2795,8 +2839,8 @@ function PhoneNotify(props: { push: Push; settings: Settings }) {
   const { view, save } = props.settings;
   const notify = notifyModel(push, view, save);
   return (
-    <Grouped testID="phone-notify">
-      <Section title="本设备">
+    <Grouped testID="phone-notify" settings={props.settings}>
+      <Section title="本设备" hint="开启后，重要消息会推送到这台设备。">
         <SetRow first label={push.info()?.device ?? "本设备"} trailing={<Text testID="push-state" style={{ fontSize: 16, color: colors.muted }}>{notify.short()}</Text>} />
         <If
           when={push.info()?.subscribed}
@@ -2856,7 +2900,7 @@ function PhoneMember(props: { id: string; settings: Settings }) {
   const { view, save } = props.settings;
   const agent = () => view()?.effective.agents.find((a) => a.id === props.id);
   return (
-    <Grouped testID="phone-member">
+    <Grouped testID="phone-member" settings={props.settings}>
       <If when={agent()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>没有这个成员</Text>}>
         {(a) => (
           <>
@@ -2876,7 +2920,6 @@ function PhoneMember(props: { id: string; settings: Settings }) {
                 onPick={(l) => save(patches.autonomy(props.id, l))}
               />
             </Section>
-            <SaveNote settings={props.settings} />
           </>
         )}
       </If>
@@ -2889,7 +2932,7 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
   const { view, save } = props.settings;
   const routine = () => view()?.effective.routines.find((r) => r.name === props.name);
   return (
-    <Grouped testID="phone-routine">
+    <Grouped testID="phone-routine" settings={props.settings}>
       <If when={routine()} else={<Text style={{ paddingHorizontal: 32, fontSize: 14, color: colors.faint }}>没有这个例行任务</Text>}>
         {(r) => (
           <>
@@ -2908,7 +2951,6 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
                 onPick={(iv) => save(patches.routine(props.name, { every: iv }))}
               />
             </Section>
-            <SaveNote settings={props.settings} />
           </>
         )}
       </If>
@@ -2918,7 +2960,7 @@ function PhoneRoutine(props: { name: string; settings: Settings }) {
 
 // ---------------------------------------------------------------- the team's rules and memory (read-only)
 
-/** 团队规则与记忆: policies, the owner's memory, each agent's profile and memory, closed decisions. */
+/** 记忆: policies, the owner's memory, each agent's profile and memory, closed decisions. */
 function RulesList(props: { hub: Hub; onOpen: (path: string) => void }) {
   const groups = signal<RuleGroup[] | null>(null);
   const error = signal("");
@@ -3001,7 +3043,7 @@ function CommandList(props: {
       testID="commands"
       role="menu"
       accessibilityLabel="指令"
-      style={{ width: "100%", maxWidth: 480, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: 4, overflow: "hidden" }}
+      style={{ width: "100%", maxWidth: 380, borderRadius: radius.card, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface, padding: 4, overflow: "hidden" }}
     >
       <Each of={props.items} key={(c) => c.id}>
         {(c, i) => (
@@ -3025,7 +3067,7 @@ function CommandList(props: {
       <If when={!props.items.length}>
         <Text style={{ paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, color: colors.muted }}>没有匹配的指令</Text>
       </If>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, height: 30, paddingHorizontal: 10, marginTop: 2, borderTopWidth: 1, borderTopColor: colors.line }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, height: 30, paddingHorizontal: 10, marginTop: 2, borderTopWidth: 0.5, borderTopColor: surfaceEdge() }}>
         <If when={!props.touch}>
           <Text style={{ flex: 1, fontSize: 12, color: colors.faint }}>↑↓ 选择 · ↵ 执行 · Esc 关闭</Text>
         </If>
@@ -3079,7 +3121,7 @@ function HelpSheet(props: { open: boolean; onClose: () => void }) {
           overflow: "hidden",
         }}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 20, paddingRight: 10, height: 56, borderBottomWidth: 1, borderBottomColor: colors.line }}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 20, paddingRight: 10, height: 56, borderBottomWidth: 0.5, borderBottomColor: surfaceEdge() }}>
           <Text style={{ flex: 1, fontSize: 17, fontWeight: "600", color: colors.text }}>键盘快捷键</Text>
           <ToolButton icon="close" label="关闭" shortcut="Esc" onPress={props.onClose} />
         </View>
@@ -3122,7 +3164,38 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const push = createPush(hub);
   const wide = () => windowSize().width >= WIDE;
   const drawer = signal(false);
+  const drawerDragging = signal(false);
+  const drawerVisible = signal(false);
+  let drawerHideTimer: ReturnType<typeof setTimeout> | undefined;
+  cleanup(() => clearTimeout(drawerHideTimer));
+  const drawerX = createAnimatedValue(0);
+  const drawerWidth = () => Math.min(size.sidebar + 16, windowSize().width * 0.86);
+  const drawerTranslate = () => drawerX.interpolate({ inputRange: [0, drawerWidth()], outputRange: [0, drawerWidth()] });
+  const animateDrawer = (open: boolean) => {
+    if (reduceMotion()) drawerX.set(open ? drawerWidth() : 0);
+    else drawerX.timing(open ? drawerWidth() : 0, { duration: 200, easing: "easeOut" });
+  };
+  effect(() => {
+    if (wide()) return;
+    const open = drawer();
+    clearTimeout(drawerHideTimer);
+    if (open) drawerVisible.set(true);
+    else drawerHideTimer = setTimeout(() => drawerVisible.set(false), reduceMotion() ? 0 : 200);
+    animateDrawer(open);
+  });
+  const finishDrawerPan = (e: { cancelled: boolean; translation: { x: number } }) => {
+    const wasOpen = untracked(drawer);
+    const next = e.cancelled ? wasOpen : wasOpen ? e.translation.x > -45 : e.translation.x > 45;
+    drawerDragging.set(false);
+    if (next === wasOpen) animateDrawer(next);
+    else drawer.set(next);
+  };
   const sidebarOpen = signal(true);
+  const setSidebarOpen = (open: boolean) => {
+    if (open === untracked(sidebarOpen)) return;
+    if (!reduceMotion()) LayoutAnimation.configureNext(LayoutAnimation.create(200, "easeInEaseOut"));
+    sidebarOpen.set(open);
+  };
   const help = signal(false);
   const settings = createSettings(hub);
   // The pages: the channel at the bottom, what the sidebar, a link or settings opened above it.
@@ -3190,12 +3263,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const c = chosen();
     return p.find((e) => e.ref === c)?.ref ?? p[p.length - 1]?.ref ?? null;
   });
-  const cards = new Map<string, ViewRef>();
-  let scroller: ScrollRef | undefined;
-  let scrollY = 0;
+  const proposalSelection = new Map<string, Signal<Set<string>>>();
+  let scroller: ListRef | undefined;
   let composer: InputRef | undefined;
 
-  const toEnd = (animated = false) => setTimeout(() => scroller?.scrollTo({ y: 1e7, animated }), 40);
+  const toEnd = (animated = false) => setTimeout(() => scroller?.scrollToEnd({ animated }), 40);
   let count = 0;
   effect(() => {
     const n = shown().length;
@@ -3454,6 +3526,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   });
 
   const canSend = () => !!draft().trim() || attachments().length > 0;
+  const compactComposer = () => !focused() && !draft() && !attachments().length && !replyTo();
   const answer = (ref: string, c: string) => {
     clearNotification(ref);
     return send(`${ref} ${c}`, null);
@@ -3471,20 +3544,18 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     // back from another page the channel lays out first
     setTimeout(() => toCard(ref, 4), back ? 120 : 0);
   }
-  /** Scrolls to a card, measured now (what loaded above it since moved it), retrying while it is still being laid out. */
+  /** Virtualized cards can be off screen; locate the row by identity instead of measuring a view. */
   function toCard(ref: string, tries: number) {
-    const card = cards.get(ref), sc = scroller;
-    const done = () => { if (jumping === ref) jumping = null; };
-    if (!card || !sc) {
-      done();
+    const index = timeline().findIndex((row) => "event" in row && row.event.ref === ref && isAsk(row.event));
+    if (index >= 0 && scroller) {
+      scroller.scrollToIndex({ index, animated: true, viewOffset: 24 });
+      if (jumping === ref) jumping = null;
+    } else if (tries > 0 && !scroller) {
+      setTimeout(() => toCard(ref, tries - 1), 80);
+    } else {
+      if (jumping === ref) jumping = null;
       if (pending().some((e) => e.ref === ref)) reply(ref);
-      return;
     }
-    void Promise.all([card.measure(), sc.measure()]).then(([c, v]) => {
-      if (!c || !v) return tries > 0 ? void setTimeout(() => toCard(ref, tries - 1), 80) : done();
-      sc.scrollTo({ y: Math.max(0, scrollY + c.pagePosition.y - v.pagePosition.y - 24), animated: true });
-      done();
-    });
   }
 
   // Opened from a notification (`?ref=`), or one clicked while the app is open: show that event.
@@ -3579,17 +3650,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.set(null), 6000);
   });
-  // After the first login on a phone or in an installed app: once, a gentle suggestion to turn notifications on.
-  const asked = signal(true);
-  Storage.getItem(KEYS.notifyAsked).then((v) => asked.set(!!v));
-  const suggest = () => {
-    const i = push.info();
-    return (touch || systemNotifications()) && !asked() && !!i && !i.subscribed && ((i.supported && i.permission === "default") || push.needsHomeScreen());
-  };
-  const dismissSuggest = () => {
-    asked.set(true);
-    Storage.setItem(KEYS.notifyAsked, "1");
-  };
   /** J / K: the next or the previous pending ask, scrolled into view. */
   function step(by: number) {
     const p = pending();
@@ -3605,7 +3665,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const c = choicesOf(e)[n];
     if (c) answer(e.ref!, c);
   }
-  /** 团队规则与记忆: from the sidebar in place; from settings on top (back returns to settings). */
+  /** 记忆: from the sidebar in place; from settings on top (back returns to settings). */
   const openRules = (fromSettings = false) => {
     if (fromSettings) { drawer.set(false); nav.push({ name: "rules" }); }
     else show({ name: "rules" });
@@ -3620,7 +3680,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   keymap.bind("mod+k", () => composer?.focus(), { when: "always" });
   keymap.bind("mod+z", () => { if (!draft()) undo(); }, { when: "always" });
   keymap.bind("mod+,", openTeam, { when: "always" });
-  keymap.bind("mod+b", () => sidebarOpen.set(!untracked(sidebarOpen)), { when: "always" });
+  keymap.bind("mod+b", () => setSidebarOpen(!untracked(sidebarOpen)), { when: "always" });
   keymap.bind("mod+shift+l", toggleTheme, { when: "always" });
   keymap.bind(
     {
@@ -3675,14 +3735,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
-      onCollapse={inDrawer ? undefined : () => sidebarOpen.set(false)}
+      onCollapse={inDrawer ? undefined : () => setSidebarOpen(false)}
       home={onChannel}
       onHome={() => { drawer.set(false); nav.popToRoot(); }}
     />
   );
   /** The channel: the timeline and the composer. */
   const channelPage = () => (
-      <View style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height, transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
+      <View testID="channel-swipe" pan={!wide() && !drawer() ? { x: drawerX } : undefined}
+        onPanStart={() => { if (!wide() && !drawer()) drawerDragging.set(true); }}
+        onPanEnd={finishDrawerPan}
+        style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height, transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
           {/* Files dropped on the timeline or the composer attach their images. */}
           <View
             testID="composer-area"
@@ -3691,45 +3754,23 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             onFileDrop={({ uris }) => { dropping.set(false); void attachUris(uris); }}
             style={{ flex: 1 }}
           >
-            <Scroll
-              ref={(r) => { scroller = r; scrollY = 0; }}
+            <List
+              testID="timeline"
+              each={timeline()}
+              estimatedItemSize={120}
+              contentStyle={{ paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}
+              keyExtractor={(row) => row.key}
+              ref={(r) => { scroller = r; }}
+              onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }}
               style={{ flex: 1 }}
               scrollEventThrottle={100}
               keyboardShouldPersistTaps="handled"
               onScroll={(ev) => {
                 const end = ev.contentSize.height - ev.offset.y - ev.size.height < 80;
-                scrollY = ev.offset.y;
                 if (end !== untracked(atEnd)) atEnd.set(end);
                 if (end) unseen.set(0);
               }}
-            >
-              <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}>
-                <If when={suggest()}>
-                  <View
-                    testID="notify-banner"
-                    style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14, marginBottom: 8, borderRadius: radius.card, borderWidth: 1, borderColor: alpha(colors.accent, 0.3), backgroundColor: tints.accent }}
-                  >
-                    <Icon name="bell" size={20} tint={colors.accent} />
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>开启通知？</Text>
-                      <Text style={{ fontSize: 13.5, lineHeight: 19, color: colors.muted }}>{systemNotifications() ? "需要你拍板时发系统通知，点开直接到这一条。" : "需要你拍板时第一时间推送到这台手机，通知上就能直接选。"}</Text>
-                    </View>
-                    <View style={{ gap: 6 }}>
-                      <Btn
-                        label="开启"
-                        kind="primary"
-                        testID="notify-banner-enable"
-                        onPress={() => {
-                          dismissSuggest();
-                          if (push.canAsk()) push.enable();
-                          else if (wide()) show({ name: "team" });
-                          else show({ name: "team" }, { name: "notify" });
-                        }}
-                      />
-                      <Btn label="以后再说" kind="ghost" testID="notify-banner-later" onPress={dismissSuggest} />
-                    </View>
-                  </View>
-                </If>
+              empty={() => <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}>
                 <If when={!hub.loaded()}>
                   <View style={{ alignItems: "center", paddingTop: 120, gap: 14 }}>
                     <Spinner size={22} tint={colors.muted} />
@@ -3752,7 +3793,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     </If>
                   </View>
                 </If>
-                <Each of={timeline()} key={(r) => r.key}>
+              </View>}
+            >
+              {(item) => (
+                <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter() }}>
+                <Each of={[item()]} key={(r) => r.key}>
                   {(r) => {
                     const row = r();
                     if ("unread" in row) {
@@ -3785,16 +3830,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         target={target}
                         onAnswer={answer}
                         onReply={reply}
-                        cardRef={isAsk(row.event) ? (r) => cards.set(row.event.ref!, r) : undefined}
+                        selection={proposalSelection}
                       />
                     );
                   }}
                 </Each>
-              </View>
-            </Scroll>
+                </View>
+              )}
+            </List>
 
             <If when={!atEnd() && shown().length > 0}>
-              <View style={{ position: "absolute", left: 0, right: 0, bottom: composerHeight() + 8, alignItems: "center", pointerEvents: "box-none" }}>
+              <View style={{ position: "absolute", left: 0, right: 0, bottom: composerHeight() + 4, paddingVertical: 4, alignItems: "center", pointerEvents: "box-none" }}>
                 <View
                   role="button"
                   accessibilityLabel="跳到最新"
@@ -3806,11 +3852,12 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     gap: 8,
                     height: 38,
                     paddingHorizontal: 16,
-                    borderRadius: 19,
-                    backgroundColor: unseen() ? colors.accentFill : colors.surface,
-                    borderWidth: 1,
-                    borderColor: unseen() ? "transparent" : colors.border,
-                    boxShadow: "0 6px 20px rgba(0,0,0,0.14)",
+                    ...glass(unseen() ? colors.accentFill : colors.surface, 19),
+                    backgroundColor: platform.os === "linux" || (platform.os === "android" && Number(platform.version) < 31)
+                      ? (unseen() ? colors.accentFill : colors.surface)
+                      : (unseen() ? alpha(colors.accentFill, 0.85) : alpha(colors.surface, 0.25)),
+                    borderWidth: platform.os === "ios" || platform.os === "macos" ? 0 : 1,
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
                   }}
                 >
                   <Icon name="arrow-down" size={15} tint={unseen() ? colors.onAccent : colors.text} />
@@ -3818,7 +3865,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     {unseen() ? `${unseen()} 条新消息` : "跳到最新"}
                   </Text>
                   <If when={!touch}>
-                    <Kbd k="G" on={unseen() ? colors.onAccent : undefined} />
+                    <Text style={{ fontSize: 12, color: unseen() ? alpha(colors.onAccent, 0.7) : colors.faint }}>G</Text>
                   </If>
                 </View>
               </View>
@@ -3866,9 +3913,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               </If>
               <View
                 style={{
+                  flexDirection: compactComposer() ? "row" : "column",
+                  alignItems: compactComposer() ? "center" : "stretch",
                   gap: 6,
-                  paddingTop: 12,
-                  paddingBottom: 8,
+                  paddingTop: compactComposer() ? 4 : 12,
+                  paddingBottom: compactComposer() ? 4 : 8,
                   paddingLeft: 18,
                   paddingRight: 8,
                   ...composerGlass(focused()),
@@ -3899,7 +3948,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         <View testID="attachment" accessibilityLabel={a().name} style={{ width: 64, height: 64 }}>
                           <Image
                             src={a().preview}
-                            style={{ width: 64, height: 64, borderRadius: radius.inset, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inset, objectFit: "cover" }}
+                            style={{ width: 64, height: 64, borderRadius: radius.inset, backgroundColor: colors.inset, objectFit: "cover" }}
                           />
                           <View
                             testID="remove-attachment"
@@ -3924,6 +3973,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 <If when={attachNote()}>
                   {(note) => <Text testID="attach-note" style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>}
                 </If>
+                <If when={compactComposer()}>
+                  <View testID="attach" role="button" accessibilityLabel="添加图片" onPress={() => void pickImages()} hoverStyle={hovered()} style={{ width: touch ? 44 : 36, height: touch ? 44 : 36, marginLeft: -8, borderRadius: touch ? 22 : 18, alignItems: "center", justifyContent: "center" }}>
+                    <Icon name="plus" size={touch ? 22 : 18} tint={colors.text} />
+                  </View>
+                </If>
                 <Input
                   testID="composer"
                   ref={(r) => (composer = r)}
@@ -3940,26 +3994,32 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     for (const f of files) attach(f, f.name);
                     if (uris.length) void attachUris(uris);
                   }}
-                  onFocus={() => focused.set(true)}
-                  onBlur={() => focused.set(false)}
+                  onFocus={() => {
+                    if (compactComposer() && !reduceMotion()) LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut"));
+                    focused.set(true);
+                  }}
+                  onBlur={() => {
+                    if (!draft() && !attachments().length && !replyTo() && !reduceMotion()) LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut"));
+                    focused.set(false);
+                  }}
                   onContentSizeChange={({ size: s }) => inputHeight.set(Math.min(220, Math.max(28, s.height)))}
                   placeholder={replyTo() ? `回复 ${replyTo()}…` : wide() ? "给团队下指令，例如：把 nsh 的 gallery 在 Linux 上截图检查一遍" : "给团队下指令…"}
-                  class="placeholder:text-faint"
-                  style={{ height: inputHeight(), fontSize: size.text, lineHeight: 24, color: colors.text, paddingVertical: 2 }}
+                  class={platform.os === "ios" ? "placeholder:text-muted-foreground" : "placeholder:text-faint"}
+                  style={{ height: compactComposer() ? 28 : inputHeight(), flex: compactComposer() ? 1 : undefined, minWidth: 0, fontSize: size.text, lineHeight: 24, color: colors.text, paddingVertical: 2 }}
                 />
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}>
-                    <View
+                    <If when={!compactComposer()}><View
                       testID="attach"
                       role="button"
                       accessibilityLabel="添加图片"
                       tooltip={touch ? undefined : <Tip label="添加图片（也可粘贴或拖入）" />}
                       onPress={() => void pickImages()}
                       hoverStyle={hovered()}
-                      style={{ width: touch ? 40 : 32, height: touch ? 40 : 32, marginLeft: -8, borderRadius: touch ? 20 : 16, alignItems: "center", justifyContent: "center" }}
+                      style={{ width: touch ? 44 : 36, height: touch ? 44 : 36, marginLeft: -8, borderRadius: touch ? 22 : 18, alignItems: "center", justifyContent: "center" }}
                     >
-                      <Icon name="image" size={touch ? 22 : 18} tint={colors.muted} />
-                    </View>
+                      <Icon name="plus" size={touch ? 22 : 18} tint={colors.text} />
+                    </View></If>
                     <If when={speech() !== "off"}>
                       <Text testID="dictating" style={{ fontSize: 13, color: colors.accent, numberOfLines: 1 }}>
                         {speech() === "on" ? "正在听…" : "正在识别…"}
@@ -3987,10 +4047,12 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         transitionDuration: 120,
                       }}
                     >
-                      <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? (touch ? 24 : 20) : (touch ? 20 : 16)} tint={speech() === "off" ? colors.text : colors.danger} />
+                      <Icon name={speech() === "off" ? "mic" : "stop"} size={speech() === "off" ? (touch ? 22 : 19) : (touch ? 18 : 16)} tint={speech() === "off" ? colors.text : colors.danger} />
                     </View>
                   </If>
-                  <SendButton testID="send" disabled={!canSend()} onPress={submit} />
+                  <If when={!compactComposer()}>
+                    <SendButton testID="send" disabled={!canSend()} onPress={submit} />
+                  </If>
                 </View>
               </View>
             </View>
@@ -4002,7 +4064,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const gutter = () => (wide() ? 32 : 16);
   const titleOf = (r: Route): string => {
     switch (r.name) {
-      case "channel": return "团队频道";
+      case "channel": return "主会话";
       case "team": return wide() ? "团队设置" : "设置";
       case "task": return `任务 ${r.id}`;
       case "tasks": return "全部任务";
@@ -4010,19 +4072,19 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "notify": return "通知";
       case "member": return r.id;
       case "routine": return r.routine;
-      case "rules": return "团队规则与记忆";
+      case "rules": return "记忆";
       case "doc": return r.path.split("/").pop()!.replace(/\.md$/i, "");
     }
   };
   /** The back button's label, the page below's short name. */
-  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "频道" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : r.name === "rules" ? "规则与记忆" : r.name === "tasks" ? "全部任务" : titleOf(r));
+  const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? "主会话" : r.name === "team" ? "设置" : r.name === "host" ? "机器" : r.name === "rules" ? "记忆" : r.name === "tasks" ? "全部任务" : titleOf(r));
   const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
   const connPill = () => (
     <View
       tooltip={<Tip label={hub.cfg.url} />}
       accessibilityLabel={connLabel()}
       testID="conn"
-      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11, borderRadius: 15, backgroundColor: hub.conn() === "unauthorized" ? tints.danger : colors.raised }}
+      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11 }}
     >
       <Dot tone={connTone()} />
       <If when={wide()}>
@@ -4034,6 +4096,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const Bar = (p: { route: Route }) => (
     <View
       desktop={{ windowDrag: true }}
+      onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }}
       style={{
         height: size.bar,
         flexDirection: "row",
@@ -4041,8 +4104,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         gap: 6,
         paddingLeft: (wide() && sidebarOpen() ? 0 : hasWindow ? titleBar().left : 0) + (wide() ? 24 : 8),
         paddingRight: (hasWindow ? titleBar().right : 0) + (wide() ? 16 : 8),
-        borderBottomWidth: 1,
-        borderBottomColor: colors.line,
+        borderBottomWidth: 0.5,
+        borderBottomColor: surfaceEdge(),
         backgroundColor: colors.background,
       }}
     >
@@ -4050,7 +4113,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         <ToolButton icon="menu" label="菜单" onPress={() => drawer.set(true)} />
       </If>
       <If when={wide() && !sidebarOpen()}>
-        <ToolButton icon="sidebar" label="显示侧栏" shortcut={keymap.label("mod+b")} onPress={() => sidebarOpen.set(true)} />
+        <ToolButton icon="sidebar" label="显示侧栏" shortcut={keymap.label("mod+b")} onPress={() => setSidebarOpen(true)} />
       </If>
       <If when={below(p.route)}>
         {(b) => (
@@ -4059,7 +4122,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             accessibilityLabel={`返回${backTitle(b())}`}
             onPress={() => nav.pop()}
             hoverStyle={hovered()}
-            style={{ height: touch ? 44 : 36, flexDirection: "row", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 10, borderRadius: radius.control }}
+            style={{ height: touch ? 44 : 32, flexDirection: "row", alignItems: "center", gap: 2, paddingLeft: 4, paddingRight: 10, borderRadius: radius.control, borderCurve: "continuous" }}
           >
             <Icon name="back" size={18} tint={colors.accent} />
             <Text style={{ fontSize: 15, fontWeight: "500", color: colors.accent }}>{backTitle(b())}</Text>
@@ -4099,10 +4162,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   };
 
   return (
-    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}>
-      <If when={wide() && sidebarOpen()}>
-        <View style={{ width: size.sidebar, margin: sidebarInset, marginRight: 0, ...glass(colors.sidebar, 18) }}>{sidebar(false)}</View>
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.sidebar, overflow: "hidden" }}>
+      <If when={platform.os === "macos" && wide() && sidebarOpen()}>
+        <View style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: size.sidebar + 20, ...glass(colors.sidebar, 0), backgroundColor: alpha(colors.sidebar, 0.25), borderWidth: 0, boxShadow: "none", pointerEvents: "none" }} />
       </If>
+      <If when={wide() && sidebarOpen()}>
+        <View onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }} style={{ width: size.sidebar, paddingTop: sidebarInset }}>{sidebar(false)}</View>
+      </If>
+      <If when={!wide()}>
+        <View testID="drawer" pan={drawer() ? { x: drawerX } : undefined} onPanStart={() => drawerDragging.set(true)} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: drawerWidth(), paddingTop: touch ? safeArea().top : 0, visibility: drawerVisible() || drawerDragging() ? "visible" : "hidden", pointerEvents: drawer() ? "auto" : "none" }}>{sidebar(true)}</View>
+      </If>
+      <View style={{ flex: 1, minWidth: 0, backgroundColor: colors.background, borderTopLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderBottomLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderCurve: "continuous", borderLeftWidth: !wide() && (drawer() || drawerDragging()) ? 1 : 0, borderLeftColor: colors.line, overflow: "hidden", translate: [wide() ? 0 : drawerTranslate(), 0], boxShadow: wide() && sidebarOpen() ? "-3px 0 18px rgba(0,0,0,0.08)" : undefined }}>
       <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
         {(route, index) => (
           <NavPage
@@ -4141,18 +4211,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           </NavPage>
         )}
       </NavStack>
-
-      {/* Phones: the sidebar slides in from the left edge. */}
-      <Sheet
-        testID="drawer"
-        side="left"
-        open={drawer() && !wide()}
-        onOpenChange={({ open }) => { if (!open) drawer.set(false); }}
-        backdropClass="bg-scrim"
-        popupStyle={{ width: Math.min(size.sidebar + 16, windowSize().width * 0.86), paddingTop: touch ? safeArea().top : 0, ...glass(colors.sidebar, 0), borderWidth: 0, borderRightWidth: 1, borderTopRightRadius: 24, borderBottomRightRadius: 24 }}
-      >
-        {sidebar(true)}
-      </Sheet>
+      <If when={!wide() && drawer()}>
+        <View testID="drawer-dismiss" role="button" accessibilityLabel="关闭侧栏" onPress={() => drawer.set(false)} pan={{ x: drawerX }} onPanStart={() => drawerDragging.set(true)} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.08)" }} />
+      </If>
+      </View>
 
       <If when={toast()}>
         {(t) => (

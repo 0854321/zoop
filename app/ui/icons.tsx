@@ -49,6 +49,7 @@ export type IconName =
   | "volume-high"
   | "code"
   | "sliders"
+  | "settings"
   | "stepper"
   | "otp"
   | "panel-bottom"
@@ -409,10 +410,6 @@ const glyphs: Record<IconName, Draw> = {
     line(c, [10, 4, 10, 16]);
     line(c, [5, 11, 10, 16, 15, 11]);
   },
-  reply: (c) => {
-    line(c, [8, 5, 4, 9, 8, 13]);
-    line(c, [4, 9, 11, 9, 14, 10, 15.5, 12.5, 16, 15.5]);
-  },
   play: (c) => {
     c.beginPath();
     c.moveTo(6.5, 4.5);
@@ -496,6 +493,11 @@ const glyphs: Record<IconName, Draw> = {
       c.arc(x, y, 2, 0, Math.PI * 2);
       c.fill();
     }
+  },
+  settings: (c) => {
+    const gear = new Path2D("M10 2.5l1.2.1.5 1.8 1.4.6 1.6-.9 1.6 1.6-.9 1.6.6 1.4 1.8.5v2.3l-1.8.5-.6 1.4.9 1.6-1.6 1.6-1.6-.9-1.4.6-.5 1.8H8.8l-.5-1.8-1.4-.6-1.6.9-1.6-1.6.9-1.6-.6-1.4-1.8-.5V8.8l1.8-.5.6-1.4-.9-1.6 1.6-1.6 1.6.9 1.4-.6.5-1.8z");
+    c.stroke(gear);
+    circle(c, 10, 10, 2.3);
   },
   "panel-bottom": (c) => {
     rect(c, 3, 4, 14, 12, 3);
@@ -620,12 +622,7 @@ const glyphs: Record<IconName, Draw> = {
     wave(c, 6.2);
   },
   moon: (c) => {
-    // A disc less the one up and to its right: the arcs meet where the circles cross.
-    c.beginPath();
-    c.arc(10, 10, 6.5, 0.134, Math.PI * 2 - 1.704);
-    c.arc(13.2, 6.8, 5.2, Math.PI * 2 - 2.468, 0.898, true);
-    c.closePath();
-    c.stroke();
+    c.stroke(new Path2D("M16.7 12.2A7.3 7.3 0 0 1 7.8 3.3 7.4 7.4 0 1 0 16.7 12.2z"));
   },
 };
 

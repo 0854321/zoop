@@ -22,9 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Built from the commit that added `nsh/updater` (nsh#922), after v0.4.0; move to the next release once it is out (cached,
-  # a cold build takes a while).
-  NSH_REF: 12af3d778b588c2837267ff6aaed678eb5ad72a2
+  # Includes the virtual List and mobile sidebar animation used by the client.
+  NSH_REF: 90a7efd35f95c856754d2ef6901b704244069275
 
 defaults:
   run:
