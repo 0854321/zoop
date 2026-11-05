@@ -273,3 +273,18 @@ test("codex can write to project checkouts and scratch, not only its cwd", async
   expect(cmd.at(-1)).toBe("-");
   expect(cmd).toContain("--add-dir");
 });
+
+test("checkWaits: a waiting task wakes early once its wait_check exit code changes", async () => {
+  const { writeDoc, P } = await import("../src/core");
+  const { checkWaits } = await import("../src/cli");
+  const flag = `${tmpdir()}/noop-waitcheck-${process.pid}`;
+  rmSync(flag, { force: true });
+  const wake = new Date(Date.now() + 3600_000).toISOString();
+  writeDoc(P("tasks", "waiting", "T-9101.md"), { id: "T-9101", title: "wait for CI", wake_at: wake, wait_check: `test -f ${flag}` }, "x");
+  const t0 = Date.now();
+  expect((await checkWaits(t0, 1000)).size).toBe(0); // baseline: still pending
+  expect((await checkWaits(t0 + 10, 1000)).size).toBe(0); // throttled
+  await Bun.write(flag, "1");
+  expect([...(await checkWaits(t0 + 2000, 1000))]).toEqual(["T-9101"]);
+  rmSync(flag, { force: true });
+});

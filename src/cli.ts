@@ -210,7 +210,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     const mins = Math.min(120, Math.max(5, Number(res.wait_minutes) || 15));
     const wake = new Date(Date.now() + mins * 60_000).toISOString();
     // the owner's approval covers the whole task: a wait for CI before the approved merge must not revoke it
-    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, wake_at: wake, waiting_on: res.waiting_on ?? "" },
+    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, wake_at: wake, waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined },
       body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (check again ${wake})\n`);
     journal(host, `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${mins} 分钟后再看`);
   } else if (res.status === "needs_decision") {
@@ -411,11 +411,11 @@ async function handleFailure(meta: Record<string, string>, body: string, summary
 const GH_HEAVY = new Set(["dispatcher", "reviewer", "ops-watcher", "oss-triage", "release-manager"]);
 
 /** Parent tasks waiting on delegated children: when every child is finished, requeue the parent to consolidate. */
-function wakeParents(host: string) {
+function wakeParents(host: string, ready = new Set<string>()) {
   for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
     const { meta, body } = readDoc(p);
-    if (meta.wake_at) { // parked on something slow: back to the queue once the time is up
-      if (Date.parse(meta.wake_at) > Date.now()) continue;
+    if (meta.wake_at) { // parked on something slow: back to the queue once the time is up, or as soon as its check changes
+      if (Date.parse(meta.wake_at) > Date.now() && !ready.has(meta.id)) continue;
       writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, wake_at: undefined, status: undefined, claimed_by: undefined, resumed: "yes" },
         `${body}\nResumed after waiting on: ${meta.waiting_on ?? "?"}. Check it now; if still not ready, return "waiting" again.\n`);
       unlinkSync(p);
@@ -438,6 +438,35 @@ function wakeParents(host: string) {
   }
 }
 const runningIds = new Set<string>();
+
+/** Waits with a wait_check: run it every few minutes; once its exit code differs from the first run, the wait is over. */
+const waitChecks = new Map<string, { cmd: string; base?: number; next: number }>();
+export async function checkWaits(now = Date.now(), everyMs = 3 * 60_000): Promise<Set<string>> {
+  const ready = new Set<string>();
+  const due: [string, string][] = [];
+  const waiting = new Set<string>();
+  for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
+    const { meta } = readDoc(p);
+    if (!meta.wake_at || !meta.wait_check) continue;
+    waiting.add(meta.id);
+    const c = waitChecks.get(meta.id);
+    if (c && c.cmd === meta.wait_check && c.next > now) continue;
+    due.push([meta.id, meta.wait_check]);
+  }
+  await Promise.all(due.map(async ([id, cmd]) => {
+    const proc = Bun.spawn(["bash", "-lc", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
+    const timer = setTimeout(() => proc.kill(), 60_000);
+    const code = await proc.exited;
+    clearTimeout(timer);
+    if (proc.signalCode) return; // timed out: no answer this round
+    const prev = waitChecks.get(id);
+    const base = prev && prev.cmd === cmd ? prev.base : undefined;
+    waitChecks.set(id, { cmd, base: base ?? code, next: now + everyMs });
+    if (base !== undefined && code !== base) { ready.add(id); waitChecks.delete(id); }
+  }));
+  for (const id of waitChecks.keys()) if (!waiting.has(id)) waitChecks.delete(id);
+  return ready;
+}
 
 // ------------------------------------------------------------------ idle → ask owner with a concrete menu
 const inQuietHours = (cfg: Cfg) => {
@@ -482,6 +511,7 @@ function pruneMediaHourly(cfg: Cfg) {
 export async function tick(cfg: Cfg, background = false) {
   const host = hostName(cfg);
   const primary = isPrimary(cfg, host);
+  const ready = primary ? await checkWaits().catch(() => new Set<string>()) : new Set<string>();
   await locked(async () => {
     await _pull();
     try { writeRules(); } catch (e) { console.error(`rules.md: ${e}`); }
@@ -489,7 +519,7 @@ export async function tick(cfg: Cfg, background = false) {
     if (primary) {
       runRoutines(cfg, host, primary);
       reapStale(cfg, host);
-      wakeParents(host);
+      wakeParents(host, ready);
       await proposeBatch(cfg, host);
       noteUnservable(cfg, host);
     } else reapStale(cfg, host, true);

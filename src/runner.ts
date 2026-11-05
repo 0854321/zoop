@@ -11,6 +11,7 @@ export type Result = {
   status: "done" | "needs_decision" | "failed" | "delegated" | "waiting";
   wait_minutes?: number;
   waiting_on?: string;
+  wait_check?: string;
   summary: string;
   question?: string;
   options?: string[];
@@ -24,7 +25,8 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
 {
   "status": "done" | "needs_decision" | "failed" | "delegated" | "waiting",   // delegated = you split the work into followups and want to be woken up to consolidate when they finish; waiting = see below
   "waiting_on": "waiting only: what you wait for and how to check it, e.g. CI run https://github.com/o/r/actions/runs/123 (gh run view 123)",
-  "wait_minutes": 15,   // waiting only: when to wake you to check again (5-120)
+  "wait_minutes": 15,   // waiting only: latest time to wake you to check again (5-120)
+  "wait_check": "waiting only: a quick read-only shell command whose exit code changes when the wait is over, e.g. gh pr checks 123 -R o/r (exits 8 while pending); the daemon runs it every few minutes and wakes you as soon as it changes",
   "summary": "1-3 sentences: what you did / found (links to PRs, commits, files). For needs_decision this is all the owner reads before choosing: say what the PR / change does and what is at stake, the facts they need to choose (not why it needs them, they know)",
   "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？; name PRs/issues with their full URL in summary and options",
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
@@ -35,7 +37,8 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
 }
 Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
 Only use needs_decision after doing all preparation that does not depend on the answer.
-Never sit idle waiting on something slow (GitHub Actions/CI, a release, a review, a deploy): if the next step needs it, return "waiting" with waiting_on and wait_minutes.
+Never sit idle waiting on something slow (GitHub Actions/CI, a release, a review, a deploy): if the next step needs it, return "waiting" with waiting_on, wait_minutes and wait_check.
+Before returning "waiting", do every part of the task that does not depend on the condition (other platforms, docs, tests, screenshots, the next PR): implement and let CI verify rather than wait for a host. Waiting on another PR to merge is not a reason to stop: build on its branch or merge it locally, and note the dependency.
 The machine then runs other work and wakes you later with your notes; check the condition first, then continue from where you left off.`;
 
 export function buildPrompt(meta: Record<string, string>, body: string, cfg: Cfg, resourceNote = ""): string {
