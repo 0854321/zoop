@@ -440,7 +440,25 @@ function Btn(props: {
   );
 }
 
-/** The icon-only send button of a message composer: square, the same size and icon scale as the voice button beside it. */
+/**
+ * The floating surface of a message composer, which the conversation scrolls under: Apple's Liquid Glass where it is
+ * drawn (iOS 26, macOS 26), a blur elsewhere. Linux and Android before 12 draw no backdrop, so they stay opaque there,
+ * or the text behind would show through the draft.
+ */
+const composerGlass = (active = false): ViewStyle => ({
+  borderRadius: 24,
+  borderCurve: "continuous",
+  borderWidth: 1,
+  borderColor: alpha(colors.text, active ? 0.22 : 0.1),
+  boxShadow: "0 8px 28px rgba(0,0,0,0.1)",
+  transitionProperty: "border-color",
+  transitionDuration: 120,
+  ...(platform.os === "linux" || (platform.os === "android" && Number(platform.version) < 31)
+    ? { backgroundColor: colors.field }
+    : { backgroundColor: alpha(colors.field, 0.55), glassEffect: "regular" as const, backdropFilter: "blur(20px)" }),
+});
+
+/** The icon-only send button of a message composer: a circle, the same size and icon scale as the voice button beside it. */
 function SendButton(props: { disabled: boolean; onPress: () => void; testID: string }) {
   return (
     <View
@@ -456,8 +474,8 @@ function SendButton(props: { disabled: boolean; onPress: () => void; testID: str
         height: touch ? 44 : 36,
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: radius.control,
-        backgroundColor: props.disabled ? colors.raised : colors.accentFill,
+        borderRadius: touch ? 22 : 18,
+        backgroundColor: props.disabled ? alpha(colors.text, 0.08) : colors.accentFill,
         transitionProperty: "background-color",
         transitionDuration: 120,
       }}
@@ -1204,10 +1222,11 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     }
     saying.update((l) => l.filter((x) => x.id !== id));
   }
+  const composerHeight = signal(0);
   return (
     <View style={{ flex: 1 }}>
     <Scroll style={{ flex: 1 }}>
-      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 24 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingTop: 24, paddingBottom: composerHeight() + 24 }}>
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{missing() ? `找不到 ${props.id}。` : "读取中…"}</Text>}>
           <View style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -1303,14 +1322,17 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
       </View>
     </Scroll>
     <If when={t()}>
-      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 10, paddingBottom: 16 }}>
+      <View
+        onLayout={({ bounds }) => composerHeight.set(bounds.size.height)}
+        style={{ position: "absolute", bottom: 0, width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 10, paddingTop: 4, paddingBottom: 12, pointerEvents: "box-none" }}
+      >
         <If when={note()}>
           <Text style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>
         </If>
         <If when={hint() && !note()}>
           <Text style={{ fontSize: 13, color: colors.muted }}>{hint()}</Text>
         </If>
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 14, paddingRight: 6, paddingVertical: 6, borderRadius: radius.card, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 16, paddingRight: 8, paddingVertical: 8, ...composerGlass() }}>
           <Input
             testID="task-composer"
             multiline
@@ -3173,6 +3195,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     if (untracked(atEnd)) toEnd();
     else if (grew) unseen.update((u) => u + 1);
   });
+  /** What the floating composer covers at the bottom of the timeline; the latest message stays above it as it grows. */
+  const composerHeight = signal(0);
+  effect(() => { composerHeight(); if (untracked(atEnd)) toEnd(); });
   const jumpToEnd = () => {
     unseen.set(0);
     atEnd.set(true);
@@ -3648,8 +3673,15 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   );
   /** The channel: the timeline and the composer. */
   const channelPage = () => (
-      <View style={{ flex: 1, backgroundColor: colors.background }}>
-          <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height, transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
+          {/* Files dropped on the timeline or the composer attach their images. */}
+          <View
+            testID="composer-area"
+            onFileDragEnter={() => dropping.set(true)}
+            onFileDragLeave={() => dropping.set(false)}
+            onFileDrop={({ uris }) => { dropping.set(false); void attachUris(uris); }}
+            style={{ flex: 1 }}
+          >
             <Scroll
               ref={(r) => { scroller = r; scrollY = 0; }}
               style={{ flex: 1 }}
@@ -3662,7 +3694,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 if (end) unseen.set(0);
               }}
             >
-              <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: 24 }}>
+              <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}>
                 <If when={suggest()}>
                   <View
                     testID="notify-banner"
@@ -3753,7 +3785,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             </Scroll>
 
             <If when={!atEnd() && shown().length > 0}>
-              <View style={{ position: "absolute", left: 0, right: 0, bottom: 12, alignItems: "center", pointerEvents: "box-none" }}>
+              <View style={{ position: "absolute", left: 0, right: 0, bottom: composerHeight() + 8, alignItems: "center", pointerEvents: "box-none" }}>
                 <View
                   role="button"
                   accessibilityLabel="跳到最新"
@@ -3782,17 +3814,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 </View>
               </View>
             </If>
-          </View>
 
-          {/* The composer: files dropped on it (or on the timeline above) attach their images. */}
+          {/* The composer floats over the timeline, which scrolls on under its glass. */}
           <View
-            testID="composer-area"
-            onFileDragEnter={() => dropping.set(true)}
-            onFileDragLeave={() => dropping.set(false)}
-            onFileDrop={({ uris }) => { dropping.set(false); void attachUris(uris); }}
-            style={{ paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: keyboardFrame().height > 0 ? keyboardFrame().height + 8 : Math.max(12, safeArea().bottom + 8), transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}
+            onLayout={({ bounds }) => composerHeight.set(bounds.size.height)}
+            style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: keyboardFrame().height > 0 ? 8 : Math.max(12, safeArea().bottom + 8), transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration, pointerEvents: "box-none" }}
           >
-            <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 8 }}>
+            <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 8, pointerEvents: "box-none" }}>
               <If when={hub.conn() === "offline" || hub.conn() === "unauthorized"}>
                 <View
                   style={{
@@ -3802,7 +3830,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     paddingHorizontal: 14,
                     paddingVertical: 8,
                     borderRadius: radius.inset,
-                    backgroundColor: hub.conn() === "unauthorized" ? tints.danger : tints.warn,
+                    // over the timeline: the tint needs a solid base, or the messages show through
+                    backgroundColor: colors.surface,
+                    backgroundImage: `linear-gradient(${hub.conn() === "unauthorized" ? tints.danger : tints.warn}, ${hub.conn() === "unauthorized" ? tints.danger : tints.warn})`,
                   }}
                 >
                   <Text style={{ flex: 1, fontSize: 14, color: hub.conn() === "unauthorized" ? colors.danger : colors.warn }}>
@@ -3828,19 +3858,12 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               <View
                 style={{
                   gap: 6,
-                  borderRadius: 16,
-                  borderWidth: 1,
-                  borderColor: focused() || dropping() ? colors.accent : colors.fieldBorder,
-                  ...(dropping() ? { borderStyle: "dashed" as const } : {}),
-                  backgroundColor: colors.field,
-                  paddingTop: 10,
+                  paddingTop: 12,
                   paddingBottom: 8,
-                  paddingLeft: 16,
+                  paddingLeft: 18,
                   paddingRight: 8,
-                  boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-                  transitionProperty: "border-color",
-                  transitionDuration: 120,
-                  ...(focused() ? { outlineStyle: "solid", outlineWidth: 3, outlineColor: alpha(colors.accent, 0.12) } : {}),
+                  ...composerGlass(focused()),
+                  ...(dropping() ? { borderColor: colors.accent, borderStyle: "dashed" as const } : {}),
                 }}
               >
                 <If when={replyTo()}>
@@ -3879,7 +3902,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                             style={{
                               position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 11,
                               alignItems: "center", justifyContent: "center",
-                              backgroundColor: colors.text, borderWidth: 2, borderColor: colors.field,
+                              backgroundColor: colors.text,
                             }}
                           >
                             <Icon name="close" size={10} tint={colors.background} />
@@ -3924,9 +3947,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                       tooltip={touch ? undefined : <Tip label="添加图片（也可粘贴或拖入）" />}
                       onPress={() => void pickImages()}
                       hoverStyle={hovered()}
-                      style={{ width: touch ? 40 : 32, height: touch ? 40 : 32, marginLeft: -8, borderRadius: radius.control, alignItems: "center", justifyContent: "center" }}
+                      style={{ width: touch ? 40 : 32, height: touch ? 40 : 32, marginLeft: -8, borderRadius: touch ? 20 : 16, alignItems: "center", justifyContent: "center" }}
                     >
-                      <Icon name="image" size={18} tint={colors.muted} />
+                      <Icon name="image" size={touch ? 22 : 18} tint={colors.muted} />
                     </View>
                     <If when={speech() !== "off"}>
                       <Text testID="dictating" style={{ fontSize: 13, color: colors.accent, numberOfLines: 1 }}>
@@ -3935,7 +3958,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                     </If>
                   </View>
                   <If when={canDictate()}>
-                    {/* a large square target beside send, unfilled so it does not compete with send; while listening it becomes a red stop in the same place */}
+                    {/* a large round target beside send, unfilled so it does not compete with send; while listening it becomes a red stop in the same place */}
                     <View
                       testID="dictate"
                       role="button"
@@ -3947,7 +3970,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                       style={{
                         width: touch ? 44 : 36,
                         height: touch ? 44 : 36,
-                        borderRadius: radius.control,
+                        borderRadius: touch ? 22 : 18,
                         alignItems: "center",
                         justifyContent: "center",
                         backgroundColor: speech() === "off" ? undefined : tints.danger,
@@ -3962,6 +3985,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 </View>
               </View>
             </View>
+          </View>
           </View>
       </View>
   );
