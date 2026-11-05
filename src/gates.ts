@@ -1,7 +1,8 @@
 // Dumb, hard-coded gates for irreversible / outward-facing actions.
 // These are enforced mechanically (Claude Code --disallowedTools), not left to model judgment.
 // To run a gated action, an agent must go through `needs_decision`; after owner approval the
-// follow-up task is created with `gate_override: <decision id>` and the gate list is relaxed for that run only.
+// follow-up task is created with `gate_override: <decision id>` and the gate list is relaxed until the task ends,
+// including runs after it parks on "waiting" (D-0075); a new needs_decision or a finished run clears it.
 import type { Cfg } from "./core";
 import { GH_REST_GATES } from "./github";
 
