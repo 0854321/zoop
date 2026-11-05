@@ -441,21 +441,27 @@ function Btn(props: {
 }
 
 /**
- * The floating surface of a message composer, which the conversation scrolls under: Apple's Liquid Glass where it is
- * drawn (iOS 26, macOS 26), a blur elsewhere. Linux and Android before 12 draw no backdrop, so they stay opaque there,
- * or the text behind would show through the draft.
+ * A floating surface, for the composer and the sidebar: Apple's Liquid Glass where it is drawn (iOS 26, macOS 26), a
+ * blur elsewhere. Linux and Android before 12 draw no backdrop, so they stay opaque there, or what is behind would show
+ * through the text on it.
  */
-const composerGlass = (active = false): ViewStyle => ({
-  borderRadius: 24,
+const glass = (tint: string, cornerRadius: number): ViewStyle => ({
+  borderRadius: cornerRadius,
   borderCurve: "continuous",
   borderWidth: 1,
-  borderColor: alpha(colors.text, active ? 0.22 : 0.1),
+  borderColor: alpha(colors.text, 0.1),
   boxShadow: "0 8px 28px rgba(0,0,0,0.1)",
+  ...(platform.os === "linux" || (platform.os === "android" && Number(platform.version) < 31)
+    ? { backgroundColor: tint }
+    : { backgroundColor: alpha(tint, 0.55), glassEffect: "regular" as const, backdropFilter: "blur(20px)" }),
+});
+
+/** The floating surface of a message composer, which the conversation scrolls under. */
+const composerGlass = (active = false): ViewStyle => ({
+  ...glass(colors.field, 24),
+  borderColor: alpha(colors.text, active ? 0.22 : 0.1),
   transitionProperty: "border-color",
   transitionDuration: 120,
-  ...(platform.os === "linux" || (platform.os === "android" && Number(platform.version) < 31)
-    ? { backgroundColor: colors.field }
-    : { backgroundColor: alpha(colors.field, 0.55), glassEffect: "regular" as const, backdropFilter: "blur(20px)" }),
 });
 
 /** The icon-only send button of a message composer: a circle, the same size and icon scale as the voice button beside it. */
@@ -1496,16 +1502,18 @@ function SideRow(props: { onPress?: () => void; selected?: boolean; title?: stri
         alignItems: "center",
         gap: 10,
         paddingHorizontal: 10,
-        borderRadius: 7,
-        borderWidth: 1,
-        borderColor: props.selected ? colors.border : "transparent",
-        backgroundColor: props.selected ? colors.sidebarSelected : "transparent",
+        borderRadius: radius.control,
+        borderCurve: "continuous",
+        backgroundColor: props.selected ? alpha(colors.text, 0.08) : "transparent",
       }}
     >
       {props.children}
     </View>
   );
 }
+
+/** How far the wide layout's floating sidebar sits from the window's edges. */
+const sidebarInset = 8;
 
 function Sidebar(props: {
   hub: Hub;
@@ -1545,10 +1553,11 @@ function Sidebar(props: {
   };
   const rowText = () => ({ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }) as const;
   return (
-    <View style={{ flex: 1, backgroundColor: colors.sidebar }}>
+    <View style={{ flex: 1 }}>
       <View
         desktop={{ windowDrag: true }}
-        style={{ height: size.bar, flexDirection: "row", alignItems: "center", gap: 10, paddingLeft: (props.chrome && hasWindow ? titleBar().left : 0) + 18, paddingRight: 10 }}
+        // the floating panel starts below the window's top: its row stays centered on the title bar, level with the window controls
+        style={{ height: props.chrome ? size.bar - sidebarInset : size.bar, paddingBottom: props.chrome ? sidebarInset : 0, flexDirection: "row", alignItems: "center", gap: 10, paddingLeft: (props.chrome && hasWindow ? Math.max(0, titleBar().left - sidebarInset) : 0) + 18, paddingRight: 10 }}
       >
         <Mark size={24} />
         <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: colors.text }}>Noop</Text>
@@ -1681,7 +1690,7 @@ function Sidebar(props: {
           paddingRight: 10,
           paddingBottom: touch ? safeArea().bottom : 0,
           borderTopWidth: 1,
-          borderTopColor: colors.sidebarBorder,
+          borderTopColor: alpha(colors.text, 0.08),
         }}
       >
         <View style={{ flex: 1, gap: 1 }}>
@@ -1736,7 +1745,7 @@ function UpdateRow(props: { onRestart: () => void }) {
         accessibilityLabel={label()}
         onPress={press}
         class="active:bg-raised"
-        style={{ minHeight: touch ? 44 : 36, justifyContent: "center", gap: 2, paddingHorizontal: 18, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.sidebarBorder }}
+        style={{ minHeight: touch ? 44 : 36, justifyContent: "center", gap: 2, paddingHorizontal: 18, paddingVertical: 6, borderTopWidth: 1, borderTopColor: alpha(colors.text, 0.08) }}
       >
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <If when={state().kind === "installing"}>
@@ -4092,7 +4101,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   return (
     <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}>
       <If when={wide() && sidebarOpen()}>
-        <View style={{ width: size.sidebar, borderRightWidth: 1, borderRightColor: colors.sidebarBorder }}>{sidebar(false)}</View>
+        <View style={{ width: size.sidebar, margin: sidebarInset, marginRight: 0, ...glass(colors.sidebar, 18) }}>{sidebar(false)}</View>
       </If>
       <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
         {(route, index) => (
@@ -4140,7 +4149,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         open={drawer() && !wide()}
         onOpenChange={({ open }) => { if (!open) drawer.set(false); }}
         backdropClass="bg-scrim"
-        popupStyle={{ width: Math.min(size.sidebar + 16, windowSize().width * 0.86), paddingTop: touch ? safeArea().top : 0, backgroundColor: colors.sidebar }}
+        popupStyle={{ width: Math.min(size.sidebar + 16, windowSize().width * 0.86), paddingTop: touch ? safeArea().top : 0, ...glass(colors.sidebar, 0), borderWidth: 0, borderRightWidth: 1, borderTopRightRadius: 24, borderBottomRightRadius: 24 }}
       >
         {sidebar(true)}
       </Sheet>

@@ -53,10 +53,6 @@ export interface Palette {
   onLight: string;
   /** The app's sidebar, beside the page. */
   sidebar: string;
-  /** The selected row of the sidebar. */
-  sidebarSelected: string;
-  /** The sidebar's edge and the toolbar's hairline. */
-  sidebarBorder: string;
   /** A switch's track when off. */
   track: string;
   /** A switch's knob when off. */
@@ -105,8 +101,6 @@ export const colors: Palette = tokens<keyof Palette>({
   light: "primary",
   onLight: "primary-foreground",
   sidebar: "sidebar",
-  sidebarSelected: "sidebar-accent",
-  sidebarBorder: "sidebar-border",
   track: "track",
   knob: "knob",
   code: "code",

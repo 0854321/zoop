@@ -1036,7 +1036,7 @@ describe("phones", () => {
     await app.waitFor("待你决定");
     await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
     await app.waitFor("已用 60%");
-    expect(app.shows("待你决定")).toBe(false);
+    await app.waitUntil(() => !app.shows("待你决定"));
     await app.back();
     await app.waitUntil(() => !app.shows("已用 60%"));
     expect(app.shows("id:composer")).toBe(true);
