@@ -146,7 +146,8 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
   const dir = cwd.replace(/^~/, homedir());
   const proc = Bun.spawn(cmd, {
     cwd: existsSync(dir) ? dir : ROOT, stdin: new Blob([prompt]), stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, ...extraEnv, HUB_DATA: ROOT },
+    // Claude -p stops background subagents 10 min after the last turn; our own run limit bounds the run instead
+    env: { ...process.env, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", ...extraEnv, HUB_DATA: ROOT },
   });
   const tid = logFile.split("/").pop()!.match(/^([A-Z]-[\w]*?\d{4})-\d{10,}/)?.[1];
   if (tid) agentProcs.set(tid, proc);
