@@ -3043,7 +3043,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const divider = signal<string | null | undefined>(undefined);
   effect(() => {
     if (untracked(divider) !== undefined || !hub.loaded() || seen() === undefined) return;
-    divider.set(firstUnread(hub.events().filter((e) => !e.thread), seen() ?? null));
+    divider.set(firstUnread(shown(), seen() ?? null));
   });
   const timeline = computed((): (Row | { key: string; unread: true })[] => {
     const r = rows(shown());

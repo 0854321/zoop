@@ -849,7 +849,7 @@ describe("notifications", () => {
 
   test("badge, unread divider, and a notification opening an event", async () => {
     const app = await open("./App.tsx", {
-      storage: { ...STORAGE, "hub.lastSeen": ts(1), "hub.notifyAsked": "1" },
+      storage: { ...STORAGE, "hub.lastSeen": events[0].ts, "hub.notifyAsked": "1" },
       host: { handlers: browser(device()) },
       network: server(newLog()),
       width: 1200, height: 800, platform: "macos",
@@ -859,6 +859,15 @@ describe("notifications", () => {
     expect(app.host.calls().some((c) => c.name === "setSession" && (c.data as { session: string }).session === "tok")).toBe(true);
     await app.host.send("open", { ref: "D-0001" });
     await app.waitUntil(() => app.host.calls().some((c) => c.name === "clearNotifications" && (c.data as { ref: string }).ref === "D-0001"));
+  });
+
+  test("the unread divider skips an event the channel hides", async () => {
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.lastSeen": events[3].ts, "hub.notifyAsked": "1" },
+      network: hub([]),
+      width: 1200, height: 800, platform: "macos",
+    });
+    await app.waitFor("以下为新消息");
   });
 
   test("logging out turns this device's notifications off", async () => {
