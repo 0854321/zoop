@@ -859,6 +859,9 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
   );
 }
 
+/** Lists, task lists and footnotes draw as rows, which a bubble sized by its content measures too narrow (nsh#927). */
+const hasRows = (text: string) => /^\s*(?:[-*+]|\d+[.)])\s|^\[\^[^\]]+\]:/m.test(text);
+
 function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry?: () => void; onRecall?: () => void; onRef?: (ref: string) => void }) {
   const e = props.event;
   // an answer sent from the sidebar or a card ("D-0015 忽略") names its card in the text, not in `ref`
@@ -870,7 +873,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
     || (/^T-/.test(ref) && said() ? `${displayName(said()!.from)}：${firstLine(said()!.text)}` : "") : "");
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
-      <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
+      <View style={{ maxWidth: "82%", width: hasRows(e.text) ? "82%" : undefined, alignItems: "flex-end", gap: 4 }}>
         {/* what this answers, quoted above the bubble (press: back to the card) */}
         <If when={ref}>
           <View
@@ -900,6 +903,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
             borderBottomRightRadius: 6,
             backgroundColor: tints.accent,
             gap: 4,
+            alignSelf: hasRows(e.text) ? "stretch" : undefined,
           }}
         >
           {/^[DLP]-[A-Z]?\d{4} \S/.test(e.text) && !e.text.includes("\n")
