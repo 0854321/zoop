@@ -447,6 +447,7 @@ describe("channel", () => {
     await app.press("label:T-0097 · 等机器");
     await app.waitFor("id:task-nohost");
     expect(app.shows("id:cancel-task")).toBe(true);
+    expect(app.shows("id:finish-task")).toBe(true);
   });
 
   test("a routine run waiting on something slow stays in the list, and can be cancelled", async () => {

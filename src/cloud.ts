@@ -92,7 +92,7 @@ export function startCloudBridge(cfg: Cfg) {
           } else if (it.type === "op" && it.op) {
             await applyOp(it.op);
           } else if (it.type === "cancel" && typeof it.id === "string") {
-            await cancelTask(it.id);
+            await cancelTask(it.id, it.done === true);
           } else if (it.type === "update") {
             await updateFleet();
           } else if (it.type === "settings") {

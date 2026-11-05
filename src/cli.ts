@@ -663,7 +663,7 @@ async function daemon(cfg: Cfg) {
     await _commitPush(`[${host}] update requested`);
     return onlineHosts(cfg).length;
   }));
-  setCancelTask((tid) => locked(async () => {
+  setCancelTask((tid, done) => locked(async () => {
     await _pull();
     const where = ["inbox", "waiting", "blocked", "proposed", "active"].find((d) => existsSync(P("tasks", d, `${tid}.md`)));
     if (!where) return "not found";
@@ -672,19 +672,22 @@ async function daemon(cfg: Cfg) {
     if (where === "active" && meta.claimed_by && meta.claimed_by !== host) return `running on ${meta.claimed_by}`;
     cancelled.add(tid);
     agentProcs.get(tid)?.kill("SIGTERM");
-    writeDoc(P("tasks", "rejected", `${tid}.md`), { ...meta, claimed_by: undefined, cancelled: now(), wake_at: undefined },
+    if (done) writeDoc(P("tasks", "done", `${tid}.md`), { ...meta, claimed_by: undefined, finished: now(), wake_at: undefined },
+      `${body}\n\n## Done ${now()}\nThe owner marked this task done (finished it himself).\n`);
+    else writeDoc(P("tasks", "rejected", `${tid}.md`), { ...meta, claimed_by: undefined, cancelled: now(), wake_at: undefined },
       `${body}\n\n## Cancelled ${now()}\nThe owner cancelled this task.\n`);
     unlinkSync(f);
     for (const kid of (meta.children ?? "").split(",").filter(Boolean)) { // its sub-tasks go with it
       const k = ["inbox", "waiting", "blocked", "proposed"].find((d) => existsSync(P("tasks", d, `${kid}.md`)));
       if (!k) continue;
       const kd = readDoc(P("tasks", k, `${kid}.md`));
-      writeDoc(P("tasks", "rejected", `${kid}.md`), { ...kd.meta, cancelled: now() }, `${kd.body}\n\n## Cancelled ${now()}\nParent ${tid} was cancelled.\n`);
+      if (done) writeDoc(P("tasks", "done", `${kid}.md`), { ...kd.meta, finished: now() }, `${kd.body}\n\n## Done ${now()}\nParent ${tid} was marked done by the owner.\n`);
+      else writeDoc(P("tasks", "rejected", `${kid}.md`), { ...kd.meta, cancelled: now() }, `${kd.body}\n\n## Cancelled ${now()}\nParent ${tid} was cancelled.\n`);
       unlinkSync(P("tasks", k, `${kid}.md`));
     }
-    journal(host, `🛑 ${tid} 已按你的要求取消`);
-    await _commitPush(`[${host}] cancel ${tid}`);
-    return "cancelled";
+    journal(host, done ? `✅ ${tid} 你已标记为完成` : `🛑 ${tid} 已按你的要求取消`);
+    await _commitPush(`[${host}] ${done ? "finish" : "cancel"} ${tid}`);
+    return done ? "done" : "cancelled";
   }));
   // A new task from the owner's chat (created by the chat brain, or by create_task over MCP). It carries the channel's
   // recent conversation and the task it continues, so terse follow-ups ("不行，…", "这个细节记下来") keep their meaning.

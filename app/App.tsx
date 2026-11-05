@@ -1217,6 +1217,21 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id }); }
     catch { cancelling.set(false); }
   }
+  // the owner already finished it himself (merged by hand, …): end it as done, not cancelled
+  async function finish() {
+    const r = await AlertDialog.show({
+      title: `把 ${props.id} 标记为完成？`,
+      description: t()?.state === "active" ? "正在运行的 agent 会被停下，任务记为完成。" : "任务记为完成，不再执行。",
+      actions: [
+        { id: "keep", label: "返回", role: "cancel" },
+        { id: "done", label: "标记完成" },
+      ],
+    });
+    if (r.action !== "done") return;
+    cancelling.set(true);
+    try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id, done: true }); }
+    catch { cancelling.set(false); }
+  }
   // the task is its own conversation: what the owner and the team said about it, and a box to keep talking
   const saying = signal<HubEvent[]>([]);
   const talk = computed(() => {
@@ -1256,10 +1271,11 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
               <View style={{ flex: 1 }} />
               <If when={cancellable() && !cancelling()}>
+                <Btn testID="finish-task" label="完成" kind="ghost" icon="check" onPress={() => void finish()} />
                 <Btn testID="cancel-task" label="取消任务" kind="ghost" icon="close" onPress={() => void cancel()} />
               </If>
               <If when={cancelling()}>
-                <Text style={{ fontSize: 13, color: colors.muted }}>正在取消…</Text>
+                <Text style={{ fontSize: 13, color: colors.muted }}>处理中…</Text>
               </If>
             </View>
             <Text style={{ userSelect: "text", fontSize: 20, fontWeight: "600", color: colors.text }}>{t()!.title}</Text>

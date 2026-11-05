@@ -286,10 +286,11 @@ const ID = /^\s*([DLP]-[A-Z]?\d{4})\b[\s:：,，\-]*([\s\S]*)$/;
 
 /** Owner said something (local chat or via the cloud inbox): answer an open D-/P-/L- item, or hand it to lead. */
 let lastAnswer: { id: string; at: number } | null = null;
-let cancelHook: ((tid: string) => Promise<string>) | null = null;
-export const setCancelTask = (fn: (tid: string) => Promise<string>) => { cancelHook = fn; };
+let cancelHook: ((tid: string, done?: boolean) => Promise<string>) | null = null;
+export const setCancelTask = (fn: (tid: string, done?: boolean) => Promise<string>) => { cancelHook = fn; };
 /** The owner cancels a task (queued, waiting, blocked, proposed or running). */
-export const cancelTask = async (tid: string) => (cancelHook ? cancelHook(tid) : "not available");
+/** done: the owner finished it himself (merged by hand, …): it ends as done, not cancelled. */
+export const cancelTask = async (tid: string, done = false) => (cancelHook ? cancelHook(tid, done) : "not available");
 let opHook: ((op: any) => Promise<unknown>) | null = null;
 export const setApplyOp = (fn: (op: any) => Promise<unknown>) => { opHook = fn; };
 /** A write the cloud MCP server handed over (create/amend/cancel a task, remember, …): performed here, where the data lives. */
@@ -464,9 +465,9 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
         return json({ ...t, events: feed("", 2000).filter((e) => e.ref && refs.has(e.ref)) });
       }
       if (url.pathname === "/api/tasks/cancel" && req.method === "POST") {
-        const { id } = (await req.json().catch(() => ({}))) as { id?: string };
+        const { id, done } = (await req.json().catch(() => ({}))) as { id?: string; done?: boolean };
         if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
-        return json({ ok: true, result: await cancelTask(id) });
+        return json({ ok: true, result: await cancelTask(id, done === true) });
       }
       if (url.pathname === "/api/fleet/update" && req.method === "POST") return json({ ok: true, result: await updateFleet() });
       if (url.pathname === "/api/media" && req.method === "POST") {

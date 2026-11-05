@@ -496,9 +496,9 @@ export class Hub extends DurableObject<Env> {
     }
     if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it
       if (who === "machine") return json({ error: "forbidden" }, 403);
-      const { id } = (await req.json().catch(() => ({}))) as { id?: string };
+      const { id, done } = (await req.json().catch(() => ({}))) as { id?: string; done?: boolean };
       if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
-      this.toInbox({ type: "cancel", id });
+      this.toInbox({ type: "cancel", id, done: done === true });
       return json({ ok: true });
     }
     if (p === "/api/fleet/update" && m === "POST") { // owner: every machine updates to the latest code; the primary acts on it
