@@ -377,8 +377,8 @@ export function needsLabel(needs = ""): string {
   return `有 ${parts.join(" + ")} 的机器`;
 }
 
-/** Waiting its turn: queued, waiting on sub-tasks, or waiting for a machine that can run it. */
-export const isQueued = (state?: string) => state === "inbox" || state === "waiting" || state === "nohost";
+/** Not finished and not running now: queued, waiting on sub-tasks or something slow, or waiting for a machine that can run it. */
+export const isQueued = (state?: string) => state === "inbox" || state === "waiting" || state === "parked" || state === "nohost";
 
 /** A machine's line under 版本 while (and after) an update runs; `busy` while it is still on the way. */
 export type UpdateLine = { text: string; tone: "muted" | "ok" | "bad" | "busy"; busy: boolean };

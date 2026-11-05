@@ -155,11 +155,15 @@ export function listAgents(st: ToolStore) {
 /** Routines from config.toml ([[routine]] blocks): name, schedule, agent, enabled, and the first line of the prompt. */
 export function listRoutines(st: ToolStore) {
   const toml = st.read("config.toml")?.text ?? "";
+  // changes made from the UI live in settings.json and win over config.toml, as they do for the scheduler (loadConfig)
+  let ui: Record<string, { enabled?: boolean; every?: string }> = {};
+  try { ui = JSON.parse(st.read("settings.json")?.text ?? "{}").routines ?? {}; } catch {}
   return toml.split(/^\[\[routine\]\]\s*$/m).slice(1).map((b) => {
     const block = b.split(/^\[/m)[0];
     const v = (k: string) => block.match(new RegExp(`^${k}\\s*=\\s*"""([\\s\\S]*?)"""|^${k}\\s*=\\s*"([^"]*)"|^${k}\\s*=\\s*(\\w+)`, "m"));
     const g = (k: string) => { const m = v(k); return m ? (m[1] ?? m[2] ?? m[3]) : undefined; };
-    return { name: g("name"), every: g("every"), at: g("at"), agent: g("agent"), enabled: g("enabled") !== "false", about: (g("desc") ?? g("prompt") ?? "").split("\n")[0].slice(0, 200) };
+    const change = ui[g("name") ?? ""] ?? {};
+    return { name: g("name"), every: change.every ?? g("every"), at: g("at"), agent: g("agent"), enabled: change.enabled ?? g("enabled") !== "false", about: (g("desc") ?? g("prompt") ?? "").split("\n")[0].slice(0, 200) };
   }).filter((r) => r.name);
 }
 /** Lines of the journal (journal/YYYY-MM-DD.md) that contain every word of the query, newest day first. */
@@ -197,7 +201,7 @@ export function statusView(st: ToolStore) {
   return { hub: s.hub, tasks: s.tasks, decisions: s.decisions,
     hosts: (s.hosts ?? []).map((h: any) => ({ host: h.host, online: h.online, state: h.state, caps: h.caps, running: h.running ?? h.tasks })),
     active: (s.active ?? []).map((t: any) => ({ id: t.id, title: t.title, agent: t.agent, host: t.host, started: t.started, activity: t.activity })),
-    open: (s.recent ?? []).filter((t: any) => ["inbox", "nohost", "waiting", "blocked"].includes(t.state)).map((t: any) => ({ id: t.id, title: t.title, state: t.state, agent: t.agent })) };
+    open: (s.recent ?? []).filter((t: any) => ["inbox", "nohost", "waiting", "parked", "blocked"].includes(t.state)).map((t: any) => ({ id: t.id, title: t.title, state: t.state, agent: t.agent })) };
 }
 export function feedView(st: ToolStore, cursor: number | undefined, limit: number) {
   const n = Math.max(1, Math.min(limit || 50, 300));

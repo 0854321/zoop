@@ -1161,7 +1161,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   const section = (title: string) => (
     <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
   );
-  const cancellable = () => ["active", "inbox", "nohost", "waiting", "blocked", "proposed"].includes(t()?.state ?? "");
+  const cancellable = () => ["active", "inbox", "nohost", "waiting", "parked", "blocked", "proposed"].includes(t()?.state ?? "");
   const cancelling = signal(false);
   async function cancel() {
     const running = t()?.state === "active";
@@ -1602,7 +1602,7 @@ function Sidebar(props: {
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : a().state === "nohost" ? `等 ${needsLabel((a() as { needs?: string }).needs)}` : "排队中"}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? "等子任务" : a().state === "parked" ? "等外部结果" : a().state === "nohost" ? `等 ${needsLabel((a() as { needs?: string }).needs)}` : "排队中"}</Text>
                 </SideRow>
               )}
             </Each>

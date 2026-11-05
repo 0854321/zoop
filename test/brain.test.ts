@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type Model, context, dataActs, localStore, reopenTask, parseTurn, think } from "../src/brain";
 import { DATA } from "../src/core";
-import { runTool, taskInfo, toolsFor, TOOLS, type WriteOp } from "../cloud/src/tools";
+import { runTool, taskInfo, toolsFor, TOOLS, type WriteOp, listRoutines } from "../cloud/src/tools";
 
 const put = (p: string, s: string) => { mkdirSync(dirname(join(DATA, p)), { recursive: true }); writeFileSync(join(DATA, p), s); };
 put("tasks/active/T-0184.md", "---\nid: T-0184\ntitle: noop: MCP server\nagent: lead\nclaimed_by: h1\nrepo: huacnlee/noop\n---\nBuild it.\n");
@@ -163,4 +163,13 @@ test("a task's detail names the cards it asked", () => {
   put("decisions/closed/D-0303.md", "---\nid: D-0303\ntask: T-0100\nquestion: 别的\n---\n");
   put("tasks/done/T-0302.md", "---\nid: T-0302\ntitle: x\nagent: lead\n---\nAsked.\n");
   expect(taskInfo(store().st, "T-0302")?.decisions).toEqual(["D-0301"]);
+});
+
+test("list_routines: a change made in settings wins over config.toml, as it does for the scheduler", () => {
+  const files: Record<string, string> = {
+    "config.toml": `[[routine]]\nname = "macos-check"\nevery = "1d"\nagent = "lead"\nprompt = "x"\n\n[[routine]]\nname = "nightly"\nevery = "1d"\nagent = "lead"\nenabled = false\nprompt = "y"\n`,
+    "settings.json": JSON.stringify({ routines: { "macos-check": { enabled: false }, nightly: { enabled: true, every: "2h" } } }),
+  };
+  const rows = listRoutines({ read: (p: string) => (files[p] === undefined ? undefined : { text: files[p] }) } as any);
+  expect(rows.map((r) => [r.name, r.enabled, r.every])).toEqual([["macos-check", false, "1d"], ["nightly", true, "2h"]]);
 });

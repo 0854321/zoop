@@ -234,3 +234,24 @@ test("a result block survives a later turn from a background task notification",
   rmSync(log, { force: true });
   expect(res).toMatchObject({ status: "done", summary: "tested" });
 });
+
+test("status: a task parked on something slow stays listed however many tasks finished after it", async () => {
+  const { status } = await import("../src/server");
+  const { P } = await import("../src/core");
+  const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+  const doc = (id: string, extra: string) => `---\nid: ${id}\ntitle: ${id}\nsource: routine:macos-check\n${extra}\n---\n\nbody\n`;
+  mkdirSync(P("tasks", "waiting"), { recursive: true });
+  mkdirSync(P("tasks", "done"), { recursive: true });
+  const files = [P("tasks", "waiting", "T-9900.md")];
+  writeFileSync(files[0], doc("T-9900", "started: 2020-01-01T00:00:00Z\nwake_at: 2999-01-01T00:00:00Z"));
+  for (let i = 1; i <= 15; i++) {
+    const f = P("tasks", "done", `T-99${String(i).padStart(2, "0")}.md`);
+    files.push(f);
+    writeFileSync(f, doc(`T-99${String(i).padStart(2, "0")}`, "finished: 2999-01-01T00:00:00Z"));
+  }
+  try {
+    expect(status().recent.find((t) => t.id === "T-9900")?.state).toBe("parked");
+  } finally {
+    for (const f of files) rmSync(f);
+  }
+});

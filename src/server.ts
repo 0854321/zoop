@@ -183,10 +183,10 @@ export function status() {
   return {
     tasks: Object.fromEntries(["proposed", "inbox", "active", "waiting", "blocked", "failed", "done"].map((f) => [f, count(f)])),
     active,
-    // every open task (queued, waiting on sub-tasks, blocked) and the newest finished ones; a task copied in two folders mid-sync shows once, as running
+    // every open task (queued, waiting on sub-tasks or something slow, blocked) and the newest finished ones; a task copied in two folders mid-sync shows once, as running
     recent: (() => {
       const rest = others.filter((t) => !active.some((a) => a.id === t.id));
-      const open = rest.filter((t) => ["inbox", "nohost", "waiting", "blocked"].includes(t.state));
+      const open = rest.filter((t) => ["inbox", "nohost", "waiting", "parked", "blocked"].includes(t.state));
       return [...open, ...rest.filter((t) => !open.includes(t)).slice(0, 12)].sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
     })(),
     decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),

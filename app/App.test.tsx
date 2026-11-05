@@ -419,6 +419,17 @@ describe("channel", () => {
     expect(app.shows("id:cancel-task")).toBe(true);
   });
 
+  test("a routine run waiting on something slow stays in the list, and can be cancelled", async () => {
+    const parked = { id: "T-0236", title: "macos-check · 2026-11-04 10:00", agent: "rust-maintainer", state: "parked", started: ts(40), updated: ts(40) };
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [parked, ...status.recent] } } },
+    });
+    await app.waitFor("等外部结果");
+    await app.press("label:T-0236 · 等外部结果");
+    await app.waitFor("id:cancel-task");
+  });
+
   test("machines show the code they run, and settings updates them all after a confirm", async () => {
     let updates = 0;
     const app = await open("./App.tsx", {
