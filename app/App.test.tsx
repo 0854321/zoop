@@ -177,6 +177,45 @@ describe("channel", () => {
     await app.waitFor("Long timeline message 89");
     expect(app.shows("Long timeline message 0")).toBe(false);
   });
+  test("a new message leaves a timeline scrolled up where it is; at the end it follows", async () => {
+    const many = Array.from({ length: 90 }, (_, i) => ({ id: `tail-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Tail message ${i}` }));
+    const later: unknown[] = [];
+    const arrive = (text: string) => later.push({ id: text, ts: new Date().toISOString(), from: "agent", kind: "notice", text });
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 390, height: 800, platform: "ios",
+      network: { ...hub([], many), [`GET ${URL}/api/feed?*`]: () => ({ body: { events: later.splice(0) } }) },
+    });
+    await app.waitFor("Tail message 89");
+    expect(app.shows("label:跳到最新")).toBe(false);
+
+    // Just off the end, closer than a message: it stays put and counts what came below.
+    await app.scroll("id:timeline", -40);
+    await app.waitFor("跳到最新");
+    arrive("Below the fold");
+    await app.waitFor("1 条新消息", { timeout: 10000 });
+    await app.wait(300); // following would reach the end, and the end clears the count
+    expect(app.shows("1 条新消息")).toBe(true);
+
+    // Further up, what is on screen does not change.
+    await app.scroll("id:timeline", -1500);
+    const onScreen = () => app.texts().filter((t) => t.startsWith("Tail message"));
+    const before = onScreen();
+    expect(before.length).toBeGreaterThan(0);
+    arrive("Further below");
+    await app.waitFor("2 条新消息", { timeout: 10000 });
+    await app.wait(300);
+    // Rows mounted around the viewport come and go; none from nearer the end may appear.
+    expect(onScreen().filter((t) => !before.includes(t))).toEqual([]);
+
+    // Back at the end, new messages show by themselves.
+    await app.press("label:跳到最新");
+    await app.waitFor("Further below");
+    await app.waitUntil(() => !app.shows("label:跳到最新"));
+    arrive("Followed");
+    await app.waitFor("Followed", { timeout: 10000 });
+    expect(app.shows("label:跳到最新")).toBe(false);
+  });
+
   test("proposal selection survives a recycled timeline cell", async () => {
     const proposal = { id: "proposal-long", ts: ts(8), from: "hub", kind: "proposals", ref: "P-0900", text: "请选择\n1. 保存选择" };
     const many = Array.from({ length: 90 }, (_, i) => ({ id: `recycle-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Recycled message ${i}` }));

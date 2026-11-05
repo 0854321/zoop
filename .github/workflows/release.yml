@@ -22,8 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Includes the virtual List and mobile sidebar animation used by the client.
-  NSH_REF: 90a7efd35f95c856754d2ef6901b704244069275
+  # Includes the virtual List with bottom alignment and the mobile sidebar animation used by the client.
+  NSH_REF: 445fd332836813c57768b576f12c11f907217624
 
 defaults:
   run:

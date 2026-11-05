@@ -3284,17 +3284,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   let composer: InputRef | undefined;
 
   const toEnd = (animated = false) => setTimeout(() => scroller?.scrollToEnd({ animated }), 40);
+  // The list follows its end by itself (alignment="bottom"); scrolled further up than AT_END, it stays put and this counts what came below.
+  const AT_END = 24;
   let count = 0;
   effect(() => {
     const n = shown().length;
     const grew = n > count;
     count = n;
-    if (untracked(atEnd)) toEnd();
-    else if (grew) unseen.update((u) => u + 1);
+    if (grew && !untracked(atEnd)) unseen.update((u) => u + 1);
   });
-  /** What the floating composer covers at the bottom of the timeline; the latest message stays above it as it grows. */
+  /** What the floating composer covers at the bottom of the timeline. */
   const composerHeight = signal(0);
-  effect(() => { composerHeight(); if (untracked(atEnd)) toEnd(); });
   const jumpToEnd = () => {
     unseen.set(0);
     atEnd.set(true);
@@ -3773,6 +3773,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             <List
               testID="timeline"
               each={timeline()}
+              alignment="bottom"
+              maintainVisibleContentPosition={{ autoscrollToBottomThreshold: AT_END }}
               estimatedItemSize={120}
               contentStyle={{ paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}
               keyExtractor={(row) => row.key}
@@ -3782,7 +3784,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               scrollEventThrottle={100}
               keyboardShouldPersistTaps="handled"
               onScroll={(ev) => {
-                const end = ev.contentSize.height - ev.offset.y - ev.size.height < 80;
+                const end = ev.contentSize.height - ev.offset.y - ev.size.height <= AT_END;
                 if (end !== untracked(atEnd)) atEnd.set(end);
                 if (end) unseen.set(0);
               }}
