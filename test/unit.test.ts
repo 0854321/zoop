@@ -255,3 +255,21 @@ test("status: a task parked on something slow stays listed however many tasks fi
     for (const f of files) rmSync(f);
   }
 });
+
+test("codex can write to project checkouts and scratch, not only its cwd", async () => {
+  const { cliCommand, codexWritableDirs } = await import("../src/runner");
+  const { mkdtempSync, mkdirSync, symlinkSync, realpathSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "noop-home-")));
+  mkdirSync(join(home, "work"));
+  mkdirSync(join(home, ".noop", "work"), { recursive: true });
+  symlinkSync(join(home, ".noop"), join(home, ".agent-hub"));
+  const dirs = codexWritableDirs(home);
+  expect(dirs).toContain(join(home, "work"));
+  expect(dirs.filter((d) => d === join(home, ".noop", "work")).length).toBe(1); // the symlinked alias collapses
+  expect(dirs).not.toContain(join(home, ".cargo")); // missing dirs are left out
+  const cmd = cliCommand("codex", {} as any);
+  expect(cmd.at(-1)).toBe("-");
+  expect(cmd).toContain("--add-dir");
+});
