@@ -2,6 +2,7 @@ config.local.toml
 *.eml
 .env
 logs/
+.nsh/
 node_modules/
 .wrangler/
 .claude/
