@@ -24,7 +24,7 @@ concurrency:
 env:
   # Built from the commit that finished `Notifications` on every platform (nsh#931, #932, #933), after v0.4.0; move to the next release once it is out (cached,
   # a cold build takes a while).
-  NSH_REF: 8226a75323e9c5ab44d8631fb18d01a6a0b0854e
+  NSH_REF: 2ab3b6bc27f151afd5d932c63746a8b4b15a00e9
 
 defaults:
   run:
