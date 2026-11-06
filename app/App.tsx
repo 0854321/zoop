@@ -35,6 +35,7 @@ import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
+import { avatarOf } from "./avatars";
 import { appendQuote } from "./quote";
 import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
 import {
@@ -825,14 +826,16 @@ function Avatar(props: { from: string; small?: boolean; testID?: string }) {
       }}
     >
       <If when={hubbed} else={
-        <>
+        <If when={avatarOf(props.from) !== null} else={<>
           <Text style={{ fontSize: props.small ? 12 : 16, fontWeight: "700", color: p.tint }}>{displayName(props.from).slice(0, 1).toUpperCase()}</Text>
           <If when={!props.small}>
             <View style={{ position: "absolute", right: -3, bottom: -3, width: 17, height: 17, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
               <Text style={{ fontSize: 10, lineHeight: 12, color: p.tint }}>{p.mark}</Text>
             </View>
           </If>
-        </>
+        </>}>
+          <Image src={avatarOf(props.from) ?? ""} style={{ width: box, height: box, borderRadius: box / 2 }} />
+        </If>
       }>
         <View style={{ width: props.small ? 8 : 12, height: props.small ? 8 : 12, borderRadius: 6, backgroundColor: colors.muted }} />
       </If>
