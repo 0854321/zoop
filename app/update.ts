@@ -30,17 +30,23 @@ export function createUpdates(api: UpdaterApi, onChange: (state: UpdateState) =>
 
   /** A failed check or download stays silent and the next tick tries again: a blip is not worth a banner. */
   async function check() {
-    // A newer release can wait for this one's restart, and checking again would drop the download it holds.
-    if (busy || state.kind === "ready" || state.kind === "installing" || state.kind === "failed") return;
+    // A download waiting for its restart keeps being checked: a newer release replaces it, so the restart lands on
+    // the latest instead of one version short (nsh/updater keeps the held download when the same version comes back).
+    if (busy || state.kind === "installing" || state.kind === "failed") return;
     busy = true;
+    let downloading = false;
     try {
       const found = await api.check();
       if (!found) { if (state.kind !== "none") set({ kind: "none" }); return; }
       if (!found.canInstall) return set({ kind: "link", version: found.version, url: found.url });
+      if (state.kind === "ready" && state.version === found.version) return;
+      downloading = true;
       await api.download();
       set({ kind: "ready", version: found.version });
     } catch (e) {
       console.warn("update check failed:", String(e));
+      // A newer download that failed has already replaced the held one, so there is nothing left to restart into.
+      if (downloading && state.kind === "ready") set({ kind: "none" });
     } finally {
       busy = false;
     }
