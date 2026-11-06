@@ -3266,11 +3266,25 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     if (untracked(divider) !== undefined || !hub.loaded() || seen() === undefined) return;
     divider.set(firstUnread(shown(), seen() ?? null));
   });
-  const timeline = computed((): (Row | { key: string; unread: true })[] => {
-    const r = rows(shown());
+  // List diffs its items by identity: rebuilt rows would read as all replaced on every new message,
+  // losing their measurements and the reader's place. Reuse each row while its event is the same.
+  type TimelineRow = Row | { key: string; unread: true };
+  let built = new Map<string, TimelineRow>();
+  const UNREAD: TimelineRow = { key: "unread", unread: true };
+  const timeline = computed((): TimelineRow[] => {
     const d = divider();
-    const at = d ? r.findIndex((x) => "event" in x && x.event.id === d) : -1;
-    return at < 0 ? r : [...r.slice(0, at), { key: "unread", unread: true }, ...r.slice(at)];
+    const next = new Map<string, TimelineRow>();
+    const out: TimelineRow[] = [];
+    for (const row of rows(shown())) {
+      if ("event" in row && row.event.id === d) out.push(UNREAD);
+      const old = built.get(row.key);
+      const keep = old && ("event" in row ? "event" in old && old.event === row.event : "day" in old);
+      const r = keep ? old : row;
+      next.set(r.key, r);
+      out.push(r);
+    }
+    built = next;
+    return out;
   });
   const pending = computed(() => hub.events().filter((e) => isAsk(e) && !answered().has(e.ref!)));
   /** The pending ask the keys act on: the one picked (J / K, the sidebar), else the newest. */
