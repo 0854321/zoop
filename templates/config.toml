@@ -125,7 +125,7 @@ prompt = "Check the uptime alert source listed in memory/projects.md. Apply your
 
 [[routine]]
 name = "pr-review"
-signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open repo:longbridge/nsh repo:longbridge/gpui-kit repo:longbridge/gpui-fast repo:huacnlee/omamail repo:huacnlee/omasend repo:huacnlee/disktree' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
+signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open repo:longbridge/nsh repo:longbridge/gpui-kit repo:longbridge/gpui-fast repo:huacnlee/omamail repo:huacnlee/omasend repo:huacnlee/disktree repo:huacnlee/noop' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
 every = "30m"
 agent = "reviewer"
 requires = "os:linux"
