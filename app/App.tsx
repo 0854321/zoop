@@ -1251,6 +1251,7 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
   const loading = signal(false);
   const query = signal("");
   let asked = 0; // the newest request; an older answer that lands late is dropped
+  let typing: ReturnType<typeof setTimeout> | undefined; // search once typing pauses, not on every keystroke
   async function load(reset: boolean) {
     const mine = ++asked;
     loading.set(true);
@@ -1271,7 +1272,7 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
         <Input
           testID="task-search"
           value={query()}
-          onChange={({ value }) => { query.set(value); void load(true); }}
+          onChange={({ value }) => { query.set(value); clearTimeout(typing); typing = setTimeout(() => void load(true), 300); }}
           placeholder={L("Search by ID, title or member", "搜索编号、标题或成员")}
           class="placeholder:text-faint"
           style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}

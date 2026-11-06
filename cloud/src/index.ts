@@ -99,6 +99,13 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, email TEXT, created INTEGER, last_seen INTEGER, ua TEXT);
       CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, session TEXT, p256dh TEXT, auth TEXT, label TEXT, created INTEGER);`);
     initFilesSchema(this.sql);
+    // events.ref, indexed: a task's conversation is read by ref, never by scanning every event's JSON (rows_read is billed per row)
+    try { this.sql.exec("ALTER TABLE events ADD COLUMN ref TEXT"); } catch { /* exists */ }
+    this.sql.exec("CREATE INDEX IF NOT EXISTS events_ref ON events (ref)");
+    if (this.sql.exec("SELECT v FROM kv WHERE k = 'events_ref_filled'").toArray().length === 0) {
+      this.sql.exec("UPDATE events SET ref = json_extract(json, '$.ref') WHERE ref IS NULL");
+      this.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES ('events_ref_filled', '1')");
+    }
     this.mcp = new Mcp({
       sql: this.sql,
       status: () => this.statusView(),
@@ -180,7 +187,7 @@ export class Hub extends DurableObject<Env> {
   append(e: Partial<Ev>): Ev {
     const ev = { id: crypto.randomUUID(), ts: new Date().toISOString(), ...e } as Ev;
     this.spend(3);
-    this.sql.exec("INSERT INTO events (ts, json) VALUES (?, ?)", ev.ts, JSON.stringify(ev));
+    this.sql.exec("INSERT INTO events (ts, json, ref) VALUES (?, ?, ?)", ev.ts, JSON.stringify(ev), typeof ev.ref === "string" ? ev.ref : null);
     if (Math.random() < 0.02) this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
     const s = JSON.stringify(ev);
     for (const ws of this.ctx.getWebSockets()) try { ws.send(s); } catch {}
@@ -491,7 +498,7 @@ export class Hub extends DurableObject<Env> {
       if (!t) return json({ error: "not found" }, 404);
       // its whole conversation, however far back: the feed the app holds only has the newest events
       const refs = [t.id, ...t.decisions];
-      const rows = this.sql.exec(`SELECT json FROM events WHERE json_extract(json, '$.ref') IN (${refs.map(() => "?").join(",")}) ORDER BY seq`, ...refs).toArray();
+      const rows = this.sql.exec(`SELECT json FROM events WHERE ref IN (${refs.map(() => "?").join(",")}) ORDER BY seq`, ...refs).toArray();
       return json({ ...t, events: rows.map((r) => JSON.parse(r.json as string)) });
     }
     if (p === "/api/tasks/cancel" && m === "POST") { // owner: cancel a task; the primary host acts on it

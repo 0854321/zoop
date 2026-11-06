@@ -82,9 +82,25 @@ export function readFile(sql: McpSql, path: string): FileRow | null {
   const r = sql.exec("SELECT content, updated FROM files WHERE path = ? AND deleted = 0", path).toArray()[0];
   return r ? { path, text: textOf(r.content), updated: r.updated as string } : null;
 }
+// Listings are kept per directory until a file under it changes: the task history, a task's page and the MCP resource
+// list all list tasks/ and decisions/, a few hundred rows each, while what changed since is a few rows of the files_rev index.
+const listCache = new WeakMap<McpSql, Map<string, { rev: number; rows: FileRow[] }>>();
 function listDir(sql: McpSql, dir: string): FileRow[] {
-  return sql.exec("SELECT path, content, updated FROM files WHERE path >= ? AND path < ? AND deleted = 0 ORDER BY path DESC LIMIT 2000",
+  let cache = listCache.get(sql);
+  if (!cache) listCache.set(sql, cache = new Map());
+  const hit = cache.get(dir);
+  if (hit) {
+    const changed = sql.exec("SELECT path, rev FROM files WHERE rev > ? ORDER BY rev", hit.rev).toArray();
+    if (!changed.some((r) => String(r.path).startsWith(dir))) {
+      if (changed.length) hit.rev = Number(changed[changed.length - 1].rev);
+      return hit.rows;
+    }
+  }
+  const rev = Number(sql.exec("SELECT MAX(rev) AS n FROM files").toArray()[0]?.n ?? 0);
+  const rows = sql.exec("SELECT path, content, updated FROM files WHERE path >= ? AND path < ? AND deleted = 0 ORDER BY path DESC LIMIT 2000",
     dir, dir.slice(0, -1) + "0").toArray().map((r) => ({ path: r.path as string, text: textOf(r.content), updated: r.updated as string }));
+  cache.set(dir, { rev, rows });
+  return rows;
 }
 
 const MCP_TOOLS = toolsFor("mcp");
