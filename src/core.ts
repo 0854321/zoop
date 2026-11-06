@@ -110,6 +110,10 @@ export function writeDoc(path: string, meta: Record<string, string | undefined>,
 export const list = (dir: string, re = /\.md$/) =>
   existsSync(dir) ? readdirSync(dir).filter((f) => re.test(f)).sort().map((f) => join(dir, f)) : [];
 
+/** "…/decisions/open/D-0001.md" → "D-0001". Always use this (not split("/")): on Windows list() returns
+ *  backslash paths, so splitting on "/" yields the whole path — that silently broke every chat reply to a card. */
+export const fileId = (path: string) => basename(path, ".md");
+
 /** Non-primary hosts mint IDs with a host letter (T-M0001) so two machines never create the same ID. */
 let idTag = "";
 export const setIdTag = (tag: string) => { idTag = tag; };

@@ -271,6 +271,9 @@ async function handleReplies(cfg: Cfg, host: string) {
       closeDecision(r.id, r.answer, `owner(${r.source})`);
       journal(host, `✔ ${r.id} owner answered via ${r.source}: ${r.answer}`);
       await notify(`收到 ${r.id}：${r.answer} — 任务已重新排队`, cfg);
+    } else if (r.id.startsWith("D-") && existsSync(P("decisions", "closed", `${r.id}.md`))) {
+      // a reply to a card that is already answered: say so in the journal instead of dropping it silently
+      journal(host, `↩️ ${r.id} 已经答过，这次的重复回复被忽略`);
     } else if (/^override\b/i.test(r.answer) && overrideJudge(r.id, r.answer.replace(/^override[\s:：]*/i, ""), r.source, host)) {
       await notify(`已记录你对 ${r.id} 的纠正，judge 以后会参考；已创建重做任务`, cfg);
     }

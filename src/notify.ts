@@ -1,7 +1,7 @@
 // Slack / Discord: outbound notifications + polling owner replies (no public webhook server needed).
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
-import { type Cfg, P, hostName, isPrimary, list } from "./core";
+import { type Cfg, P, fileId, hostName, isPrimary, list } from "./core";
 import { appendEvent, type Event, forwardEvent, storeMedia, uploadMedia } from "./server";
 
 export type NotifyOpts = { kind?: Event["kind"]; ref?: string; options?: string[]; attachments?: string[]; from?: string;
@@ -106,4 +106,6 @@ export async function pollReplies(cfg: Cfg, ids: Set<string>): Promise<Reply[]> 
   return [...found.values()];
 }
 
-export const openDecisionIds = () => new Set(list(P("decisions", "open")).map((p) => p.split("/").pop()!.replace(".md", "")));
+/** IDs (not paths) of the cards waiting for the owner. `basename` so Windows' "\" separators don't leak into the set:
+ * splitting on "/" returned the whole path there, so every chat reply to a D-card matched nothing and was dropped. */
+export const openDecisionIds = () => new Set(list(P("decisions", "open")).map(fileId));
