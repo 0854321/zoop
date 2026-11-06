@@ -28,7 +28,7 @@ mem_min_pct = 10
 load_mid = 0.7                        # load/cores ratio → halve parallelism
 load_high = 0.9                       # → stop adding agents
 heavy_max_load = 0.5                  # heavy tasks (bench/full build) start only below this
-stale_repo_days = 7                   # target/ of repos untouched this long may be removed
+stale_repo_days = 7                   # target/ of repos (and, on macOS, Xcode DerivedData / ccache entries) untouched this long may be removed
 
 [clis]
 # Claude Opus = challenging work (development, debugging, architecture, UI, judge, learning, evolution).

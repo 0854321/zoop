@@ -84,6 +84,70 @@ const repoActivity = (repo: string) =>
 
 type Step = { name: string; run: () => Promise<number> };
 
+// ------------------------------------------------------------------ macOS / Xcode build products
+const XCODE_DD = () => join(homedir(), "Library/Developer/Xcode/DerivedData");
+
+/** A compiler or Xcode build is running: shared module caches must not be pulled out from under it. */
+const xcodeBuilding = async () =>
+  (await $`pgrep -x xcodebuild swift-frontend clang swift-build`.quiet().nothrow()).exitCode === 0;
+
+/** Days since Xcode last opened/built a DerivedData folder (info.plist LastAccessedDate), or null if unknown. */
+async function derivedDataIdleDays(dir: string, now = Date.now()): Promise<number | null> {
+  const plist = join(dir, "info.plist");
+  if (!existsSync(plist)) return null;
+  const r = await $`plutil -extract LastAccessedDate raw ${plist}`.quiet().nothrow();
+  const t = Date.parse(r.stdout.toString().trim());
+  return r.exitCode === 0 && !Number.isNaN(t) ? (now - t) / 86400e3 : null;
+}
+
+/** Per-project DerivedData folders safe to delete: not opened for `staleDays`, or orphaned (no info.plist).
+ *  Shared caches (*.noindex, SDK*Modules) and Xcode's temporary Files-* workspaces are never listed here. */
+export async function staleDerivedData(root: string, staleDays: number, now = Date.now()): Promise<string[]> {
+  if (!existsSync(root)) return [];
+  const out: string[] = [];
+  for (const name of readdirSync(root)) {
+    const dir = join(root, name);
+    if (name.endsWith(".noindex") || name.startsWith("SDK") || name.startsWith("Files-") || name.startsWith(".")) continue;
+    try { if (!lstatSync(dir).isDirectory()) continue; } catch { continue; }
+    const idle = await derivedDataIdleDays(dir, now);
+    if (idle === null ? ageDays(dir) > 1 : idle > staleDays) out.push(dir);
+  }
+  return out;
+}
+
+function macSteps(staleDays: number, rm: (p: string) => Promise<number>): Step[] {
+  if (process.platform !== "darwin") return [];
+  return [
+    { name: "ccache over its limit / idle entries", run: async () => {
+      if (!Bun.which("ccache")) return 0;
+      const dir = (await $`ccache -k cache_dir`.quiet().nothrow()).stdout.toString().trim();
+      if (!dir || !existsSync(dir)) return 0;
+      const before = await sizeOf(dir);
+      // respects the user's own max_size; only drops entries unused for staleDays, then trims to the limit
+      await $`ccache --evict-older-than ${staleDays}d`.quiet().nothrow();
+      await $`ccache --cleanup`.quiet().nothrow();
+      return Math.max(0, before - await sizeOf(dir)); } },
+    { name: "unavailable iOS simulators", run: async () => {
+      const devs = join(homedir(), "Library/Developer/CoreSimulator/Devices");
+      if (!existsSync(devs) || !Bun.which("xcrun")) return 0;
+      const before = await sizeOf(devs);
+      await $`xcrun simctl delete unavailable`.quiet().nothrow();
+      return Math.max(0, before - await sizeOf(devs)); } },
+    { name: "Xcode module caches", run: async () => {
+      if (await xcodeBuilding()) return 0;
+      let n = 0;
+      for (const d of ["ModuleCache.noindex", "SDKExplicitPrecompiledModules"]) {
+        const p = join(XCODE_DD(), d);
+        if (existsSync(p)) n += await rm(p);
+      }
+      return n; } },
+    { name: `Xcode DerivedData idle > ${staleDays}d`, run: async () => {
+      let n = 0;
+      for (const d of await staleDerivedData(XCODE_DD(), staleDays)) n += await rm(d);
+      return n; } },
+  ];
+}
+
 function cleanupSteps(cfg: Cfg, busyRepos: Set<string>): Step[] {
   const staleDays = cfg.resources?.stale_repo_days ?? 7;
   const rm = async (p: string) => { const s = await sizeOf(p); rmSync(p, { recursive: true, force: true }); return s; };
@@ -130,6 +194,7 @@ function cleanupSteps(cfg: Cfg, busyRepos: Set<string>): Step[] {
         n += before - (existsSync(cache) ? await sizeOf(cache) : 0);
       }
       return n; } },
+    ...macSteps(staleDays, rm),
     { name: "target/ of all non-busy repos", run: async () => {
       let n = 0;
       for (const r of repos()) if (existsSync(join(r, "target")) && repoActivity(r) > 1) n += await rm(join(r, "target"));
