@@ -22,8 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Includes the virtual List with bottom alignment and the mobile sidebar animation used by the client.
-  NSH_REF: e1af8c6c3c8e7c704266bcf6bb388a229f29b108
+  # Includes TextView selection export for quoting formatted message excerpts.
+  NSH_REF: 22140d235f163f0e90ab11aef689658b36fa832e
 
 defaults:
   run:

@@ -32,9 +32,10 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
+import { appendQuote } from "./quote";
 import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
 import {
   alpha,
@@ -656,7 +657,25 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
 }
 
 /** Message text: the hub's Markdown through `TextView` (selectable across paragraphs), links opened by the system, the app's chips inline. */
-function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string }) {
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string; onQuote?: (markdown: string) => void }) {
+  let documentRef: TextViewRef | undefined;
+  const excerpt = signal("");
+  let selectionVersion = 0;
+  // Keep an explicit preview after focus leaves the text, so pressing Quote cannot lose it.
+  // A new selection replaces it; quoting or dismissing consumes it.
+  const captureSelection = async ({ text }: { text: string }) => {
+    if (!props.onQuote || !text.trim()) return;
+    const version = ++selectionVersion;
+    try {
+      const markdown = await documentRef?.selectedText({ format: "markdown" });
+      if (version === selectionVersion) excerpt.set(markdown?.trim() || text);
+    } catch {
+      if (version === selectionVersion) excerpt.set(text);
+    }
+  };
+  cleanup(() => { selectionVersion++; });
+  const dismiss = () => { selectionVersion++; excerpt.set(""); };
+  effect(() => { props.text; dismiss(); });
   const small = !!(props.muted || props.quiet);
   const fontSize = props.quiet ? 14 : props.muted ? size.small : size.text;
   const lineHeight = small ? 21 : size.line;
@@ -665,18 +684,35 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
     return { ...d, blocks: ghBlocks(d.blocks) };
   };
   return (
-    <TextView
-      document={doc()}
-      selectable
-      onLinkPress={({ url }) => { if (/^(https?|mailto):/i.test(url)) void openUrl(url).catch(() => {}); }}
-      renderCustom={(node) => <Custom node={node} small={small} />}
-      styles={{
-        root: { gap: 8, fontSize, lineHeight, color: small ? colors.muted : colors.text },
-        code: { fontFamily: MONO, fontSize: small ? 13 : 14.5, color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
-        emphasis: { fontStyle: "normal", fontWeight: "600" },
-        link: { color: linkColor(), textDecorationColor: token("link-underline") },
-      }}
-    />
+    <View style={{ gap: 6 }}>
+      <TextView
+        ref={(ref) => { documentRef = ref; }}
+        onSelectionChange={captureSelection}
+        document={doc()}
+        selectable
+        onLinkPress={({ url }) => { if (/^(https?|mailto):/i.test(url)) void openUrl(url).catch(() => {}); }}
+        renderCustom={(node) => <Custom node={node} small={small} />}
+        styles={{
+          root: { gap: 8, fontSize, lineHeight, color: small ? colors.muted : colors.text },
+          code: { fontFamily: MONO, fontSize: small ? 13 : 14.5, color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
+          emphasis: { fontStyle: "normal", fontWeight: "600" },
+          link: { color: linkColor(), textDecorationColor: token("link-underline") },
+        }}
+      />
+      <If when={excerpt()}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Button accessibilityLabel="引用片段" onPress={() => { const value = excerpt(); dismiss(); props.onQuote?.(value); }}
+            style={{ minHeight: touch ? 44 : 32, paddingHorizontal: 8, borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
+            <Text style={{ fontSize: size.small, color: colors.text }}>引用片段</Text>
+          </Button>
+          <Text style={{ numberOfLines: 1, flex: 1, fontSize: size.small, color: colors.muted }}>{excerpt().replace(/\s+/g, " ")}</Text>
+          <Button accessibilityLabel="取消引用片段" onPress={dismiss}
+            style={{ width: touch ? 44 : 32, height: touch ? 44 : 32, alignItems: "center", justifyContent: "center", borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
+            <Icon name="close" size={14} tint={colors.muted} />
+          </Button>
+        </View>
+      </If>
+    </View>
   );
 }
 
@@ -1035,6 +1071,7 @@ function Message(props: {
   target: () => string | null;
   onAnswer: (ref: string, choice: string) => void;
   onReply: (ref: string, note?: string) => void;
+  onQuote?: (markdown: string, ref?: string) => void;
   selection?: Map<string, Signal<Set<string>>>;
 }) {
   const e = props.event;
@@ -1052,8 +1089,8 @@ function Message(props: {
     return [...(e.options ?? []), task?.title ?? "", ...props.hub.events().filter((x) => x.ref === e.ref && x.id !== e.id).map((x) => x.text)].join("\n");
   };
   const body = (
-    <View selectable style={{ gap: 10 }}>
-      <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system" && isHub(e.from)} context={about()} />
+    <View style={{ gap: 10 }}>
+      <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system" && isHub(e.from)} context={about()} onQuote={props.onQuote ? (markdown) => props.onQuote?.(markdown, e.ref) : undefined} />
       <If when={e.attachments?.length}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
@@ -1300,6 +1337,12 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   });
   const settled = computed(() => answeredIds(talk()));
   const text = signal("");
+  let taskComposer: InputRef | undefined;
+  const quote = (markdown: string) => {
+    text.update((draft) => appendQuote(draft, markdown));
+    taskComposer?.focus();
+    taskComposer?.setSelection(text().length);
+  };
   const note = signal("");
   const hint = signal("");
   let said = 0;
@@ -1369,6 +1412,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                 {(e) => isAsk(e()) ? (
                   <Message hub={props.hub} event={e()} answered={settled} target={() => null}
                     onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true).catch((err) => note.set(String((err as Error)?.message ?? err)))}
+                    onQuote={quote}
                     onReply={() => hint.set("在下面的输入框写你的指示，会作为这张卡片的回答。")} />
                 ) : (
                   <View style={{ gap: 3 }}>
@@ -1376,7 +1420,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                       <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? "你" : displayName(e().from)}</Text>
                       {`  ${timeOf(e().ts)}`}
                     </Text>
-                    <View selectable><Rich text={e().text} /></View>
+                    <Rich text={e().text} onQuote={e().from !== "owner" ? quote : undefined} />
                     <If when={e().attachments?.length}>
                       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                         <Each of={e().attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
@@ -1433,6 +1477,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 16, paddingRight: 8, paddingVertical: 8, ...composerGlass() }}>
           <Input
             testID="task-composer"
+            ref={(ref) => { taskComposer = ref; }}
             multiline
             value={text()}
             onChange={({ value }) => text.set(value)}
@@ -3922,6 +3967,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         target={target}
                         onAnswer={answer}
                         onReply={reply}
+                        onQuote={(markdown, ref) => {
+                          draft.update((value) => appendQuote(value, markdown));
+                          replyNote.set(null);
+                          replyTo.set(ref ?? null);
+                          composer?.focus();
+                          composer?.setSelection(draft().length);
+                        }}
                         selection={proposalSelection}
                       />
                     );
