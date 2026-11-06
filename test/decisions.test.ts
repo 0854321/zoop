@@ -25,7 +25,10 @@ beforeAll(async () => {
   for (const d of ["decisions/open", "decisions/closed", "tasks/blocked", "tasks/inbox", "memory", "journal", "logs/runs"])
     mkdirSync(join(core.DATA, d), { recursive: true });
 });
-afterAll(() => rmSync(W, { recursive: true, force: true }));
+afterAll(() => { // the data dir is shared with every other test file: leave the clean slate beforeAll took
+  for (const d of ["decisions/open", "decisions/closed"]) rmSync(core.P(d), { recursive: true, force: true });
+  rmSync(W, { recursive: true, force: true });
+});
 
 const cfg = { judge: { enabled: true } } as any; // autonomy level defaults to onboarding → shadow mode
 const open = (rec = "A", question = "Merge?") => dec.openDecision({ id: "T-0001", agent: "lead" }, { status: "blocked", summary: "ctx", question, recommendation: rec, options: ["A: merge", "B: wait"] } as any, "h");
