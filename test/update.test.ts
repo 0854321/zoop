@@ -26,7 +26,16 @@ test("checking again does not drop a download that waits for its restart", async
   const t = setup(update);
   await t.updates.check();
   await t.updates.check();
-  expect(t.calls).toEqual(["check", "download"]);
+  expect(t.calls).toEqual(["check", "download", "check"]);
+});
+
+test("a newer release while one waits for its restart replaces it", async () => {
+  const t = setup(update);
+  await t.updates.check();
+  t.api.check = async () => { t.calls.push("check"); return { ...update, version: "1.3.0" }; };
+  await t.updates.check();
+  expect(t.calls).toEqual(["check", "download", "check", "download"]);
+  expect(t.last()).toEqual({ kind: "ready", version: "1.3.0" });
 });
 
 test("an update the app cannot install is a link, with no download", async () => {
