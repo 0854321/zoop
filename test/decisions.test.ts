@@ -104,7 +104,7 @@ test("linkRefs links PR references using the repositories the decision mentions"
   expect(dec.linkRefs("见 #5", undefined, "")).toBe("见 #5");
 });
 
-test("ignoring a question closes it without a lesson and drops its task", async () => {
+test("ignoring a question closes it without a lesson and hands the call back to the agent", async () => {
   judgeReply = { verdict: "hold", reason: "owner call" };
   const before = lessons();
   const id = open("A");
@@ -114,7 +114,10 @@ test("ignoring a question closes it without a lesson and drops its task", async 
   expect(closed(id).overrode_recommendation).toBeUndefined();
   expect(lessons()).toBe(before);
   expect(existsSync(core.P("tasks", "blocked", "T-0001.md"))).toBe(false);
-  expect(readFileSync(core.P("tasks", "rejected", "T-0001.md"), "utf8")).toContain("ignored");
+  expect(existsSync(core.P("tasks", "rejected", "T-0001.md"))).toBe(false);
+  const t = core.readDoc(core.P("tasks", "inbox", "T-0001.md"));
+  expect(t.meta.gate_override).toBeUndefined();
+  expect(t.body).toContain("NOT a rejection");
   expect(dec.ignoreDecision(id, "owner(chat)")).toBe(false);
 });
 

@@ -99,22 +99,27 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   return true;
 }
 
-/** The answer that sets a question aside: the owner does not want to deal with it. */
+/** The answer that sets a card aside: the owner skipped it (often just forgot to pick); it is not a rejection. */
 export const IGNORE = "忽略";
 
-/** Owner set the question aside: close it (no lesson: not a choice between the options) and drop its task. */
+/** Owner set the card aside: close it (no lesson: not a choice between the options) and hand the call back to the agent.
+ * Ignoring never abandons the task (T-0575): the owner often ignores a card because they answered in chat instead. */
 export function ignoreDecision(id: string, by: string): boolean {
   const src = P("decisions", "open", `${id}.md`);
   if (!existsSync(src)) return false;
   const { meta, body } = readDoc(src);
   writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer: IGNORE, answered_by: by, answered: now(), ignored: "yes" },
-    `${body}\n## Answer (${by})\n${IGNORE}: the owner set this aside. Do not ask it again.\n`);
+    `${body}\n## Answer (${by})\n${IGNORE}: the owner skipped this card without choosing. Not a rejection; the agent decides. Do not ask it again.\n`);
   unlinkSync(src);
   const t = P("tasks", "blocked", `${meta.task}.md`);
   if (existsSync(t)) {
     const { meta: tm, body: tb } = readDoc(t);
-    writeDoc(P("tasks", "rejected", `${meta.task}.md`), { ...tm, claimed_by: undefined, status: "ignored" },
-      `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nThe owner ignored it: the task stops here.\n`);
+    // no gate_override: skipping a card never authorises a gated action (merge, release, external message)
+    writeDoc(P("tasks", "inbox", `${meta.task}.md`), { ...tm, claimed_by: undefined, status: undefined, resumes: id },
+      `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nA: **${IGNORE}** — the owner skipped this card without choosing; it is NOT a rejection and NOT a reason to stop. ` +
+      `First check the chat after the card: the owner may have answered there in their own words; follow that. Otherwise decide yourself ` +
+      `(usually the recommendation) within the autonomy policy. A gated step (merge, release, public API, external message) stays undone: ` +
+      `finish everything else and report it as pending, without sending the same card again.\n`);
     unlinkSync(t);
   }
   return true;

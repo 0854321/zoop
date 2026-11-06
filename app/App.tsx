@@ -1763,7 +1763,7 @@ function Sidebar(props: {
                   hoverStyle={hovered()}
                   style={{ height: 32, justifyContent: "center", paddingHorizontal: 10, borderRadius: 6 }}
                 >
-                  <Text style={{ fontSize: 14, color: colors.text }}>{L("Ignore", "忽略，不用处理")}</Text>
+                  <Text style={{ fontSize: 14, color: colors.text }}>{L("Ignore, you decide", "忽略，你来定")}</Text>
                 </MenuItem>
               </ContextMenu>
             )}

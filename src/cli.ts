@@ -266,7 +266,7 @@ async function handleReplies(cfg: Cfg, host: string) {
     if (open.has(r.id) && r.answer.trim() === IGNORE) {
       ignoreDecision(r.id, `owner(${r.source})`);
       journal(host, `🙈 ${r.id} owner ignored it`);
-      await notify(`已忽略 ${r.id}，不再追问`, cfg);
+      await notify(`已忽略 ${r.id}：任务继续，由 agent 自己判断，不再追问`, cfg);
     } else if (open.has(r.id)) {
       closeDecision(r.id, r.answer, `owner(${r.source})`);
       journal(host, `✔ ${r.id} owner answered via ${r.source}: ${r.answer}`);
