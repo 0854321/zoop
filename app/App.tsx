@@ -53,6 +53,7 @@ import {
 } from "./ui";
 import {
   answeredIds,
+  answerOf,
   choiceLabel,
   choicesOf,
   dayLabel,
@@ -384,6 +385,8 @@ function Btn(props: {
   note?: string;
   busy?: boolean;
   disabled?: boolean;
+  /** the option the owner picked: a check and an accent edge, not dimmed */
+  checked?: boolean;
   onPress: () => void;
   testID?: string;
   accessibilityLabel?: string;
@@ -406,7 +409,7 @@ function Btn(props: {
       role="button"
       testID={props.testID}
       accessibilityLabel={props.accessibilityLabel}
-      accessibilityState={{ disabled: !!props.disabled }}
+      accessibilityState={{ disabled: !!props.disabled, ...(props.checked ? { checked: true } : {}) }}
       onPress={() => !props.disabled && !props.busy && props.onPress()}
       hoverStyle={props.disabled ? undefined : kind() === "primary" ? { opacity: 0.92 } : hovered()}
       activeStyle={props.disabled ? undefined : kind() === "primary" ? { opacity: 0.85 } : { backgroundColor: alpha(colors.text, 0.09) }}
@@ -424,13 +427,17 @@ function Btn(props: {
         paddingVertical: 6,
         borderRadius: radius.control,
         borderCurve: "continuous",
-        borderWidth: 0.5,
-        opacity: props.disabled ? 0.45 : 1,
+        borderWidth: props.checked ? 1.5 : 0.5,
+        opacity: props.disabled && !props.checked ? 0.45 : 1,
         transitionProperty: "background-color, border-color, opacity",
         transitionDuration: 120,
         ...look(),
+        ...(props.checked ? { backgroundColor: tints.accent, borderColor: colors.accentFill, cursor: "default" } : props.disabled ? { cursor: "default" } : {}),
       }}
     >
+      <If when={props.checked}>
+        <Icon name="check" size={16} tint={colors.accentFill} />
+      </If>
       <If when={props.kbd}>
         <Kbd k={props.kbd!} on={kind() === "primary" ? colors.onAccent : undefined} />
       </If>
@@ -910,6 +917,14 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
   const said = () => [...props.hub.events()].reverse().find((x) => x.ref === ref && x.ts <= e.ts && x.kind !== "owner" && !isHub(x.from));
   const asked = () => (ref ? askLine(props.hub.events().find((x) => x.ref === ref && isAsk(x))?.text ?? "") || (props.hub.status()?.decisions.find((d) => d.id === ref)?.question ?? "")
     || (/^T-/.test(ref) && said() ? `${displayName(said()!.from)}：${firstLine(said()!.text)}` : "") : "");
+  // "选 A" alone says little: the option's own words go under it, without the "A:" it already shows
+  const chosen = () => {
+    const card = ref && props.hub.events().find((x) => x.ref === ref && isAsk(x));
+    const a = e.text.match(/^[DLP]-[A-Z]?\d{4} (\S+)$/)?.[1];
+    if (!card || !a || !(card.options ?? []).length) return "";
+    const t = optionText(card, a);
+    return t === choiceLabel(a) ? "" : t.replace(new RegExp(`^\\s*${a}\\s*[:：.、)]?\\s*`, "i"), "");
+  };
   return (
     <View style={{ flexDirection: "row", justifyContent: "flex-end", paddingVertical: 8 }} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
       <View style={{ maxWidth: "82%", alignItems: "flex-end", gap: 4 }}>
@@ -945,7 +960,12 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
           }}
         >
           {/^[DLP]-[A-Z]?\d{4} \S/.test(e.text) && !e.text.includes("\n")
-            ? <Text style={{ fontSize: size.text, lineHeight: size.line, color: colors.text, userSelect: "text" }}>{answerText(e.text)}</Text>
+            ? <>
+                <Text style={{ fontSize: size.text, lineHeight: size.line, fontWeight: "600", color: colors.text, userSelect: "text" }}>{answerText(e.text)}</Text>
+                <If when={chosen()}>
+                  <Text testID={`answer-option-${ref}`} style={{ fontSize: size.small, lineHeight: 20, color: colors.muted, userSelect: "text" }}>{chosen()}</Text>
+                </If>
+              </>
             : <Rich text={e.text} />}
         </View>
         </If>
@@ -1011,6 +1031,7 @@ function Message(props: {
     </View>
   );
   const done = () => !!e.ref && props.answered().has(e.ref);
+  const picked = () => (e.ref && done() ? answerOf(props.hub.events(), e.ref) : null);
   const targeted = () => ask && !done() && props.target() === e.ref;
   const rec = recommended(e);
   // a phone has no width to spare: the avatar sits in the name's row, and the message takes the whole column
@@ -1038,7 +1059,7 @@ function Message(props: {
               marginTop: 6,
               borderRadius: radius.card,
               backgroundColor: colors.surface,
-              opacity: done() ? 0.62 : 1,
+              opacity: 1,
               overflow: "hidden",
               transitionProperty: "opacity",
               transitionDuration: 160,
@@ -1066,11 +1087,19 @@ function Message(props: {
                     label={optionText(e, c())}
                     kind="secondary"
                     note={rec === c() ? "推荐" : undefined}
+                    disabled={done()}
+                    checked={done() && picked()?.toUpperCase() === c().toUpperCase()}
                     onPress={() => props.onAnswer(e.ref!, c())}
                   />
                 )}
               </Each>
-              <Btn testID={`other-${e.ref}`} label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+              {/* answered: the card is a record, not a second chance to send; a free-text answer shows as it was sent */}
+              <If when={done() && picked() && !choicesOf(e).some((c) => c.toUpperCase() === picked()!.toUpperCase())}>
+                <Text testID={`answer-${e.ref}`} style={{ fontSize: size.small, color: colors.muted }}>{`你的回复：${answerText(`${e.ref} ${picked()}`)}`}</Text>
+              </If>
+              <If when={!done()}>
+                <Btn testID={`other-${e.ref}`} label="其他指示…" kind="dashed" onPress={() => props.onReply(e.ref!)} />
+              </If>
               <If when={e.ref!.startsWith("D-") && !done()}>
                 <Btn testID={`ignore-${e.ref}`} label="忽略" kind="dashed" onPress={() => props.onAnswer(e.ref!, IGNORE)} />
               </If>

@@ -109,6 +109,18 @@ export function answeredIds(events: HubEvent[]): Set<string> {
   return done;
 }
 
+/** The owner's latest answer to a card ("D-0116 A" → "A"), or null while unanswered. */
+export function answerOf(events: HubEvent[], ref: string): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== "owner") continue;
+    const m = e.text.match(/^\s*([DLP]-[A-Z]?\d{4})\s+(.+)$/s);
+    if (m && m[1] === ref) return m[2].trim();
+    if (!m && e.ref === ref) return e.text.trim();
+  }
+  return null;
+}
+
 export const TAGS: Partial<Record<Kind, string>> = { decision: "需要决定", menu: "下一步", proposals: "待批准", login: "登录" };
 
 export const isHub = (from: string) => /^hub/.test(from);
