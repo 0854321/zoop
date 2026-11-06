@@ -109,7 +109,7 @@ extra = []                            # more Claude Code tool patterns to hard-b
 
 [[routine]]
 name = "triage-inbound"
-every = "15m"
+every = "60m"
 agent = "dispatcher"
 prompt = """Scan inbound signals since the last journal entry by dispatcher: GitHub notifications (gh api notifications),
 PRs requesting my review, issues assigned to me, CI failures on my open PRs, new uptime alerts.
@@ -125,6 +125,7 @@ prompt = "Check the uptime alert source listed in memory/projects.md. Apply your
 
 [[routine]]
 name = "pr-review"
+signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open repo:longbridge/nsh repo:longbridge/gpui-kit repo:longbridge/gpui-fast repo:huacnlee/omamail repo:huacnlee/omasend repo:huacnlee/disktree' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
 every = "30m"
 agent = "reviewer"
 requires = "os:linux"
@@ -134,6 +135,7 @@ whose current head SHA is not in reviews/ (ledger), oldest first, PRs by others 
 
 [[routine]]
 name = "own-prs-ci"
+signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open author:huacnlee user:longbridge user:huacnlee' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
 readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "30m"
 agent = "rust-maintainer"
