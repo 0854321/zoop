@@ -10,6 +10,7 @@ import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, ove
 import { notify, openDecisionIds, pollReplies } from "./notify";
 import { STALLED, agentProcs, ask, buildPrompt, parseResult, quickAsk, runAgent } from "./runner";
 import { writeRules } from "./rules";
+import { backoffMinutes, isNoChangeRoutine, tooManyWakes, waitMeta } from "./waits";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -207,12 +208,13 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, children: children.join(",") }, body + runNote);
     journal(host, `🧩 ${meta.id} delegated to ${children.join(", ")}`);
   } else if (res.status === "waiting") { // parked: the slot is free until the wait is over
-    const mins = Math.min(120, Math.max(5, Number(res.wait_minutes) || 15));
-    const wake = new Date(Date.now() + mins * 60_000).toISOString();
+    const w = waitMeta(res);
+    const wakes = Number(meta.wakes ?? 0);
     // the owner's approval covers the whole task: a wait for CI before the approved merge must not revoke it
-    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, wake_at: wake, waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined },
-      body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (check again ${wake})\n`);
-    journal(host, `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${mins} 分钟后再看`);
+    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, wake_at: w.wake_at, wait_kind: w.kind, wakes: wakes ? String(wakes) : undefined,
+      waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined },
+      body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (${w.kind === "human" ? "wakes on the owner's answer or an event" : `check again ${w.wake_at}`})\n`);
+    journal(host, w.kind === "human" ? `⏳ ${meta.id} 等你处理：${res.waiting_on ?? ""}（不定时唤醒，事件到达再继续）` : `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${w.minutes} 分钟后再看`);
   } else if (res.status === "needs_decision") {
     const did = openDecision(meta, res, host);
     writeDoc(P("tasks", "blocked", `${meta.id}.md`), { ...done, decision: did }, body + runNote);
@@ -223,7 +225,8 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     writeDoc(P("tasks", folder, `${meta.id}.md`), done, body + runNote);
     journal(host, `${res.status === "done" ? "✅" : "❌"} ${meta.id} ${res.summary}`);
     // the owner asked for this (and it is not an internal sub-step) → bring back the result
-    if (res.status === "done" && ownerWork && !meta.parent)
+    if (res.status === "done" && !res.attachments?.length && !res.followups?.length && isNoChangeRoutine(meta.source, res.summary)) {} // journal only
+    else if (res.status === "done" && ownerWork && !meta.parent)
       void notify(meta.source === "owner@chat" ? res.summary : `${meta.title}\n${res.summary}`, cfg, { kind: "notice", ref: meta.id, attachments: res.attachments, from: `${agentName(agent)}@${host}` });
     // every other finished task (routines, follow-ups, sub-steps) → a quiet result line in the team channel, no push
     else if (res.status === "done")
@@ -429,9 +432,21 @@ const GH_HEAVY = new Set(["dispatcher", "reviewer", "ops-watcher", "oss-triage",
 function wakeParents(host: string, ready = new Set<string>()) {
   for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
     const { meta, body } = readDoc(p);
-    if (meta.wake_at) { // parked on something slow: back to the queue once the time is up, or as soon as its check changes
-      if (Date.parse(meta.wake_at) > Date.now() && !ready.has(meta.id)) continue;
-      writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, wake_at: undefined, status: undefined, claimed_by: undefined, resumed: "yes" },
+    if (meta.wait_kind === "human" && !meta.wake_at) { // waits on a person: only an event wakes it, never the clock
+      if (!ready.has(meta.id)) continue;
+    }
+    if (meta.wake_at || meta.wait_kind) { // parked on something slow: back to the queue once the time is up, or as soon as its check changes
+      if (meta.wake_at && Date.parse(meta.wake_at) > Date.now() && !ready.has(meta.id)) continue;
+      const wakes = Number(meta.wakes ?? 0) + 1;
+      if (tooManyWakes(wakes)) { // cycling without progress: stop waking it, tell the owner once what blocks it
+        writeDoc(P("tasks", "blocked", `${meta.id}.md`), { ...meta, wake_at: undefined, wakes: String(wakes), status: "blocked" },
+          `${body}\nBlocked after ${wakes} wake-ups, still waiting on: ${meta.waiting_on ?? "?"}\n`);
+        unlinkSync(p);
+        journal(host, `🧱 ${meta.id} 唤醒 ${wakes} 次仍未就绪，转为 blocked：${meta.waiting_on ?? "?"}`);
+        void notify(`${meta.id} 卡住了：${meta.waiting_on ?? "?"}（已唤醒 ${wakes} 次，不再自动重试）`, loadConfig(), { kind: "notice", ref: meta.id });
+        continue;
+      }
+      writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, wake_at: undefined, wait_kind: undefined, status: undefined, claimed_by: undefined, resumed: "yes", wakes: String(wakes) },
         `${body}\nResumed after waiting on: ${meta.waiting_on ?? "?"}. Check it now; if still not ready, return "waiting" again.\n`);
       unlinkSync(p);
       journal(host, `⏰ ${meta.id} 等待结束，重新排队检查`);
@@ -454,15 +469,16 @@ function wakeParents(host: string, ready = new Set<string>()) {
 }
 const runningIds = new Set<string>();
 
-/** Waits with a wait_check: run it every few minutes; once its exit code differs from the first run, the wait is over. */
-const waitChecks = new Map<string, { cmd: string; base?: number; next: number }>();
-export async function checkWaits(now = Date.now(), everyMs = 3 * 60_000): Promise<Set<string>> {
+/** Waits with a wait_check: the daemon runs it itself (no agent) with backoff 5 → 10 → 20 → 40 minutes; once its exit
+ * code differs from the first run, the wait is over. Human waits are checked too: that is how an event (PR merged) wakes them. */
+const waitChecks = new Map<string, { cmd: string; base?: number; next: number; n: number }>();
+export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Set<string>> {
   const ready = new Set<string>();
   const due: [string, string][] = [];
   const waiting = new Set<string>();
   for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
     const { meta } = readDoc(p);
-    if (!meta.wake_at || !meta.wait_check) continue;
+    if (!(meta.wake_at || meta.wait_kind) || !meta.wait_check) continue;
     waiting.add(meta.id);
     const c = waitChecks.get(meta.id);
     if (c && c.cmd === meta.wait_check && c.next > now) continue;
@@ -475,8 +491,10 @@ export async function checkWaits(now = Date.now(), everyMs = 3 * 60_000): Promis
     clearTimeout(timer);
     if (proc.signalCode) return; // timed out: no answer this round
     const prev = waitChecks.get(id);
-    const base = prev && prev.cmd === cmd ? prev.base : undefined;
-    waitChecks.set(id, { cmd, base: base ?? code, next: now + everyMs });
+    const same = prev && prev.cmd === cmd;
+    const n = same ? prev.n + 1 : 0;
+    const base = same ? prev.base : undefined;
+    waitChecks.set(id, { cmd, base: base ?? code, next: now + (everyMs ?? backoffMinutes(n) * 60_000), n });
     if (base !== undefined && code !== base) { ready.add(id); waitChecks.delete(id); }
   }));
   for (const id of waitChecks.keys()) if (!waiting.has(id)) waitChecks.delete(id);

@@ -142,7 +142,7 @@ export function taskView(path: string, state: string, log: string[]) {
       const text = raw.slice(lead.length).replace(new RegExp(`^${m.id}\\b[:：]?\\s*`), "").trim();
       return { day: x[1], time: x[2], host: x[3], kind, text };
     });
-  if (state === "waiting" && m.wake_at) state = "parked"; // waiting on something slow (CI, a release), not on sub-tasks
+  if (state === "waiting" && (m.wake_at || m.wait_kind)) state = "parked"; // waiting on something slow (CI, a release), not on sub-tasks
   // queued, but no online machine can run it (a task that needs Windows while none is up): it waits for one, not for a turn
   const needs = state === "inbox" && m.parked && m.requires ? String(m.requires) : undefined;
   if (needs) state = "nohost";
