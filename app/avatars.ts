@@ -19,3 +19,14 @@ export function avatarOf(from: string): string | null {
   const id = from.replace(/@.*/, "").toLowerCase();
   return BY_NAME[id] ?? BY_NAME[ID_TO_NAME[id] ?? ""] ?? null;
 }
+
+const ZH_BY_NAME: Record<string, string> = { argus: "孙悟空", atlas: "沙僧", bridge: "小白龙", daedalus: "太上老君", ferris: "猪八戒", hermes: "哪吒", iris: "观音", kai: "唐僧", mimir: "红孩儿", scribe: "太白金星", sentinel: "二郎神" };
+const EN_BY_NAME: Record<string, string> = { argus: "Monkey", atlas: "Sandy", bridge: "Dragon", daedalus: "Laozi", ferris: "Pigsy", hermes: "Nezha", iris: "Guanyin", kai: "Tripitaka", mimir: "Redboy", scribe: "Venus", sentinel: "Erlang" };
+/** An agent's display name in the client's language ("Tripitaka@host" → "唐僧" in Chinese); other senders pass through. */
+export function agentDisplayName(from: string, zh: boolean): string {
+  const raw = from.replace(/@.*/, "");
+  const id = raw.toLowerCase();
+  const key = BY_NAME[id] ? id : ID_TO_NAME[id];
+  if (!key) return raw;
+  return (zh ? ZH_BY_NAME : EN_BY_NAME)[key] ?? raw;
+}

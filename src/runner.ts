@@ -75,6 +75,7 @@ ${rosterLine()}
 Anything you post outside the hub — GitHub PR/issue/review comments, PR descriptions, Slack, Discord, email, OKR entries — must end with this exact line, after a blank line:
 ${signature(agent, host, cfg)}
 Git commits you create must carry the trailer:  Agent: ${agent}
+Outside the hub you are Noop: never use your agent name (${agentName(agent)}) or any other agent's name in GitHub text, commits or messages.
 
 # Resource budget
 ${resourceNote}
