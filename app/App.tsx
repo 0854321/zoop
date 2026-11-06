@@ -680,6 +680,21 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
   );
 }
 
+/** Puts an image (by URL) on the system clipboard as an image, not as its link. */
+async function copyImage(src: string): Promise<void> {
+  try {
+    const r = await fetch(src);
+    if (!r.ok) return;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const type = r.headers.get("content-type")?.split(";")[0] || "image/png";
+    await Clipboard.writeImage(`data:${type};base64,${btoa(bin)}`);
+  } catch {
+    // nothing to show: the menu has closed and the clipboard keeps what it had
+  }
+}
+
 function Media(props: { hub: Hub; path: string }) {
   const src = mediaUrl(props.hub.cfg.url, props.hub.cfg.token, props.path);
   const ratio = signal(16 / 10);
@@ -699,14 +714,30 @@ function Media(props: { hub: Hub; path: string }) {
         </View>
       }
     >
-      <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ cursor: "pointer" }}>
-        <Image
-          src={src}
-          onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
-          onError={() => gone.set(true)}
-          style={{ ...frame, ...size(), objectFit: "cover" }}
-        />
-      </View>
+      {/* right-click (long press on touch) copies the image itself */}
+      <ContextMenu
+        margin={8}
+        popupStyle={{ minWidth: 140, padding: 4, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface }}
+        trigger={
+          <View accessibilityLabel="查看大图" onPress={() => zoomed.set(true)} style={{ cursor: "pointer" }}>
+            <Image
+              src={src}
+              onLoad={({ size }) => size.width && size.height && ratio.set(size.width / size.height)}
+              onError={() => gone.set(true)}
+              style={{ ...frame, ...size(), objectFit: "cover" }}
+            />
+          </View>
+        }
+      >
+        <MenuItem
+          testID="copy-image"
+          onSelect={() => void copyImage(src)}
+          hoverStyle={hovered()}
+          style={{ height: 32, justifyContent: "center", paddingHorizontal: 10, borderRadius: 6 }}
+        >
+          <Text style={{ fontSize: 14, color: colors.text }}>复制图片</Text>
+        </MenuItem>
+      </ContextMenu>
       <Dialog
         open={zoomed()}
         animation="fade"
