@@ -1027,11 +1027,18 @@ describe("voice input", () => {
 test("clicking outside the macOS composer collapses an empty draft", async () => {
   const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 1100, height: 760, platform: "macos", network: hub([]) });
   await app.waitFor("id:composer");
+  expect(app.count("id:attach")).toBe(1);
   expect(app.shows("id:send")).toBe(false);
   await app.keyboard.press("mod+k");
   await app.waitFor("id:send");
+  expect(app.count("id:attach")).toBe(1);
+  await app.press("id:attach");
+  expect(app.picks().length).toBe(1);
   await app.press("label:Channel");
   await app.waitUntil(() => !app.shows("id:send"));
+  expect(app.count("id:attach")).toBe(1);
+  await app.press("id:attach");
+  expect(app.picks().length).toBe(2);
 });
 
 describe("phones", () => {
