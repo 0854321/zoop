@@ -6,6 +6,7 @@ import {
 import { notify } from "./notify";
 import { ask, type Result } from "./runner";
 import { judgeMayDecide } from "./autonomy";
+import { isMergeCard, mergeHeadline } from "./waits";
 
 export function openDecision(task: Record<string, string>, res: Result, host: string): string {
   const id = nextId("D", P("decisions"));
@@ -156,6 +157,10 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
     journal(host, `👤 shadow-judge on ${id}: would ${v.verdict} "${v.answer ?? v.reason}"`);
     v = { verdict: "hold", reason: `学习期，judge 认为：${v.verdict === "decided" ? v.answer : "应退回: " + v.reason}` };
   }
+  if (v && v.verdict !== "hold" && isMergeCard(meta)) { // the judge's answer cannot click merge: hold for the owner
+    journal(host, `👤 ${id} 是合并卡，judge 不代答（judge 认为：${v.answer ?? v.reason}）`);
+    v = { verdict: "hold", reason: "merge card" };
+  }
   if (v?.verdict === "decided" && v.answer) {
     closeDecision(id, v.answer, "judge", `Reason: ${v.reason} (cite: ${v.cite ?? "-"})`);
     journal(host, `⚖️ judge decided ${id}: ${v.answer} (${v.cite ?? v.reason})`);
@@ -178,6 +183,7 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
   ].join("\n") : [
     // the card already shows the id, the agent and the options as buttons: the question, then the agent's account of
     // what is at stake (what the PR changes, what each choice means). The judge's reason for asking is not news to the owner.
+    isMergeCard(meta) ? mergeHeadline([meta.question ?? "", context, ...opts].join("\n")) : "",
     linkRefs(meta.question ?? "", meta.task, [context, ...opts].join("\n")),
     context ? `\n${linkRefs(context, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
     // the app marks this option 推荐 (and drops the line); chat channels show it as written

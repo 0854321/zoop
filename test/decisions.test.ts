@@ -28,7 +28,7 @@ beforeAll(async () => {
 afterAll(() => rmSync(W, { recursive: true, force: true }));
 
 const cfg = { judge: { enabled: true } } as any; // autonomy level defaults to onboarding → shadow mode
-const open = (rec = "A") => dec.openDecision({ id: "T-0001", agent: "lead" }, { status: "blocked", summary: "ctx", question: "Merge?", recommendation: rec, options: ["A: merge", "B: wait"] } as any, "h");
+const open = (rec = "A", question = "Merge?") => dec.openDecision({ id: "T-0001", agent: "lead" }, { status: "blocked", summary: "ctx", question, recommendation: rec, options: ["A: merge", "B: wait"] } as any, "h");
 const closed = (id: string) => core.readDoc(core.P("decisions", "closed", `${id}.md`)).meta;
 const lessons = () => (existsSync(core.P("memory", "lessons.md")) ? readFileSync(core.P("memory", "lessons.md"), "utf8") : "");
 
@@ -77,7 +77,7 @@ test("judge failure is recorded as error; judge auto-decision keeps its shadow f
   expect(closed(id).shadow_agree).toBeUndefined();
 
   judgeReply = { verdict: "decided", answer: "A", reason: "precedent" };
-  const id2 = open();
+  const id2 = open("A", "Which fix?"); // merge cards are always held (rule D), so a non-merge card
   await dec.routeDecision(id2, { ...cfg, autonomy: { level: "trusted" } }, "h");
   expect(closed(id2).answered_by).toBe("judge");
   expect(closed(id2).shadow_verdict).toBe("decided");
@@ -113,4 +113,14 @@ test("ignoring a question closes it without a lesson and drops its task", async 
   expect(existsSync(core.P("tasks", "blocked", "T-0001.md"))).toBe(false);
   expect(readFileSync(core.P("tasks", "rejected", "T-0001.md"), "utf8")).toContain("ignored");
   expect(dec.ignoreDecision(id, "owner(chat)")).toBe(false);
+});
+
+test("D: the judge never answers a merge card, even when allowed to decide", async () => {
+  judgeReply = { verdict: "decided", answer: "A", reason: "precedent", cite: "D-0107" };
+  sent.length = 0;
+  const id = dec.openDecision({ id: "T-0002", agent: "reviewer" }, { status: "needs_decision", summary: "https://github.com/huacnlee/omamail/pull/457 fixes x",
+    question: "现在合并 omamail #457 吗？", recommendation: "A", options: ["A: merge", "B: wait"] } as any, "h");
+  await dec.routeDecision(id, { judge: { enabled: true }, autonomy: { level: "trusted" } } as any, "h");
+  expect(existsSync(core.P("decisions", "open", `${id}.md`))).toBe(true);
+  expect(sent.at(-1)!.split("\n")[0]).toBe("https://github.com/huacnlee/omamail/pull/457 需要你点合并");
 });
