@@ -2,11 +2,18 @@
 // system's notifications, so both follow the owner's preferences (settings `notify_prefs`). No UI, no I/O.
 
 type Quiet = { start: string; end: string } | string | null;
-export type NotifyRules = { kinds?: Record<string, boolean>; quiet_hours?: Quiet; tz?: string };
+/** `lang` picks the title language ("en" by default); this file stays free of the app's signals so the Worker can use it. */
+export type NotifyRules = { kinds?: Record<string, boolean>; quiet_hours?: Quiet; tz?: string; lang?: "en" | "zh" };
 export type NotifyEvent = { kind: string; from?: unknown; text?: unknown; priority?: unknown };
 
 const KINDS = ["decision", "menu", "proposals", "login", "notice"];
-const TITLES: Record<string, string> = { decision: "需要你拍板", menu: "可以选下一步", proposals: "新的提议", login: "登录提醒", notice: "Noop" };
+const TITLES: Record<string, [string, string]> = {
+  decision: ["Needs your call", "需要你拍板"],
+  menu: ["Pick the next step", "可以选下一步"],
+  proposals: ["New proposals", "新的提议"],
+  login: ["Login reminder", "登录提醒"],
+  notice: ["Noop", "Noop"],
+};
 
 /** Is `now` inside the quiet hours (`{start, end}` from the app, "23:00-08:00" written by hand) in `tz`? */
 export function inQuiet(range: Quiet | undefined, tz: string | undefined, now = new Date()) {
@@ -33,5 +40,5 @@ export function notificationFor(ev: NotifyEvent, prefs: NotifyRules, now = new D
   const urgent = kind === "decision" && ev.priority === "urgent";
   if (inQuiet(prefs.quiet_hours, prefs.tz, now) && kind !== "login" && !urgent) return null;
   const body = plain(String(ev.text ?? ""));
-  return { title: TITLES[kind] ?? "Noop", body: body.length > 140 ? `${body.slice(0, 139)}…` : body };
+  return { title: TITLES[kind]?.[prefs.lang === "zh" ? 1 : 0] ?? "Noop", body: body.length > 140 ? `${body.slice(0, 139)}…` : body };
 }

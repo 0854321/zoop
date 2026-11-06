@@ -1,4 +1,5 @@
 // noop: the server's shapes and the pure logic of the timeline (no UI, no I/O), shared by App.tsx and the tests.
+import { L } from "./i18n";
 
 export type Kind = "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
 
@@ -42,9 +43,9 @@ export type Activity = { at: string; step?: string; steps?: number };
 export function activityLine(a: Activity | undefined, now = Date.now()): { text: string; quiet: boolean } | null {
   if (!a?.at) return null;
   const min = Math.max(0, Math.floor((now - Date.parse(a.at)) / 60_000));
-  const when = min < 1 ? "刚刚" : `${min} 分钟前`;
-  if (min >= 10) return { text: `已经 ${min} 分钟没有动静${a.step ? `，最后一步：${a.step}` : ""}；20 分钟没动静会自动中止并接着跑`, quiet: true };
-  return { text: a.step ? `最近：${a.step} · ${when}` : `最近有输出 · ${when}`, quiet: false };
+  const when = min < 1 ? L("just now", "刚刚") : L(`${min} min ago`, `${min} 分钟前`);
+  if (min >= 10) return { text: L(`Quiet for ${min} min${a.step ? `, last step: ${a.step}` : ""}; after 20 min it is stopped and run again`, `已经 ${min} 分钟没有动静${a.step ? `，最后一步：${a.step}` : ""}；20 分钟没动静会自动中止并接着跑`), quiet: true };
+  return { text: a.step ? L(`Latest: ${a.step} · ${when}`, `最近：${a.step} · ${when}`) : L(`Output · ${when}`, `最近有输出 · ${when}`), quiet: false };
 }
 
 export type TaskInfo = {
@@ -95,7 +96,7 @@ export function recommended(e: HubEvent): string | null {
   return m ? m[1].split(/[,，]/)[0] : null;
 }
 
-export const choiceLabel = (c: string) => (c === "all" ? "全部" : c === "none" ? "都不要" : c);
+export const choiceLabel = (c: string) => (c === "all" ? L("All", "全部") : c === "none" ? L("None", "都不要") : c);
 
 /** The ids the owner has already answered, from the owner's own messages. */
 export function answeredIds(events: HubEvent[]): Set<string> {
@@ -121,7 +122,7 @@ export function answerOf(events: HubEvent[], ref: string): string | null {
   return null;
 }
 
-export const TAGS: Partial<Record<Kind, string>> = { decision: "需要决定", menu: "下一步", proposals: "待批准", login: "登录" };
+export const TAGS = (): Partial<Record<Kind, string>> => ({ decision: L("Decide", "需要决定"), menu: L("Next", "下一步"), proposals: L("Approve", "待批准"), login: L("Login", "登录") });
 
 export const isHub = (from: string) => /^hub/.test(from);
 export const displayName = (from: string) => from.replace(/@.*/, "");
@@ -137,12 +138,14 @@ export const timeOf = (iso: string) => {
   const d = new Date(iso);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export function dayLabel(key: string, now = new Date()): string {
-  if (key === dayKey(now.toISOString())) return "今天";
+  if (key === dayKey(now.toISOString())) return L("Today", "今天");
   const y = new Date(now.getTime() - 86400000);
-  if (key === dayKey(y.toISOString())) return "昨天";
+  if (key === dayKey(y.toISOString())) return L("Yesterday", "昨天");
   const [yy, mm, dd] = key.split("-").map(Number);
-  return yy === now.getFullYear() ? `${mm} 月 ${dd} 日` : `${yy} 年 ${mm} 月 ${dd} 日`;
+  const mon = MONTHS[mm - 1];
+  return yy === now.getFullYear() ? L(`${mon} ${dd}`, `${mm} 月 ${dd} 日`) : L(`${mon} ${dd}, ${yy}`, `${yy} 年 ${mm} 月 ${dd} 日`);
 }
 
 /** The timeline's rows: the events with a separator before each new day. */
@@ -177,7 +180,7 @@ export const osOf = (h: HostInfo) => (h.caps.find((c) => c.startsWith("os:")) ??
 export const loadOf = (h: HostInfo) => Math.max(0, Math.min(100, Math.round((h.stats?.loadRatio ?? 0) * 100)));
 
 export function greeting(hour = new Date().getHours()): string {
-  return hour < 6 ? "夜深了" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
+  return hour < 6 ? L("Up late", "夜深了") : hour < 12 ? L("Good morning", "早上好") : hour < 18 ? L("Good afternoon", "下午好") : L("Good evening", "晚上好");
 }
 
 /** "http://x:8787/" → "http://x:8787"; adds http:// when no scheme is given. */
@@ -214,9 +217,9 @@ export function imageType(type: string | undefined, name: string): string | null
 
 /** Why a file cannot be attached ("" when it can). */
 export function attachProblem(type: string | null, size: number, count: number): string {
-  if (!type) return "只能发送图片";
-  if (size > ATTACH_MAX_BYTES) return "图片不能超过 10 MB";
-  if (count >= ATTACH_MAX_COUNT) return `一次最多发送 ${ATTACH_MAX_COUNT} 张图片`;
+  if (!type) return L("Only images can be sent", "只能发送图片");
+  if (size > ATTACH_MAX_BYTES) return L("Images must be 10 MB or less", "图片不能超过 10 MB");
+  if (count >= ATTACH_MAX_COUNT) return L(`Up to ${ATTACH_MAX_COUNT} images at a time`, `一次最多发送 ${ATTACH_MAX_COUNT} 张图片`);
   return "";
 }
 
@@ -241,27 +244,30 @@ export type SettingsView = {
   options: { clis: string[][]; autonomy: string[] };
 };
 
-const CLI_LABELS: Record<string, string> = {
-  claude: "仅 Claude",
+const CLI_LABELS = (): Record<string, string> => ({
+  claude: L("Claude only", "仅 Claude"),
   "codex,claude": "Codex → Claude",
   "claude,codex": "Claude → Codex",
-  codex: "仅 Codex",
-};
+  codex: L("Codex only", "仅 Codex"),
+});
 export const cliKey = (clis: string[]) => clis.join(",");
-export const cliLabel = (clis: string[]) => CLI_LABELS[cliKey(clis)] ?? clis.join(" → ");
-const AUTONOMY_LABELS: Record<string, string> = { onboarding: "学习期", assisted: "协助", autonomous: "自主" };
-export const autonomyLabel = (a: string) => AUTONOMY_LABELS[a] ?? a;
+export const cliLabel = (clis: string[]) => CLI_LABELS()[cliKey(clis)] ?? clis.join(" → ");
+const AUTONOMY_LABELS = (): Record<string, string> => ({ onboarding: L("Onboarding", "学习期"), assisted: L("Assisted", "协助"), autonomous: L("Autonomous", "自主") });
+export const autonomyLabel = (a: string) => AUTONOMY_LABELS()[a] ?? a;
 export const INTERVALS = ["15m", "30m", "1h", "2h", "6h", "1d"];
-const DAYS: Record<string, string> = { MON: "一", TUE: "二", WED: "三", THU: "四", FRI: "五", SAT: "六", SUN: "日" };
+const DAYS: Record<string, [string, string]> = { MON: ["Mon", "一"], TUE: ["Tue", "二"], WED: ["Wed", "三"], THU: ["Thu", "四"], FRI: ["Fri", "五"], SAT: ["Sat", "六"], SUN: ["Sun", "日"] };
 /** A routine's schedule in words: "30m" → 每 30 分钟, "weekly FRI 17:00" → 每周五 17:00. */
 export function everyLabel(every: string): string {
   const e = every.trim();
   let m = e.match(/^(\d+)\s*([mhd])$/);
-  if (m) return m[1] === "1" ? { m: "每分钟", h: "每小时", d: "每天" }[m[2]]! : `每 ${m[1]} ${{ m: "分钟", h: "小时", d: "天" }[m[2]]}`;
-  if (e === "hourly") return "每小时";
-  if ((m = e.match(/^daily\s+(\d\d?:\d\d)$/))) return `每天 ${m[1]}`;
-  if ((m = e.match(/^weekdays\s+(\d\d?:\d\d)$/))) return `工作日 ${m[1]}`;
-  if ((m = e.match(/^weekly\s+(\w{3})\s+(\d\d?:\d\d)$/i)) && DAYS[m[1].toUpperCase()]) return `每周${DAYS[m[1].toUpperCase()]} ${m[2]}`;
+  if (m) return m[1] === "1" ? { m: L("Every minute", "每分钟"), h: L("Hourly", "每小时"), d: L("Daily", "每天") }[m[2]]! : L(`Every ${m[1]} ${{ m: "min", h: "hours", d: "days" }[m[2]]}`, `每 ${m[1]} ${{ m: "分钟", h: "小时", d: "天" }[m[2]]}`);
+  if (e === "hourly") return L("Hourly", "每小时");
+  if ((m = e.match(/^daily\s+(\d\d?:\d\d)$/))) return L(`Daily ${m[1]}`, `每天 ${m[1]}`);
+  if ((m = e.match(/^weekdays\s+(\d\d?:\d\d)$/))) return L(`Weekdays ${m[1]}`, `工作日 ${m[1]}`);
+  if ((m = e.match(/^weekly\s+(\w{3})\s+(\d\d?:\d\d)$/i)) && DAYS[m[1].toUpperCase()]) {
+    const [en, zh] = DAYS[m[1].toUpperCase()]!;
+    return L(`Every ${en} ${m[2]}`, `每周${zh} ${m[2]}`);
+  }
   return e;
 }
 export const intervalsWith = (every: string) => (INTERVALS.includes(every) ? INTERVALS : [...INTERVALS, every]);
@@ -291,8 +297,8 @@ export type Command = { name: string; text: string };
 /** What a command does: a built-in action of the app, or the owner's saved message. */
 export type CommandItem = { id: string; name: string; detail: string; action?: "update-fleet"; text?: string };
 
-export const BUILTIN_COMMANDS: CommandItem[] = [
-  { id: "builtin:update-fleet", name: "更新所有机器", detail: "所有机器拉取最新代码并重启", action: "update-fleet" },
+export const BUILTIN_COMMANDS = (): CommandItem[] => [
+  { id: "builtin:update-fleet", name: L("Update all machines", "更新所有机器"), detail: L("Every machine pulls the latest code and restarts", "所有机器拉取最新代码并重启"), action: "update-fleet" },
 ];
 
 /** The owner's saved commands, as settings hold them (anything malformed is left out). */
@@ -303,7 +309,7 @@ export function savedCommands(view: SettingsView | null): Command[] {
 
 /** Built-ins first, then the saved ones; filtered by what follows the "/" (name or text contains it). */
 export function commandItems(view: SettingsView | null, query = ""): CommandItem[] {
-  const all = [...BUILTIN_COMMANDS, ...savedCommands(view).map((c, i) => ({ id: `saved:${i}`, name: c.name, detail: c.text, text: c.text }))];
+  const all = [...BUILTIN_COMMANDS(), ...savedCommands(view).map((c, i) => ({ id: `saved:${i}`, name: c.name, detail: c.text, text: c.text }))];
   const q = query.trim().toLowerCase();
   return q ? all.filter((c) => c.name.toLowerCase().includes(q) || c.detail.toLowerCase().includes(q)) : all;
 }
@@ -316,19 +322,20 @@ export function slashQuery(draft: string): string | null {
 
 // ---------------------------------------------------------------- notifications (PUT /api/settings notify_prefs; the rules are in notify.ts)
 
-export const NOTIFY_KINDS = [
-  ["decision", "决策"],
-  ["menu", "菜单"],
-  ["proposals", "待批任务"],
-  ["login", "登录"],
-  ["result", "结果通知"],
-] as const;
-export type NotifyKind = (typeof NOTIFY_KINDS)[number][0];
+const NOTIFY_KIND_IDS = ["decision", "menu", "proposals", "login", "result"] as const;
+export type NotifyKind = (typeof NOTIFY_KIND_IDS)[number];
+export const NOTIFY_KINDS = (): [NotifyKind, string][] => [
+  ["decision", L("Decisions", "决策")],
+  ["menu", L("Menus", "菜单")],
+  ["proposals", L("Proposals", "待批任务")],
+  ["login", L("Login", "登录")],
+  ["result", L("Results", "结果通知")],
+];
 export type QuietHours = { start: string; end: string } | null;
 export type NotifyPrefs = { kinds: Record<NotifyKind, boolean>; quiet_hours: QuietHours; tz: string };
 
-export const QUIET_PRESETS: { label: string; value: QuietHours }[] = [
-  { label: "不设", value: null },
+export const QUIET_PRESETS = (): { label: string; value: QuietHours }[] => [
+  { label: L("Off", "不设"), value: null },
   { label: "22:00–08:00", value: { start: "22:00", end: "08:00" } },
   { label: "23:00–07:00", value: { start: "23:00", end: "07:00" } },
   { label: "00:00–09:00", value: { start: "00:00", end: "09:00" } },
@@ -338,7 +345,7 @@ export const quietKey = (q: QuietHours) => (q ? `${q.start}-${q.end}` : "off");
 /** The saved preferences (every kind on and no quiet hours until the owner changes them). */
 export function notifyPrefsOf(view: SettingsView | null, tz: string): NotifyPrefs {
   const saved = (view?.current?.notify_prefs ?? {}) as Partial<NotifyPrefs>;
-  const kinds = Object.fromEntries(NOTIFY_KINDS.map(([k]) => [k, saved.kinds?.[k] ?? true])) as Record<NotifyKind, boolean>;
+  const kinds = Object.fromEntries(NOTIFY_KIND_IDS.map((k) => [k, saved.kinds?.[k] ?? true])) as Record<NotifyKind, boolean>;
   return { kinds, quiet_hours: saved.quiet_hours ?? null, tz: saved.tz ?? tz };
 }
 export const notifyPatch = (prefs: NotifyPrefs) => ({ notify_prefs: prefs });
@@ -369,12 +376,12 @@ export function groupRules(lists: Record<string, DataFile[]>): RuleGroup[] {
   const agents = md("agents/")
     .map((f) => f.path.match(/^agents\/([^/]+)\/(profile|memory)\.md$/i))
     .filter((m): m is RegExpMatchArray => !!m)
-    .map((m) => ({ path: m[0], title: `${m[1]} · ${m[2].toLowerCase() === "profile" ? "档案" : "记忆"}`, detail: day(lists["agents/"]!.find((f) => f.path === m[0])!) }));
+    .map((m) => ({ path: m[0], title: `${m[1]} · ${m[2].toLowerCase() === "profile" ? L("Profile", "档案") : L("Memory", "记忆")}`, detail: day(lists["agents/"]!.find((f) => f.path === m[0])!) }));
   return [
-    { key: "policies", title: "规则", hint: "全队遵守的规则，包括你为各项目定的规则。", items: md("policies/").map((f) => plain(f, f.path.slice("policies/".length).replace(/\.md$/i, ""))) },
-    { key: "memory", title: "我的偏好", hint: "团队记下的你的偏好、原则和教训。", items: md("memory/").map((f) => plain(f, f.path.slice("memory/".length).replace(/\.md$/i, ""))) },
-    { key: "agents", title: "Agents", hint: "每个成员的档案和记忆。", items: agents },
-    { key: "decisions", title: "决策先例", hint: "已经拍板的决策，之后同类问题照此处理。", items: md("decisions/closed/").map((f) => plain(f)).sort((a, b) => (a.title < b.title ? 1 : -1)) },
+    { key: "policies", title: L("Rules", "规则"), hint: L("Rules the whole team follows, including the ones you set for each project.", "全队遵守的规则，包括你为各项目定的规则。"), items: md("policies/").map((f) => plain(f, f.path.slice("policies/".length).replace(/\.md$/i, ""))) },
+    { key: "memory", title: L("My preferences", "我的偏好"), hint: L("Your preferences, principles and lessons the team has noted.", "团队记下的你的偏好、原则和教训。"), items: md("memory/").map((f) => plain(f, f.path.slice("memory/".length).replace(/\.md$/i, ""))) },
+    { key: "agents", title: "Agents", hint: L("Each member's profile and memory.", "每个成员的档案和记忆。"), items: agents },
+    { key: "decisions", title: L("Precedents", "决策先例"), hint: L("Settled decisions; similar questions follow them.", "已经拍板的决策，之后同类问题照此处理。"), items: md("decisions/closed/").map((f) => plain(f)).sort((a, b) => (a.title < b.title ? 1 : -1)) },
   ];
 }
 
@@ -386,8 +393,8 @@ export function needsLabel(needs = ""): string {
   const os: Record<string, string> = { windows: "Windows", linux: "Linux", macos: "Mac", darwin: "Mac", ios: "iOS", android: "Android" };
   const parts = needs.split(",").map((x) => x.trim()).filter(Boolean);
   const o = parts.find((x) => x.startsWith("os:"));
-  if (o && parts.length === 1) return `${os[o.slice(3)] ?? o.slice(3)} 机器`;
-  return `有 ${parts.join(" + ")} 的机器`;
+  if (o && parts.length === 1) return L(`${os[o.slice(3)] ?? o.slice(3)} machine`, `${os[o.slice(3)] ?? o.slice(3)} 机器`);
+  return L(`A machine with ${parts.join(" + ")}`, `有 ${parts.join(" + ")} 的机器`);
 }
 
 /** Not finished and not running now: queued, waiting on sub-tasks or something slow, or waiting for a machine that can run it. */
@@ -408,19 +415,19 @@ export function updateLine(h: HostInfo, request: string | undefined, now = Date.
   if (!u) {
     if (age > UPDATE_SHOWN_MS) return null;
     return age < UPDATE_SILENT_MS
-      ? { text: "等待响应…", tone: "busy", busy: true }
-      : { text: "没有响应：可能还在运行不会汇报进度的旧版本，需要在这台机器上手动更新一次", tone: "bad", busy: false };
+      ? { text: L("Waiting for a reply…", "等待响应…"), tone: "busy", busy: true }
+      : { text: L("No reply: it may run an old version that doesn't report progress; update it by hand on that machine once", "没有响应：可能还在运行不会汇报进度的旧版本，需要在这台机器上手动更新一次"), tone: "bad", busy: false };
   }
   const settled = ["done", "current", "failed"].includes(u.state);
   if (settled && now - Date.parse(u.ts) > UPDATE_SHOWN_MS) return null;
   switch (u.state) {
-    case "updating": return { text: "正在拉取并测试新代码…", tone: "busy", busy: true };
-    case "waiting": return { text: `${u.detail ?? "等运行中的任务跑完后重启"}…`, tone: "busy", busy: true };
-    case "restarting": return { text: "正在重启…", tone: "busy", busy: true };
-    case "deploying": return { text: "正在重新发布线上…", tone: "busy", busy: true };
-    case "done": return { text: `已更新到 ${u.detail ?? h.rev?.slice(0, 7) ?? "最新"}`, tone: "ok", busy: false };
-    case "current": return { text: u.detail ? `已是最新 · ${u.detail}` : "已是最新", tone: "ok", busy: false };
-    case "failed": return { text: `更新失败：${u.detail ?? "原因未知"}`, tone: "bad", busy: false };
+    case "updating": return { text: L("Pulling and testing the new code…", "正在拉取并测试新代码…"), tone: "busy", busy: true };
+    case "waiting": return { text: `${u.detail ?? L("Restarting once running tasks finish", "等运行中的任务跑完后重启")}…`, tone: "busy", busy: true };
+    case "restarting": return { text: L("Restarting…", "正在重启…"), tone: "busy", busy: true };
+    case "deploying": return { text: L("Redeploying…", "正在重新发布线上…"), tone: "busy", busy: true };
+    case "done": return { text: L(`Updated to ${u.detail ?? h.rev?.slice(0, 7) ?? "latest"}`, `已更新到 ${u.detail ?? h.rev?.slice(0, 7) ?? "最新"}`), tone: "ok", busy: false };
+    case "current": return { text: u.detail ? L(`Up to date · ${u.detail}`, `已是最新 · ${u.detail}`) : L("Up to date", "已是最新"), tone: "ok", busy: false };
+    case "failed": return { text: L(`Update failed: ${u.detail ?? "unknown reason"}`, `更新失败：${u.detail ?? "原因未知"}`), tone: "bad", busy: false };
     default: return { text: u.state, tone: "muted", busy: false };
   }
 }
@@ -431,5 +438,5 @@ export function updateSummary(s: Status | null | undefined, now = Date.now()): {
   if (!lines.length) return null;
   const done = lines.filter((l) => l.tone === "ok").length, bad = lines.filter((l) => l.tone === "bad").length;
   const busy = lines.some((l) => l.busy);
-  return { text: `${busy ? "正在更新" : "更新结束"} · ${done}/${lines.length} 完成${bad ? ` · ${bad} 台有问题` : ""}`, busy };
+  return { text: L(`${busy ? "Updating" : "Update finished"} · ${done}/${lines.length} done${bad ? ` · ${bad} with problems` : ""}`, `${busy ? "正在更新" : "更新结束"} · ${done}/${lines.length} 完成${bad ? ` · ${bad} 台有问题` : ""}`), busy };
 }

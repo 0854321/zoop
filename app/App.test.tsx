@@ -77,14 +77,14 @@ describe("login", () => {
   test("email, then the 6-digit code logs in and keeps the session", async () => {
     const log = newLog();
     const app = await open("./App.tsx", { network: { ...hub([]), ...auth(log) } });
-    await app.waitFor("登录 Noop");
+    await app.waitFor("Sign in to Noop");
     await app.clear("id:url");
     await app.type("id:url", "hub.test:8787/");
     await app.type("id:email", "ceo@example.com");
     await app.press("id:send-code");
     await app.waitFor("id:code");
     expect(log.starts).toEqual([{ email: "ceo@example.com" }]);
-    expect(app.shows("text:/重新发送（\\d+s）/")).toBe(true);
+    expect(app.shows("text:/Resend \\(\\d+s\\)/")).toBe(true);
     await app.type("id:code", "123456"); // auto-submits on the 6th digit
     await app.waitFor("id:composer");
     expect(log.verifies).toEqual([{ email: "ceo@example.com", code: "123456" }]);
@@ -100,7 +100,7 @@ describe("login", () => {
       storage: { "hub.email": "ceo@example.com" },
       network: { ...hub([]), ...auth(log) },
     });
-    await app.waitFor("登录 Noop");
+    await app.waitFor("Sign in to Noop");
     expect(app.shows("id:url")).toBe(false);
     expect(app.value("id:email")).toBe("ceo@example.com");
     await app.submit("id:email");
@@ -115,7 +115,7 @@ describe("login", () => {
     await app.type("id:email", "ceo@example.com");
     await app.press("id:send-code");
     await app.type("id:code", "000000");
-    await app.waitFor("text:/验证码不对/");
+    await app.waitFor("text:/code is wrong/");
     expect(app.value("id:code")).toBe("");
 
     const limited = await open("./App.tsx", { host: { handlers: { page: { origin: URL } } }, network: auth(newLog(), { start: 429 }) });
@@ -126,7 +126,7 @@ describe("login", () => {
     const noMail = await open("./App.tsx", { host: { handlers: { page: { origin: URL } } }, network: auth(newLog(), { start: 503 }) });
     await noMail.type("id:email", "ceo@example.com");
     await noMail.press("id:send-code");
-    await noMail.waitFor("text:/没有配置发信/");
+    await noMail.waitFor("text:/can’t send email yet/");
   });
 
   test("an unreachable server is told apart", async () => {
@@ -135,7 +135,7 @@ describe("login", () => {
     await app.type("id:url", "nowhere.test:1");
     await app.type("id:email", "ceo@example.com");
     await app.press("id:send-code");
-    await app.waitFor("text:/连不上服务器/");
+    await app.waitFor("text:/Can’t reach/");
   });
 
   test("a 401 sends you back to the login", async () => {
@@ -143,7 +143,7 @@ describe("login", () => {
       storage: STORAGE,
       network: { [`GET ${URL}/api/feed`]: { status: 401 }, [`GET ${URL}/api/status`]: { status: 401 } },
     });
-    await app.waitFor("登录已过期，请重新登录");
+    await app.waitFor("Your session expired. Please sign in again.");
     expect(app.storage()["hub.token"]).toBe(undefined);
   });
 
@@ -156,7 +156,7 @@ describe("login", () => {
     await app.press("id:settings");
     await app.press("id:settings-tab-account");
     await app.press("id:logout");
-    await app.waitFor("登录 Noop");
+    await app.waitFor("Sign in to Noop");
     expect(log.logouts).toBe(1);
     expect(app.storage()["hub.token"]).toBe(undefined);
   });
@@ -186,15 +186,15 @@ describe("channel", () => {
       network: { ...hub([], many), [`GET ${URL}/api/feed?*`]: () => ({ body: { events: later.splice(0) } }) },
     });
     await app.waitFor("Tail message 89");
-    expect(app.shows("label:跳到最新")).toBe(false);
+    expect(app.shows("label:Jump to latest")).toBe(false);
 
     // Just off the end, closer than a message: it stays put and counts what came below.
     await app.scroll("id:timeline", -40);
-    await app.waitFor("跳到最新");
+    await app.waitFor("Jump to latest");
     arrive("Below the fold");
-    await app.waitFor("1 条新消息", { timeout: 10000 });
+    await app.waitFor("1 new messages", { timeout: 10000 });
     await app.wait(300); // following would reach the end, and the end clears the count
-    expect(app.shows("1 条新消息")).toBe(true);
+    expect(app.shows("1 new messages")).toBe(true);
 
     // Further up, what is on screen does not change.
     await app.scroll("id:timeline", -1500);
@@ -202,18 +202,18 @@ describe("channel", () => {
     const before = onScreen();
     expect(before.length).toBeGreaterThan(0);
     arrive("Further below");
-    await app.waitFor("2 条新消息", { timeout: 10000 });
+    await app.waitFor("2 new messages", { timeout: 10000 });
     await app.wait(300);
     // Rows mounted around the viewport come and go; none from nearer the end may appear.
     expect(onScreen().filter((t) => !before.includes(t))).toEqual([]);
 
     // Back at the end, new messages show by themselves.
-    await app.press("label:跳到最新");
+    await app.press("label:Jump to latest");
     await app.waitFor("Further below");
-    await app.waitUntil(() => !app.shows("label:跳到最新"));
+    await app.waitUntil(() => !app.shows("label:Jump to latest"));
     arrive("Followed");
     await app.waitFor("Followed", { timeout: 10000 });
-    expect(app.shows("label:跳到最新")).toBe(false);
+    expect(app.shows("label:Jump to latest")).toBe(false);
   });
 
   test("proposal selection survives a recycled timeline cell", async () => {
@@ -224,11 +224,11 @@ describe("channel", () => {
     await app.scroll("id:timeline", -20000);
     await app.waitFor("id:proposal-P-0900-1");
     await app.press("id:proposal-P-0900-1");
-    await app.waitFor("批准所选（1）");
+    await app.waitFor("Approve selected (1)");
     await app.scroll("id:timeline", 20000);
     await app.waitFor("Recycled message 89");
     await app.scroll("id:timeline", -20000);
-    await app.waitFor("批准所选（1）");
+    await app.waitFor("Approve selected (1)");
   });
 
   test("a message's avatar sits in the name's row on a phone, and in its own column when wide", async () => {
@@ -244,18 +244,18 @@ describe("channel", () => {
   test("shows the timeline, cards and sidebar", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
     await app.waitFor("要不要升级依赖？建议：B");
-    expect(app.shows("今天")).toBe(true);
-    expect(app.shows("需要决定")).toBe(true);
+    expect(app.shows("Today")).toBe(true);
+    expect(app.shows("Decide")).toBe(true);
     expect(app.shows("id:opt-D-0001-B")).toBe(true);
-    expect(app.shows("全部")).toBe(true);
-    expect(app.shows("都不要")).toBe(true);
+    expect(app.shows("All")).toBe(true);
+    expect(app.shows("None")).toBe(true);
     expect(app.shows("↳ P-0002") || app.shows("P-0002")).toBe(true);
     // sidebar
     expect(app.shows("text:/设置已更新/")).toBe(false);
     await app.waitFor("截图检查 gallery");
-    expect(app.shows("待你决定")).toBe(true);
+    expect(app.shows("Needs your decision")).toBe(true);
     expect(app.shows("text:/linux-box/")).toBe(true);
-    expect(app.shows("text:/排队 2/")).toBe(true);
+    expect(app.shows("text:/Queued 2/")).toBe(true);
   });
 
   test("a task id is a chip that opens the task; a GitHub PR link is a plain link named repo#n", async () => {
@@ -266,7 +266,7 @@ describe("channel", () => {
     await app.press("text:app#42");
     expect(app.openedUrls()).toEqual(["https://github.com/acme/app/pull/42"]);
     await app.press("id:task-chip-T-0005");
-    await app.waitFor("任务 T-0005");
+    await app.waitFor("Task T-0005");
   });
 
   test("a task page is its conversation: what was said about it, and a box that adds to it", async () => {
@@ -284,7 +284,7 @@ describe("channel", () => {
     await app.type("id:task-composer", "再看下 iPad");
     await app.press("id:task-send");
     expect(app.value("id:task-composer")).toBe(""); // reads as sent before the hub answers
-    expect(app.shows("发送中…")).toBe(false);
+    expect(app.shows("Sending…")).toBe(false);
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "再看下 iPad", reply_to: "T-0005", thread: true });
     await app.waitUntil(() => app.value("id:task-composer") === "");
@@ -330,7 +330,7 @@ describe("channel", () => {
     expect(app.shows("text:/other#3/")).toBe(true);
     // the recommendation marks its option instead of a line of its own
     expect(app.shows("text:/建议：\\*?A/")).toBe(false);
-    expect(app.shows("text:推荐")).toBe(true);
+    expect(app.shows("text:Recommended")).toBe(true);
   });
 
   test("a bare #746 links to the repository its thread names", async () => {
@@ -375,14 +375,14 @@ describe("channel", () => {
     await app.hover("text:/主要修的是文字排版/");
     await app.press("id:reply-e9");
     await app.waitFor("id:reply-chip");
-    expect(app.shows("text:回复 Kai：nsh #812 主要修的是文字排版")).toBe(true);
+    expect(app.shows("text:Reply to Kai: nsh #812 主要修的是文字排版")).toBe(true);
     await app.type("id:composer", "为何我看图片不清晰呢");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1, { timeout: 10_000 });
     expect(posts[0]).toEqual({ text: "为何我看图片不清晰呢", reply_to: "T-0125" });
     expect(app.shows("id:reply-chip")).toBe(false);
     await app.waitFor("id:reply-to-T-0125");
-    expect(app.shows("text:/Kai：nsh #812 主要修的是文字排版/")).toBe(true);
+    expect(app.shows("text:/Kai: nsh #812 主要修的是文字排版/")).toBe(true);
   });
 
   test("a question can be ignored from its card or from the sidebar", async () => {
@@ -392,7 +392,7 @@ describe("channel", () => {
     await app.press("id:ignore-D-H0003");
     await app.waitUntil(() => posts.length === 1);
     expect(posts[0]).toEqual({ text: "D-H0003 忽略" });
-    await app.waitFor("text:/^忽略$/");
+    await app.waitFor("text:/^Ignored$/");
     await app.rightClick("text:要不要升级依赖？ >> nth=0");
     await app.press("id:side-ignore-D-0001");
     await app.waitUntil(() => posts.length === 2);
@@ -400,12 +400,12 @@ describe("channel", () => {
     await app.waitUntil(() => !app.shows("id:ignore-D-0001"));
   });
 
-  test("其他指示 replies to the item from the composer", async () => {
+  test("Other instructions replies to the item from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
     await app.waitFor("id:opt-D-0001-B");
     await app.press("id:other-D-0001");
-    await app.waitFor("回复 D-0001");
+    await app.waitFor("Reply to D-0001");
     await app.type("id:composer", "先等一周");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
@@ -421,11 +421,11 @@ describe("channel", () => {
     await app.hover("text:/已完成，PR 已开/");
     await app.press("id:copy-e8");
     await app.waitUntil(() => app.clipboard() === "T-0009 已完成，PR 已开");
-    await app.waitFor("label:已复制");
+    await app.waitFor("label:Copied");
     // an open question answers through its card, so it has no reply action
     expect(app.shows("id:reply-e2")).toBe(false);
     await app.press("id:reply-e8");
-    await app.waitFor("回复 lead：T-0009 已完成，PR 已开");
+    await app.waitFor("Reply to lead: T-0009 已完成，PR 已开");
     await app.type("id:composer", "再加个截图");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
@@ -434,14 +434,14 @@ describe("channel", () => {
 
   test("a machine in the sidebar opens its page, and its tasks open theirs", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
-    await app.waitFor("主会话");
-    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
-    await app.waitFor("机器 linux-box");
-    await app.waitFor("运行中");
-    await app.waitFor("已用 60%");
+    await app.waitFor("Channel");
+    await app.press("label:Load 42% · Disk 120 GB free · 1 running");
+    await app.waitFor("Machine linux-box");
+    await app.waitFor("Running");
+    await app.waitFor("60% used");
     await app.waitFor("修复登录页");
     await app.press("label:T-0005 修复登录页");
-    await app.waitFor("任务 T-0005");
+    await app.waitFor("Task T-0005");
   });
 
   test("all tasks: older ones load page by page, and any of them opens", async () => {
@@ -458,10 +458,10 @@ describe("channel", () => {
         [`GET ${URL}/api/tasks/get?*`]: { body: { ...row(1), request: "很久以前的请求", runs: [{ ts: ts(1), host: "h", cli: "claude", status: "done", summary: "早就做完了" }] } },
       },
     });
-    await app.waitFor("主会话");
-    await app.press("label:全部任务");
+    await app.waitFor("Channel");
+    await app.press("label:All tasks");
     await app.waitFor("旧任务 0");
-    await app.waitFor("加载更多（还有 20 个）");
+    await app.waitFor("Load more (20 left)");
     await app.press("id:task-more");
     await app.waitFor("旧任务 69");
     await app.press("label:T-1001 旧任务 1");
@@ -472,8 +472,8 @@ describe("channel", () => {
   test("a dropped connection stays quiet until reconnecting keeps failing", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]) });
     await app.waitFor("id:composer");
-    expect(app.shows("text:/连接断开了/")).toBe(false);
-    await app.waitUntil(() => app.shows("text:/连接断开了/"), { timeout: 30_000 });
+    expect(app.shows("text:/Lost connection/")).toBe(false);
+    await app.waitUntil(() => app.shows("text:/Lost connection/"), { timeout: 30_000 });
   });
 
   test("a task no online machine can run says which machine it waits for", async () => {
@@ -482,8 +482,8 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [nohost, ...status.recent] } } },
     });
-    await app.waitFor("等 Windows 机器");
-    await app.press("label:T-0097 · 等机器");
+    await app.waitFor("Waiting for Windows machine");
+    await app.press("label:T-0097 · Waiting for a machine");
     await app.waitFor("id:task-nohost");
     expect(app.shows("id:cancel-task")).toBe(true);
     expect(app.shows("id:finish-task")).toBe(true);
@@ -495,8 +495,8 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [parked, ...status.recent] } } },
     });
-    await app.waitFor("等待");
-    await app.press("label:T-0236 · 等外部结果");
+    await app.waitFor("Waiting");
+    await app.press("label:T-0236 · Waiting on external result");
     await app.waitFor("id:cancel-task");
   });
 
@@ -506,17 +506,17 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/settings`]: { status: 500 }, [`POST ${URL}/api/fleet/update`]: () => { updates++; return { body: { ok: true } }; } },
     });
-    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
+    await app.press("label:Load 42% · Disk 120 GB free · 1 running");
     await app.waitFor("id:rev-linux-box");
     expect(app.shows("c1cc085")).toBe(true);
     await app.press("id:settings");
     await app.press("id:settings-tab-version");
     await app.waitFor("id:version-linux-box");
-    app.onDialog((d) => (d.title === "更新所有机器？" ? "取消" : null));
+    app.onDialog((d) => (d.title === "Update all machines?" ? "Cancel" : null));
     await app.press("id:update-fleet");
     await app.waitUntil(() => app.dialogs().length === 1);
     expect(updates).toBe(0);
-    app.onDialog((d) => (d.title === "更新所有机器？" ? "更新" : null));
+    app.onDialog((d) => (d.title === "Update all machines?" ? "Update" : null));
     await app.press("id:update-fleet");
     await app.waitUntil(() => updates === 1);
   });
@@ -537,21 +537,21 @@ describe("channel", () => {
     await app.press("id:settings");
     await app.press("id:settings-tab-version");
     await app.waitFor("等 1 个任务跑完后重启…");
-    expect(app.shows("已更新到 abc1234")).toBe(true);
-    expect(app.shows("等待响应…")).toBe(true);
-    expect(app.shows("更新失败：有本地改动或测试没通过，仍在运行旧代码")).toBe(true);
-    expect(app.shows("正在更新 · 1/4 完成 · 1 台有问题")).toBe(true);
-    expect(app.shows("正在更新…")).toBe(true);
+    expect(app.shows("Updated to abc1234")).toBe(true);
+    expect(app.shows("Waiting for a reply…")).toBe(true);
+    expect(app.shows("Update failed: 有本地改动或测试没通过，仍在运行旧代码")).toBe(true);
+    expect(app.shows("Updating · 1/4 done · 1 with problems")).toBe(true);
+    expect(app.shows("Updating…")).toBe(true);
   });
 
   test("sends a task with the button, and the drawer opens on phones", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts) });
     await app.waitFor("id:composer");
-    await app.press("label:菜单");
-    await app.waitFor("待你决定");
-    await app.press("label:收起菜单");
-    await app.waitUntil(() => !app.shows("待你决定"));
+    await app.press("label:Menu");
+    await app.waitFor("Needs your decision");
+    await app.press("label:Close menu");
+    await app.waitUntil(() => !app.shows("Needs your decision"));
     await app.type("id:composer", "截图检查\n两个平台");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1);
@@ -581,7 +581,7 @@ describe("images", () => {
     app.onPick(() => [{ name: "a.png", type: "image/png", data: PNG }, { name: "b.png", type: "image/png", data: PNG }]);
     await app.press("id:attach");
     await app.waitUntil(() => app.count("id:attachment") === 2);
-    await app.press("label:移除 b.png");
+    await app.press("label:Remove b.png");
     expect(app.count("id:attachment")).toBe(1);
     await app.type("id:composer", "看这个报错");
     await app.press("id:send");
@@ -617,7 +617,7 @@ describe("images", () => {
     await app.waitFor("id:attachment");
     await app.paste("id:composer", { files: [here("hub.ts")] });
     await app.waitFor("id:attach-note");
-    expect(app.shows("只能发送图片")).toBe(true);
+    expect(app.shows("Only images can be sent")).toBe(true);
     expect(app.count("id:attachment")).toBe(1);
     await app.submit("id:composer");
     await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
@@ -648,12 +648,12 @@ describe("keyboard", () => {
     await app.submit("id:composer");
     await app.waitFor("text:看一下日志");
     expect(app.shows("即将发送")).toBe(false);
-    expect(app.shows("发送中…")).toBe(false);
-    await app.waitFor("text:发送失败", { timeout: 8000 });
+    expect(app.shows("Sending…")).toBe(false);
+    await app.waitFor("text:Couldn’t send", { timeout: 8000 });
     fail = false;
-    await app.press("label:重试发送");
+    await app.press("label:Retry sending");
     await app.waitUntil(() => posts.length === 1, { timeout: 1000 }); // no second undo window
-    await app.waitUntil(() => !app.shows("发送失败"));
+    await app.waitUntil(() => !app.shows("Couldn’t send"));
   });
 
   test("a just-sent message can be recalled by its button: the words return and nothing is posted", async () => {
@@ -716,25 +716,25 @@ describe("keyboard", () => {
     const app = await open("./App.tsx", { ...desk, network: hub([]) });
     await app.waitFor("id:opt-D-0001-B");
     await app.keyboard.press("r");
-    await app.waitFor("回复 D-0001");
+    await app.waitFor("Reply to D-0001");
     await app.keyboard.press("escape");
-    expect(app.shows("回复 D-0001")).toBe(false);
+    expect(app.shows("Reply to D-0001")).toBe(false);
     await app.keyboard.press("escape");
     await app.keyboard.press("shift+/");
-    await app.waitFor("键盘快捷键");
+    await app.waitFor("Keyboard shortcuts");
     await app.keyboard.press("escape");
-    expect(app.shows("键盘快捷键")).toBe(false);
+    expect(app.shows("Keyboard shortcuts")).toBe(false);
   });
 
   test("mod+, opens team settings", async () => {
     const app = await open("./App.tsx", { ...desk, network: { ...hub([]), [`GET ${URL}/api/settings`]: { status: 500 } } });
     await app.waitFor("id:composer");
     await app.keyboard.press("mod+,");
-    await app.waitFor("团队设置");
+    await app.waitFor("Team settings");
     // Escape pops back to the channel, one page at a time.
     await app.keyboard.press("escape");
-    await app.waitUntil(() => !app.shows("团队设置"));
-    expect(app.shows("主会话")).toBe(true);
+    await app.waitUntil(() => !app.shows("Team settings"));
+    expect(app.shows("Channel")).toBe(true);
   });
 });
 
@@ -778,7 +778,7 @@ describe("team settings", () => {
     await app.press("id:autonomy-reporter-assisted");
     await app.press("id:settings-tab-routines");
     await app.waitFor("text:扫描收件箱");
-    await app.waitFor("text:每 30 分钟");
+    await app.waitFor("text:Every 30 min");
     await app.press("id:routine-triage-inbound");
     await app.press("id:every-triage-inbound");
     await app.press("id:every-triage-inbound-1h");
@@ -793,7 +793,7 @@ describe("team settings", () => {
       { host: { max_parallel: 5 } },
     ]);
     await app.waitFor("text:5");
-    await app.press("label:返回主会话");
+    await app.press("label:Back to Channel");
     await app.waitFor("id:composer");
   });
 
@@ -822,7 +822,7 @@ describe("team settings", () => {
     await app.press("id:media-days-30");
     await app.waitUntil(() => puts.length === 1);
     expect(puts).toEqual([{ media_days: 30 }]);
-    expect(app.shows("text:14 天")).toBe(true);
+    expect(app.shows("text:14 days")).toBe(true);
   });
 });
 
@@ -874,14 +874,14 @@ describe("notifications", () => {
     await app.press("id:settings-top");
     await app.press("id:settings-notify");
     await app.waitFor("id:push-enable");
-    expect(app.texts()).toContain("未开启");
+    expect(app.texts()).toContain("Off");
     await app.press("id:push-enable");
     await app.waitUntil(() => log.subs.length === 1);
     expect(log.subs[0]).toEqual({ subscription: { endpoint: "https://push.test/e1", keys: { p256dh: "k", auth: "a" } }, device_label: "Android · Chrome" });
     await app.waitFor("id:push-test");
     await app.press("id:push-test");
     await app.waitUntil(() => log.tests === 1);
-    await app.waitFor("text:/测试通知已发出/");
+    await app.waitFor("text:/Test notification sent/");
     await app.press("id:notify-result");
     await app.waitUntil(() => log.puts.length === 1);
     const p = log.puts[0] as { notify_prefs: { kinds: Record<string, boolean>; quiet_hours: unknown; tz: string } };
@@ -900,7 +900,7 @@ describe("notifications", () => {
     await app.press("id:settings-top");
     await app.press("id:settings-notify");
     await app.press("id:push-enable");
-    await app.waitFor("text:/通知被拦截了/");
+    await app.waitFor("text:/Notifications are blocked/");
   });
 
   test("iPhone in Safari: notification setup is in settings", async () => {
@@ -913,7 +913,7 @@ describe("notifications", () => {
     expect(app.shows("id:notify-banner")).toBe(false);
     await app.press("id:settings-top");
     await app.press("id:settings-notify");
-    await app.waitFor("text:/选「添加到主屏幕」/");
+    await app.waitFor("text:/Add to Home Screen/");
     expect(app.enabled("id:push-enable")).toBe(false);
   });
 
@@ -935,7 +935,7 @@ describe("notifications", () => {
       network: server(newLog()),
       width: 1200, height: 800, platform: "macos",
     });
-    await app.waitFor("以下为新消息");
+    await app.waitFor("New messages");
     await app.waitUntil(() => app.host.calls().some((c) => c.name === "setBadge" && (c.data as { count: number }).count === 1));
     expect(app.host.calls().some((c) => c.name === "setSession" && (c.data as { session: string }).session === "tok")).toBe(true);
     await app.host.send("open", { ref: "D-0001" });
@@ -948,7 +948,7 @@ describe("notifications", () => {
       network: hub([]),
       width: 1200, height: 800, platform: "macos",
     });
-    await app.waitFor("以下为新消息");
+    await app.waitFor("New messages");
   });
 
   test("logging out turns this device's notifications off", async () => {
@@ -959,10 +959,10 @@ describe("notifications", () => {
       network: { ...server(log), [`POST ${URL}/api/auth/logout`]: { body: { ok: true } } },
     });
     await app.press("id:settings-top");
-    app.onDialog((d) => (d.title === "退出登录？" ? "退出登录" : null));
+    app.onDialog((d) => (d.title === "Sign out?" ? "Sign out" : null));
     await app.press("id:logout");
-    await app.waitFor("登录 Noop");
-    expect(app.dialogs()[0].title).toBe("退出登录？");
+    await app.waitFor("Sign in to Noop");
+    expect(app.dialogs()[0].title).toBe("Sign out?");
     expect(log.unsubs).toEqual([{ endpoint: "https://push.test/e1" }]);
   });
 });
@@ -971,13 +971,13 @@ describe("voice input", () => {
   test("the microphone dictates into the composer until pressed again; nothing is sent", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
-    await app.waitFor("label:语音输入");
+    await app.waitFor("label:Voice input");
     await app.type("id:composer", "提醒我：");
-    await app.press("label:语音输入");
+    await app.press("label:Voice input");
     await app.waitUntil(() => app.speechRequests().length === 1);
     expect(app.speechRequests()[0].lang).toBe("zh-CN");
-    await app.waitFor("label:停止语音输入");
-    expect(app.shows("text:正在听…")).toBe(true);
+    await app.waitFor("label:Stop voice input");
+    expect(app.shows("text:Listening…")).toBe(true);
 
     // interim results replace each other; the words land after what was typed
     await app.hear("明天");
@@ -985,8 +985,8 @@ describe("voice input", () => {
     await app.hear("明天上午开会");
     expect(app.value("id:composer")).toBe("提醒我：明天上午开会");
 
-    await app.press("label:停止语音输入");
-    await app.waitFor("label:语音输入");
+    await app.press("label:Stop voice input");
+    await app.waitFor("label:Voice input");
     expect(app.value("id:composer")).toBe("提醒我：明天上午开会");
     expect(app.shows("id:dictating")).toBe(false);
     expect(posts).toEqual([]);
@@ -994,31 +994,31 @@ describe("voice input", () => {
 
   test("sending while listening stops it; a refused microphone is explained", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
-    await app.press("label:语音输入");
+    await app.press("label:Voice input");
     await app.hear("看一下日志");
     expect(app.value("id:composer")).toBe("看一下日志");
     await app.press("id:send");
-    await app.waitFor("label:语音输入");
+    await app.waitFor("label:Voice input");
     expect(app.value("id:composer")).toBe("");
 
-    await app.press("label:语音输入");
+    await app.press("label:Voice input");
     await app.endSpeech("not-allowed");
     await app.waitFor("id:attach-note");
-    expect(app.shows("text:/没有麦克风或语音识别权限/")).toBe(true);
-    expect(app.shows("label:停止语音输入")).toBe(false);
+    expect(app.shows("text:/No microphone or speech recognition permission/")).toBe(true);
+    expect(app.shows("label:Stop voice input")).toBe(false);
   });
 
   test("on a phone, listening shows a red stop button where the mic was; stopping keeps the words", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 390, height: 844, platform: "ios" });
-    await app.waitFor("label:语音输入");
-    await app.press("label:语音输入");
-    await app.waitFor("label:停止语音输入");
+    await app.waitFor("label:Voice input");
+    await app.press("label:Voice input");
+    await app.waitFor("label:Stop voice input");
     expect(app.shows("id:dictate")).toBe(true);
-    expect(app.shows("label:语音输入")).toBe(false);
+    expect(app.shows("label:Voice input")).toBe(false);
     await app.hear("部署一下");
-    await app.press("label:停止语音输入");
-    await app.waitFor("label:语音输入");
+    await app.press("label:Stop voice input");
+    await app.waitFor("label:Voice input");
     expect(app.value("id:composer")).toBe("部署一下");
     expect(posts).toEqual([]);
   });
@@ -1030,7 +1030,7 @@ test("clicking outside the macOS composer collapses an empty draft", async () =>
   expect(app.shows("id:send")).toBe(false);
   await app.keyboard.press("mod+k");
   await app.waitFor("id:send");
-  await app.press("label:主会话");
+  await app.press("label:Channel");
   await app.waitUntil(() => !app.shows("id:send"));
 });
 
@@ -1113,9 +1113,9 @@ describe("phones", () => {
     await app.waitFor("id:composer");
     await app.press("id:settings-top");
     await app.waitFor("id:phone-settings");
-    app.onDialog((d) => d.title === "退出登录？" ? "退出登录" : null);
+    app.onDialog((d) => d.title === "Sign out?" ? "Sign out" : null);
     await app.press("id:logout");
-    await app.waitFor("登录 Noop");
+    await app.waitFor("Sign in to Noop");
     expect(log.logouts).toBe(1);
   });
 
@@ -1126,7 +1126,7 @@ describe("phones", () => {
       await app.waitFor("id:composer");
       await app.press("id:settings-top");
       await app.waitFor("id:phone-settings");
-      for (const t of ["通知", "成员", "例行任务", "并行", "账号与连接", "退出登录"]) expect(app.shows(`id:phone-settings >> text:${t}`)).toBe(true);
+      for (const t of ["Notifications", "Members", "Routines", "Parallelism", "Account", "Sign out"]) expect(app.shows(`id:phone-settings >> text:${t}`)).toBe(true);
       // A member pushes its page: models and autonomy as radio rows.
       await app.press("id:member-reporter");
       await app.waitFor("id:phone-member");
@@ -1171,14 +1171,14 @@ describe("phones", () => {
   test("the sidebar opens from the left; a machine opens its page and back returns to the channel", async () => {
     const app = await open("./App.tsx", { storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform: "ios", network: hub([]) });
     await app.waitFor("id:composer");
-    expect(app.shows("待你决定")).toBe(false);
-    await app.press("label:菜单");
-    await app.waitFor("待你决定");
-    await app.press("label:负载 42% · 磁盘 120GB · 1 个运行中");
-    await app.waitFor("已用 60%");
-    await app.waitUntil(() => !app.shows("待你决定"));
+    expect(app.shows("Needs your decision")).toBe(false);
+    await app.press("label:Menu");
+    await app.waitFor("Needs your decision");
+    await app.press("label:Load 42% · Disk 120 GB free · 1 running");
+    await app.waitFor("60% used");
+    await app.waitUntil(() => !app.shows("Needs your decision"));
     await app.back();
-    await app.waitUntil(() => !app.shows("已用 60%"));
+    await app.waitUntil(() => !app.shows("60% used"));
     expect(app.shows("id:composer")).toBe(true);
   });
 
@@ -1187,7 +1187,7 @@ describe("phones", () => {
     await app.waitFor("id:composer");
     await app.press("id:settings-top");
     await app.waitFor("id:phone-settings");
-    await app.press("label:返回主会话");
+    await app.press("label:Back to Channel");
     await app.waitUntil(() => !app.shows("id:phone-settings"));
     expect(app.shows("id:composer")).toBe(true);
   });
@@ -1222,16 +1222,16 @@ describe("rules and memory", () => {
     const reads: string[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: rulesServer(reads) });
     await app.waitFor("id:composer");
-    await app.press("label:记忆");
+    await app.press("label:Memory");
     await app.waitFor("id:rules-policies");
-    for (const t of ["规则", "我的偏好", "Agents", "决策先例", "fleet", "projects/app", "owner", "dev · 档案", "dev · 记忆", "暂无内容"]) expect(app.shows(`id:rules >> text:${t}`)).toBe(true);
+    for (const t of ["Rules", "My preferences", "Agents", "Precedents", "fleet", "projects/app", "owner", "dev · Profile", "dev · Memory", "Nothing yet"]) expect(app.shows(`id:rules >> text:${t}`)).toBe(true);
     expect(app.shows("text:notes")).toBe(false);
     await app.press("id:rule-policies/fleet.md");
     await app.waitFor("全队规则");
     expect(app.shows("text:先写测试再改代码")).toBe(true);
     expect(app.shows("text:id: fleet")).toBe(false);
     expect(reads).toEqual(["policies/fleet.md"]);
-    await app.press("label:返回记忆");
+    await app.press("label:Back to Memory");
     await app.waitFor("id:rules");
   });
 
@@ -1293,8 +1293,8 @@ describe("commands", () => {
     expect(app.value("id:composer")).toBe("");
     expect(app.shows("id:commands")).toBe(false);
 
-    app.onDialog((d) => (d.title === "更新所有机器？" ? "更新" : null));
-    await app.type("id:composer", "/更新");
+    app.onDialog((d) => (d.title === "Update all machines?" ? "Update" : null));
+    await app.type("id:composer", "/Update");
     await app.press("id:command-builtin:update-fleet");
     await app.waitUntil(() => updates.n === 1);
     expect(posts.length).toBe(1);

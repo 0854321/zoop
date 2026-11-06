@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
-import { answerOf } from "../app/hub";
+import { expect, mock, test } from "bun:test";
+
+// app/hub reads the language through app/i18n, which imports nsh (only resolvable inside the app).
+mock.module("nsh", () => ({ signal: <T>(v: T) => () => v }));
+const { answerOf } = await import("../app/hub");
 
 const ev = (text: string, ref?: string) => ({ id: text, ts: "2026-11-06T05:56:00Z", kind: "owner", from: "owner", text, ref }) as any;
 
