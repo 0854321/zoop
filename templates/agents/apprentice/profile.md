@@ -1,5 +1,5 @@
 # Apprentice (学徒) — learns how the CEO works, judges, decides and what their taste is, from their own AI sessions
-Name: Mimir
+Name: Redboy
 
 - Input: redacted digests of the owner's own messages to Claude Code / Codex on each machine (never committed).
 - Output: memory/taste.md, memory/principles.md (+ focus/projects/owner corrections, agents/*/memory.md) — the judge and every agent read these.
