@@ -290,9 +290,24 @@ function reapStale(cfg: Cfg, host: string, ownOnly = false) {
   }
 }
 
-/** Tasks whose hard requirements no online host satisfies: note once, never block the queue. */
+/** Tasks whose hard requirements no online host satisfies: note once, never block the queue.
+ *  A pin to one machine (host:X) is a preference once X has been offline for a while: if an online host meets
+ *  every other requirement (os, cli…), the pin becomes `prefer` so the task moves to another machine. */
 function noteUnservable(cfg: Cfg, host: string) {
   const hosts = onlineHosts(cfg);
+  const graceMs = (cfg.fleet?.host_pin_wait_minutes ?? 20) * 60_000;
+  for (const p of list(P("tasks", "inbox"), /^T-.*\.md$/)) {
+    const { meta, body } = readDoc(p);
+    const reqs = (meta.requires ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    const pins = reqs.filter((r) => r.startsWith("host:"));
+    if (!pins.length || hosts.some((h) => reqs.every((r) => capOk(r, h.caps)))) continue;
+    const rest = reqs.filter((r) => !r.startsWith("host:"));
+    const since = Date.parse(meta.parked ?? meta.created ?? "") || Date.now();
+    if (Date.now() - since < graceMs || !hosts.some((h) => rest.every((r) => capOk(r, h.caps)))) continue;
+    const prefer = [...new Set([...(meta.prefer ?? "").split(","), ...pins].map((x) => x.trim()).filter(Boolean))].join(",");
+    writeDoc(p, { ...meta, requires: rest.join(",") || undefined, prefer, parked: undefined }, body);
+    journal(host, `🔀 ${meta.id} ${pins.join("+")} 离线超过 ${Math.round(graceMs / 60_000)} 分钟，改由其他在线机器执行`);
+  }
   for (const p of list(P("tasks", "inbox"), /^T-.*\.md$/)) {
     const { meta, body } = readDoc(p);
     const reqs = (meta.requires ?? "").split(",").map((x) => x.trim()).filter(Boolean);
