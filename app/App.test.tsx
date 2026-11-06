@@ -177,6 +177,18 @@ describe("channel", () => {
     await app.waitFor("Long timeline message 89");
     expect(app.shows("Long timeline message 0")).toBe(false);
   });
+  test("the channel shows the newest 200 messages; older ones load on request", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ id: `page-${i}`, ts: ts(i / 5), from: "agent", kind: "notice", text: `Paged message ${i}` }));
+    const app = await open("./App.tsx", { storage: STORAGE, width: 390, height: 800, platform: "ios", network: hub([], many) });
+    await app.waitFor("Paged message 249");
+    const toTop = async (seen: string) => { for (let i = 0; i < 100 && !app.shows(seen); i++) await app.scroll("id:timeline", -2000).catch(() => {}); };
+    await toTop("id:timeline-more");
+    expect(app.shows("id:timeline-more")).toBe(true);
+    expect(app.shows("Paged message 0")).toBe(false);
+    await app.press("id:timeline-more");
+    await toTop("Paged message 0");
+    expect(app.shows("Paged message 0")).toBe(true);
+  });
   test("a new message leaves a timeline scrolled up where it is; at the end it follows", async () => {
     const many = Array.from({ length: 90 }, (_, i) => ({ id: `tail-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Tail message ${i}` }));
     const later: unknown[] = [];

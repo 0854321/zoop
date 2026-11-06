@@ -1251,7 +1251,6 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
   const loading = signal(false);
   const query = signal("");
   let asked = 0; // the newest request; an older answer that lands late is dropped
-  let typing: ReturnType<typeof setTimeout> | undefined; // search once typing pauses, not on every keystroke
   async function load(reset: boolean) {
     const mine = ++asked;
     loading.set(true);
@@ -1269,14 +1268,19 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
   return (
     <Scroll testID="task-history" style={{ flex: 1 }}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 20 }}>
-        <Input
-          testID="task-search"
-          value={query()}
-          onChange={({ value }) => { query.set(value); clearTimeout(typing); typing = setTimeout(() => void load(true), 300); }}
-          placeholder={L("Search by ID, title or member", "搜索编号、标题或成员")}
-          class="placeholder:text-faint"
-          style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
-        />
+        {/* searched on the button or Enter, not on every keystroke: each search reads every task on the server */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Input
+            testID="task-search"
+            value={query()}
+            onChange={({ value }) => query.set(value)}
+            onSubmit={() => void load(true)}
+            placeholder={L("Search by ID, title or member", "搜索编号、标题或成员")}
+            class="placeholder:text-faint"
+            style={{ flex: 1, height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
+          />
+          <Btn testID="task-search-button" label={L("Search", "搜索")} kind="secondary" disabled={loading()} onPress={() => void load(true)} />
+        </View>
         <If when={error()}><Text style={{ fontSize: 14, color: colors.danger }}>{error()}</Text></If>
         <If when={total() === 0 && !loading()}><Text style={{ fontSize: 14, color: colors.faint }}>{L("No matching tasks", "没有符合的任务")}</Text></If>
         <View>
@@ -3408,14 +3412,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   });
   // List diffs its items by identity: rebuilt rows would read as all replaced on every new message,
   // losing their measurements and the reader's place. Reuse each row while its event is the same.
-  type TimelineRow = Row | { key: string; unread: true };
+  type TimelineRow = Row | { key: string; unread: true } | { key: string; more: number };
+  /** The newest messages shown; older ones wait behind 「加载更早的消息」 so the list stays short. */
+  const PAGE = 200;
+  const limit = signal(PAGE);
   let built = new Map<string, TimelineRow>();
   const UNREAD: TimelineRow = { key: "unread", unread: true };
   const timeline = computed((): TimelineRow[] => {
     const d = divider();
     const next = new Map<string, TimelineRow>();
     const out: TimelineRow[] = [];
-    for (const row of rows(shown())) {
+    const all = shown();
+    const hidden = Math.max(0, all.length - limit());
+    if (hidden) out.push({ key: "more", more: hidden });
+    for (const row of rows(hidden ? all.slice(hidden) : all)) {
       if ("event" in row && row.event.id === d) out.push(UNREAD);
       const old = built.get(row.key);
       const keep = old && ("event" in row ? "event" in old && old.event === row.event : "day" in old);
@@ -3716,6 +3726,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   }
   /** Virtualized cards can be off screen; locate the row by identity instead of measuring a view. */
   function toCard(ref: string, tries: number) {
+    const at = shown().findIndex((e) => e.ref === ref && isAsk(e));
+    if (at >= 0 && shown().length - at > untracked(limit)) limit.set(shown().length - at); // older than the page: show it
     const index = timeline().findIndex((row) => "event" in row && row.event.ref === ref && isAsk(row.event));
     if (index >= 0 && scroller) {
       scroller.scrollToIndex({ index, animated: true, viewOffset: 24 });
@@ -3972,6 +3984,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 <Each of={[item()]} key={(r) => r.key}>
                   {(r) => {
                     const row = r();
+                    if ("more" in row) {
+                      return (
+                        <View style={{ alignItems: "center", marginTop: 16, marginBottom: 4 }}>
+                          <Btn testID="timeline-more" label={L(`Load earlier messages (${row.more})`, `加载更早的消息（还有 ${row.more} 条）`)} kind="secondary" onPress={() => limit.set(untracked(limit) + PAGE)} />
+                        </View>
+                      );
+                    }
                     if ("unread" in row) {
                       return (
                         <View testID="unread" style={{ flexDirection: "row", alignItems: "center", gap: 12, marginTop: 16, marginBottom: 4 }}>
