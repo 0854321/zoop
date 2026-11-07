@@ -1,5 +1,5 @@
 // Builds the prompt for an agent, runs Claude Code / Codex headless, parses the structured result.
-import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -141,8 +141,9 @@ function toolStep(name: string, input: any): string {
 /** Marker runAgent appends when it stopped a run that went quiet (see stall_minutes). */
 export const STALLED = "\n[stalled]";
 
+/** `retryEmpty` is internal: an empty completion gets exactly one rerun (see the end of the function). */
 export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cfg, logFile: string, gateOverride = false,
-  extraEnv: Record<string, string> = {}): Promise<string> {
+  extraEnv: Record<string, string> = {}, retryEmpty = true): Promise<string> {
   const cmd = cliCommand(cli, cfg, gateOverride);
   const timeoutMs = (cfg.clis?.timeout_minutes ?? 60) * 60_000;
   const stallMs = (cfg.clis?.stall_minutes ?? 20) * 60_000;
@@ -219,6 +220,18 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
   const out = json ? (resultText ?? assistantText) : raw;
   if (timedOut) return `${out}${STALLED} hit the ${Math.round(timeoutMs / 60_000)}-minute run limit (clis.timeout_minutes)${act.step ? `; last step: ${act.step}` : ""}; run long builds in the background and return "waiting"`;
   if (stalled) return `${out}${STALLED} no output for ${Math.round(stallMs / 60_000)} minutes${act.step ? `; last step: ${act.step}` : ""}`;
+  // A provider occasionally answers with an empty completion (no text, no tool call, exit 0) and Claude Code's own
+  // "no visible output" retry gets nothing either. That is a flake of the tool chain, not the task failing: rerun the
+  // same prompt once, and never hand the empty run back to the caller as the task's result.
+  // Do not retry when the run already used a tool or printed visible assistant text: an empty final result can still
+  // sit on top of side effects (a posted comment, a commit), and replaying the prompt would repeat them. `out` is only
+  // the final/assistant text, so also require act.steps === 0 and no accumulated assistantText.
+  if (retryEmpty && !out.trim() && !code && !act.steps && !assistantText.trim()) {
+    const first = readFileSync(logFile, "utf8");
+    const again = await runAgent(cli, prompt, cwd, cfg, logFile, gateOverride, extraEnv, false);
+    writeFileSync(logFile, `${first}\n\n[retried after an empty response]\n${readFileSync(logFile, "utf8")}`); // keep both attempts
+    return again;
+  }
   return out + (code ? `\n[exit ${code}] ${err.slice(-2000)}` : "");
 }
 
