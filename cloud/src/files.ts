@@ -13,7 +13,9 @@
 //        Read-only views of the team's rules and memory. config.toml and everything else stay machine-only.
 //
 // Every write gets its own global `rev` (monotonic), so `changes?since=` pagination never splits a row.
-// History keeps ≤ 90 days and ≤ 20k rows, but always the latest row of each path.
+// History keeps ≤ 90 days, ≤ 20k rows and ≤ 30 versions per path, but always the latest row of each path.
+// Journals, logs and heartbeats keep only their latest row: each write is a full copy, and an append-only journal
+// rewritten every minute alone grew history past a gigabyte.
 
 /** Structural subset of Cloudflare's SqlStorage (also satisfied by a bun:sqlite adapter in tests). */
 export interface FilesSql { exec(query: string, ...bindings: any[]): { toArray(): any[] } }
@@ -21,7 +23,11 @@ export interface FilesSql { exec(query: string, ...bindings: any[]): { toArray()
 export const MAX_FILE = 1_500_000;          // bytes per file (SQLite row limit is 2 MB)
 const PAGE_BYTES = 8_000_000;               // response budget for one changes page
 const PAGE_ROWS = 1000;
-const HISTORY_DAYS = 90, HISTORY_ROWS = 20_000;
+const HISTORY_DAYS = 90, HISTORY_ROWS = 20_000, HISTORY_PER_PATH = 30;
+/** Paths rewritten constantly whose old versions are worth nothing (append-only logs, machine heartbeats). */
+export const latestOnly = (p: string) =>
+  p.startsWith("journal/") || p.startsWith("logs/") || p.startsWith("fleet/") || p === "memory/lessons.md" || p === "memory/judge-feedback.md";
+const LATEST_ONLY_SQL = `(path LIKE 'journal/%' OR path LIKE 'logs/%' OR path LIKE 'fleet/%' OR path IN ('memory/lessons.md', 'memory/judge-feedback.md'))`;
 
 const json = (d: unknown, status = 200) => Response.json(d, { status });
 
@@ -82,6 +88,7 @@ function applyCas(sql: FilesSql, items: Prepared[], actor: string, msg: string):
       ON CONFLICT(path) DO UPDATE SET content = excluded.content, hash = excluded.hash, version = excluded.version,
         updated = excluded.updated, by = excluded.by, deleted = excluded.deleted, rev = excluded.rev`,
       it.path, it.content ? blob(it.content) : null, it.hash, version, ts, actor, it.content ? 0 : 1, rev);
+    if (latestOnly(it.path)) sql.exec("DELETE FROM history WHERE path = ?", it.path);
     sql.exec("INSERT INTO history (path, version, hash, content, ts, by, msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
       it.path, version, it.hash, it.content ? blob(it.content) : null, ts, actor, msg);
     out.push({ path: it.path, version, hash: it.hash, deleted: !it.content });
@@ -99,6 +106,10 @@ export function pruneHistory(sql: FilesSql, now = Date.now()) {
   const cutoff = new Date(now - HISTORY_DAYS * 86400_000).toISOString();
   sql.exec(`DELETE FROM history WHERE (ts < ? OR seq <= (SELECT MAX(seq) FROM history) - ?)
     AND seq NOT IN (SELECT MAX(seq) FROM history GROUP BY path)`, cutoff, HISTORY_ROWS);
+  // older versions beyond the per-path cap, and everything but the latest row of latest-only paths
+  sql.exec(`DELETE FROM history WHERE seq IN (SELECT seq FROM (SELECT seq, path,
+      ROW_NUMBER() OVER (PARTITION BY path ORDER BY seq DESC) AS rn FROM history)
+    WHERE rn > ? OR (rn > 1 AND ${LATEST_ONLY_SQL}))`, HISTORY_PER_PATH);
 }
 
 /** Prefixes the owner session may read (rules, memory, agent profiles, closed decisions). Never config / secrets. */

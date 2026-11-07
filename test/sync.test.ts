@@ -129,6 +129,36 @@ test("history pruning keeps the latest row of each path", async () => {
   expect(sql.exec("SELECT path, version FROM history ORDER BY path").toArray()).toEqual([{ path: "a", version: 2 }, { path: "b", version: 1 }]);
 });
 
+test("history pruning caps versions per path and keeps only the latest of journals and heartbeats", async () => {
+  const { initFilesSchema, pruneHistory } = await import("../cloud/src/files");
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(":memory:");
+  const sql = { exec: (q: string, ...b: any[]) => { if (!b.length && q.includes(";")) { db.exec(q); return { toArray: () => [] }; } const rows = db.query(q).all(...b); return { toArray: () => rows as any[] }; } };
+  initFilesSchema(sql);
+  const ts = new Date().toISOString();
+  for (let v = 1; v <= 40; v++) for (const p of ["tasks/done/T-1.md", "journal/2026-11-06.md", "fleet/hosts/a.json"])
+    sql.exec("INSERT INTO history (path, version, ts) VALUES (?, ?, ?)", p, v, ts);
+  pruneHistory(sql);
+  const rows = sql.exec("SELECT path, COUNT(*) AS n, MIN(version) AS lo, MAX(version) AS hi FROM history GROUP BY path ORDER BY path").toArray();
+  expect(rows).toEqual([
+    { path: "fleet/hosts/a.json", n: 1, lo: 40, hi: 40 },
+    { path: "journal/2026-11-06.md", n: 1, lo: 40, hi: 40 },
+    { path: "tasks/done/T-1.md", n: 30, lo: 11, hi: 40 },
+  ]);
+});
+
+test("worker API: a journal write replaces its history row instead of adding a full copy", async () => {
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  let v = 0;
+  for (const text of ["- a\n", "- a\n- b\n", "- a\n- b\n- c\n"]) {
+    const r = await api("/api/files/commit", { msg: "beat", changes: [{ path: "journal/2026-01-01.md", base_version: v, content: b64(text) }] });
+    expect(r!.status).toBe(200); v = r!.json.files[0].version;
+  }
+  const h = (await api("/api/files/history?path=journal/2026-01-01.md&content=1"))!.json.history;
+  expect(h.map((x: any) => x.version)).toEqual([v]);
+  expect(Buffer.from(h[0].content, "base64").toString()).toBe("- a\n- b\n- c\n");
+});
+
 test("own commit echoing back on the next pull does not clobber newer local edits", async () => {
   as("a"); put("a", "config.toml", "v1\n"); expect(await sync.commitPush("a")).toBe(true);
   put("a", "config.toml", "v2 local\n");
