@@ -40,6 +40,8 @@ import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
+// shellInfo through the namespace: runtimes older than it lack the export, and a missing named import would fail to link
+import * as nshUpdater from "nsh/updater";
 import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
@@ -47,7 +49,7 @@ import { CheckMark } from "./ui/icons";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
 import { createTimelineWindow } from "./timeline";
-import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
+import { CHECK_EVERY_MS, createUpdates, shellLine, type ShellInfo, type UpdateState } from "./update";
 import {
   alpha,
   colors,
@@ -2916,9 +2918,17 @@ function VersionRows(props: { hub: Hub }) {
   // This app's own code: the release it was built for, or the OTA package it runs (nsh/updater).
   const ota = runningPackage();
   const client = ota ? L(`${ota.version} · OTA build ${ota.build}`, `${ota.version} · OTA 构建 ${ota.build}`) : CLIENT_VERSION;
+  // The installed app around that code (on iOS its CFBundleShortVersionString / CFBundleVersion) and its NSH runtime.
+  const info = (nshUpdater as { shellInfo?: () => ShellInfo }).shellInfo?.();
+  const shell = shellLine(info, platform.os);
+  const shellText = shell?.text === "no-packages" ? L(`${info!.version ?? "?"} (${info!.build ?? "?"}) takes no over-the-air updates: install the app again`, `${info!.version ?? "?"}（${info!.build ?? "?"}）收不到自动更新：请重新安装 App`)
+    : shell?.text;
   return (
     <>
       <SetRow first label={L("This app", "本机客户端")} value={client} testID="version-client" />
+      <If when={shell}>
+        <SetRow label={L("App shell", "外壳")} value={shell?.tone === "ok" ? shellText : undefined} detail={shell?.tone === "bad" ? shellText : undefined} tone={shell?.tone === "bad" ? "danger" : undefined} testID="version-shell" />
+      </If>
       <Each of={hosts()} key={(h) => h.host}>
         {(h) => {
           const line = () => updateLine(h(), request(), clock());
