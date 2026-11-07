@@ -1650,6 +1650,8 @@ function SideRow(props: { onPress?: () => void; selected?: boolean; title?: stri
       hoverStyle={props.onPress && !props.selected ? hovered() : undefined}
       style={{
         minHeight: size.row,
+        minWidth: 0,
+        overflow: "hidden",
         marginHorizontal: 10,
         flexDirection: "row",
         alignItems: "center",
@@ -1741,9 +1743,9 @@ function Sidebar(props: {
       [L("Done", "完成"), q?.done],
     ] as const;
   };
-  const rowText = () => ({ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }) as const;
+  const rowText = () => ({ flex: 1, minWidth: 0, fontSize: 14.5, color: colors.text, numberOfLines: 1 }) as const;
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, minWidth: 0 }}>
       <View
         desktop={{ windowDrag: true }}
         // the floating panel starts below the window's top: its row stays centered on the title bar, level with the window controls
@@ -1757,8 +1759,9 @@ function Sidebar(props: {
           <ToolButton icon="sidebar" label={L("Hide sidebar", "隐藏侧栏")} noTooltip compact onPress={() => props.onCollapse?.()} />
         </If>
       </View>
-      <Scroll style={{ flex: 1 }}>
-        <View style={{ paddingBottom: 16, gap: 1 }}>
+      <Scroll testID="sidebar-scroll" style={{ flex: 1, minWidth: 0 }}>
+        {/* Keep intrinsic text widths from expanding the scrollable content. */}
+        <View style={{ width: "100%", minWidth: 0, overflow: "hidden", paddingBottom: 16, gap: 1 }}>
           <View style={{ paddingTop: 8 }}>
             <SideRow onPress={props.onHome} selected={props.home()} title={L("Channel", "主会话")}>
               <Icon name="chat" size={17} tint={props.home() ? colors.text : colors.muted} />
@@ -1828,7 +1831,7 @@ function Sidebar(props: {
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? L("Waiting on subtasks", "等子任务") : a().state === "parked" ? L("Waiting", "等待") : a().state === "nohost" ? L(`Waiting for ${needsLabel((a() as { needs?: string }).needs)}`, `等 ${needsLabel((a() as { needs?: string }).needs)}`) : L("Queued", "排队中")}</Text>
+                  <Text style={{ maxWidth: "50%", minWidth: 0, flexShrink: 1, numberOfLines: 1, fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? L("Waiting on subtasks", "等子任务") : a().state === "parked" ? L("Waiting", "等待") : a().state === "nohost" ? L(`Waiting for ${needsLabel((a() as { needs?: string }).needs)}`, `等 ${needsLabel((a() as { needs?: string }).needs)}`) : L("Queued", "排队中")}</Text>
                 </SideRow>
                 }>
                   {taskItems(a().id)}
