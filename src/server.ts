@@ -17,7 +17,8 @@ import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
 import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
-import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
+import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
+import { timingSafeEqual } from "node:crypto";
 import { readable, validPath } from "../cloud/src/files";
 import { parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
 import { localStore } from "./brain";
@@ -418,7 +419,9 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
   const auth = (req: Request) => {
     const h = req.headers.get("authorization") ?? "";
     const q = new URL(req.url).searchParams.get("token");
-    return h === `Bearer ${s.token}` || q === s.token;
+    const t = h.startsWith("Bearer ") ? h.slice(7) : q ?? "";
+    const want = new TextEncoder().encode(String(s.token)), got = new TextEncoder().encode(t);
+    return got.length === want.length && timingSafeEqual(got, want);
   };
   const json = (d: unknown, status = 200) => Response.json(d, { status });
 
@@ -441,7 +444,9 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
       if (url.pathname === "/api/stream" && srv.upgrade(req)) return undefined as unknown as Response;
       if (url.pathname.startsWith("/media/")) {
         const f = join(MEDIA, basename(url.pathname));
-        return existsSync(f) ? new Response(Bun.file(f)) : json({ error: "not found" }, 404);
+        if (!existsSync(f)) return json({ error: "not found" }, 404);
+        const file = Bun.file(f);
+        return new Response(file, { headers: mediaHeaders(file.type, basename(f)) });
       }
       if (url.pathname === "/api/feed") return json({ events: feed(url.searchParams.get("since") ?? undefined) });
       if (url.pathname === "/api/status") return json(status());

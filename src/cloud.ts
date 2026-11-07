@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
+import { ipAllowed, parseAllowList } from "../cloud/src/ipallow";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { writeHubToml } from "./sync";
 import { ensureWebClient } from "./webclient";
@@ -166,6 +167,12 @@ async function vapidKeys(): Promise<{ publicKey: string; privateJwk: Jwk }> {
   return k;
 }
 
+/** [cloud] allow_ips (a string or a list of IPs / CIDRs) → the HUB_ALLOW_IPS secret ("" = no IP restriction). */
+export function allowIps(cfg: Cfg): string {
+  const v = cfg.cloud?.allow_ips;
+  return (Array.isArray(v) ? v.map(String) : String(v ?? "").split(/[\s,]+/)).map((x) => x.trim()).filter(Boolean).join(",");
+}
+
 /** Why the last cloudDeploy returned false (for the journal: a daemon's console is out of the owner's sight). */
 export let lastDeployError = "";
 
@@ -185,6 +192,15 @@ export async function cloudDeploy(cfg: Cfg) {
   if (!cfg.server?.token) return fail("缺少 [server] token，先运行 hub init");
   if (!(await ensureWebClient())) return fail("客户端网页下载失败，Worker 没有部署。请检查网络后重新运行：noop cloud deploy");
   const name = cfg.cloud?.name ?? "noop";
+  // IP allow-list: refuse a list that doesn't parse, or that would shut out the very machine deploying it
+  const allow = allowIps(cfg);
+  if (allow) {
+    const { nets, bad } = parseAllowList(allow);
+    if (bad.length) return fail(`[cloud] allow_ips 里有无法识别的项：${bad.join(" ")}`);
+    const prev = String(cfg.cloud?.domain ? `https://${cfg.cloud.domain}` : cfg.cloud?.url ?? "").replace(/\/$/, "");
+    const mine = prev ? (await fetch(`${prev}/cdn-cgi/trace`).then((r) => r.text()).catch(() => "")).match(/^ip=(.+)$/m)?.[1]?.trim() : undefined;
+    if (mine && !ipAllowed(mine, nets)) return fail(`本机出口 IP ${mine} 不在 [cloud] allow_ips 里：部署后这台机器会连不上 Worker。先把它加进去再部署。`);
+  }
   console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
   // [cloud] domain (e.g. noop.example.com on a zone in the same account) attaches a Custom Domain and becomes the URL
   const domain = String(cfg.cloud?.domain ?? "").trim();
@@ -192,7 +208,7 @@ export async function cloudDeploy(cfg: Cfg) {
   const out = dep.stdout.toString() + dep.stderr.toString();
   if (dep.exitCode !== 0) return fail(out.slice(-1500));
   const url = domain ? `https://${domain}` : out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
-  const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token };
+  const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token, HUB_ALLOW_IPS: allow };
   const e = cfg.email ?? {};
   if (e.to && e.host) {
     secrets.HUB_OWNER_EMAIL = String(e.to);
@@ -215,7 +231,7 @@ export async function cloudDeploy(cfg: Cfg) {
     const f = P("config.toml");
     let s = readFileSync(f, "utf8");
     // keep the account too: without it the primary's next redeploy (on every update) may land in another account
-    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}`;
+    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}${allow ? `allow_ips = "${allow}"\n` : ""}`;
     s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `${block}\n`) : `${s.trimEnd()}\n\n${block}`;
     writeFileSync(f, s);
     writeFileSync(P("README.md"), `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`);

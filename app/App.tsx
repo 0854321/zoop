@@ -130,6 +130,8 @@ import {
   type TaskInfo,
 } from "./hub";
 import { notificationFor, type NotifyRules } from "./notify";
+// Email sign-in code length (cloud/src/index.ts CODE_LEN): letters and digits, case-insensitive.
+const CODE_LEN = 8;
 
 type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
@@ -195,7 +197,10 @@ async function loadConfig(): Promise<Boot> {
   return { config: url && token ? { url: normalizeUrl(url), token } : null, suggested, served: !!page.origin, email, ref: page.ref ?? null };
 }
 
-type Conn = "connecting" | "live" | "offline" | "unauthorized";
+type Conn = "connecting" | "live" | "offline" | "unauthorized" | "blocked";
+/** The Worker's IP allow-list (HUB_ALLOW_IPS) turned this device away; `ip` is its address as the Worker saw it. */
+const ipBlocked = (status: number, data: unknown): string | null =>
+  status === 403 && (data as { error?: unknown })?.error === "ip_blocked" ? String((data as { ip?: unknown }).ip ?? "?") : null;
 
 /** Failed reconnects in a row before the owner hears about it; anything shorter recovers silently. */
 const OFFLINE_AFTER = 5;
@@ -204,6 +209,7 @@ function createHub(cfg: Config) {
   const events = signal<HubEvent[]>([]);
   const status = signal<Status | null>(null);
   const conn = signal<Conn>("connecting");
+  const blockedIp = signal("");
   const loaded = signal(false);
   const headers = { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" };
   let disposed = false;
@@ -222,6 +228,9 @@ function createHub(cfg: Config) {
       const r = await fetch(`${cfg.url}/api/feed${since ? `?since=${encodeURIComponent(since)}` : ""}`, { headers });
       if (r.status === 401) return conn.set("unauthorized");
       const body = (await r.json()) as { events: HubEvent[] };
+      const ip = ipBlocked(r.status, body);
+      if (ip) { blockedIp.set(ip); return conn.set("blocked"); } // retried with the socket: the device may change networks
+      if (untracked(conn) === "blocked") conn.set("connecting");
       events.update((evs) => merge(evs, body.events));
     } catch {
       /* the socket's retries decide when this counts as offline */
@@ -259,7 +268,7 @@ function createHub(cfg: Config) {
     };
     ws.onclose = () => {
       if (disposed) return;
-      if (++failures >= OFFLINE_AFTER && untracked(conn) !== "unauthorized") conn.set("offline");
+      if (++failures >= OFFLINE_AFTER && untracked(conn) !== "unauthorized" && untracked(conn) !== "blocked") conn.set("offline");
       retry = setTimeout(async () => {
         await loadFeed();
         stream();
@@ -334,7 +343,7 @@ function createHub(cfg: Config) {
     clearTimeout(retry);
     socket?.close();
   };
-  return { events, status, conn, loaded, send, settings, api, logout, dispose, cfg };
+  return { events, status, conn, blockedIp, loaded, send, settings, api, logout, dispose, cfg };
 }
 type Hub = ReturnType<typeof createHub>;
 
@@ -2670,7 +2679,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
         <Group title={L("Account", "账号与连接")} hint={L("You stay signed in on this device and reconnect automatically next time.", "登录状态保存在这台设备上，下次打开自动连接。")}>
           <View style={{ flexDirection: props.wide ? "row" : "column", alignItems: props.wide ? "center" : "stretch", gap: 10, paddingHorizontal: 16, paddingVertical: 14 }}>
             <View style={{ flex: props.wide ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Dot tone={props.hub.conn() === "live" ? "on" : props.hub.conn() === "unauthorized" ? "bad" : "wait"} />
+              <Dot tone={props.hub.conn() === "live" ? "on" : props.hub.conn() === "unauthorized" || props.hub.conn() === "blocked" ? "bad" : "wait"} />
               <Text style={{ flex: 1, fontSize: 15, color: colors.text, numberOfLines: 1 }}>{props.hub.cfg.url}</Text>
             </View>
             <View style={{ flexDirection: "row", gap: 8 }}>
@@ -3167,7 +3176,7 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
       <Section title={L("Account", "账号与连接")} hint={L("You stay signed in on this device and reconnect automatically next time.", "登录状态保存在这台设备上，下次打开自动连接。")}>
         <SetRow
           first
-          leading={<Dot tone={props.hub.conn() === "live" ? "on" : props.hub.conn() === "unauthorized" ? "bad" : "wait"} />}
+          leading={<Dot tone={props.hub.conn() === "live" ? "on" : props.hub.conn() === "unauthorized" || props.hub.conn() === "blocked" ? "bad" : "wait"} />}
           label={props.hub.cfg.url.replace(/^https?:\/\//, "")}
         />
         <SetRow label={L("Sign out", "退出登录")} tone="danger" onPress={() => void logout()} testID="logout" inset={0} />
@@ -4091,8 +4100,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     else if (nav.routes().length > 1) nav.pop();
   }, { when: "always" });
 
-  const connLabel = () => ({ connecting: L("Connecting…", "连接中…"), live: L("Live", "实时"), offline: L("Disconnected, reconnecting…", "已断开，重连中…"), unauthorized: L("Session expired", "登录已过期") })[hub.conn()];
-  const connTone = () => (hub.conn() === "live" ? "on" : hub.conn() === "unauthorized" ? "bad" : hub.conn() === "offline" ? "wait" : "off");
+  const connLabel = () => ({ connecting: L("Connecting…", "连接中…"), live: L("Live", "实时"), offline: L("Disconnected, reconnecting…", "已断开，重连中…"), unauthorized: L("Session expired", "登录已过期"), blocked: L(`IP ${hub.blockedIp()} not allowed`, `IP ${hub.blockedIp()} 未放行`) })[hub.conn()];
+  const connTone = () => (hub.conn() === "live" ? "on" : hub.conn() === "unauthorized" || hub.conn() === "blocked" ? "bad" : hub.conn() === "offline" ? "wait" : "off");
   const sidebar = (inDrawer: boolean) => (
     <Sidebar
       onRestart={() => void restartToUpdate()}
@@ -4269,6 +4278,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             style={{ position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: wide() ? 32 : 10, paddingTop: 4, paddingBottom: keyboardFrame().height > 0 ? 8 : Math.max(12, safeArea().bottom + 8), transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration, pointerEvents: "box-none" }}
           >
             <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 8, pointerEvents: "box-none" }}>
+              <If when={hub.conn() === "blocked"}>
+                <View style={{ gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.inset, backgroundColor: colors.surface, backgroundImage: `linear-gradient(${tints.danger}, ${tints.danger})` }}>
+                  <Text style={{ fontSize: 14, color: colors.danger }}>
+                    {L(`This device's public IP ${hub.blockedIp()} isn't on the Worker's allow-list (HUB_ALLOW_IPS). Add it on the host; Noop reconnects by itself.`,
+                      `这台设备的出口 IP ${hub.blockedIp()} 不在允许名单（HUB_ALLOW_IPS）里。在主机上把它加进去，Noop 会自动重连。`)}
+                  </Text>
+                  <View style={{ flexDirection: "row" }}>
+                    <Btn label={L("Copy IP", "复制 IP")} onPress={() => void Clipboard.writeText(hub.blockedIp())} />
+                  </View>
+                </View>
+              </If>
               <If when={hub.conn() === "offline" || hub.conn() === "unauthorized"}>
                 <View
                   style={{
@@ -4745,6 +4765,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
   const editUrl = signal(!props.served);
   const email = signal(props.email);
   const code = signal("");
+  const totp = signal(""); // the authenticator app's 6 digits: every sign-in needs it (bound on the host: noop 2fa setup)
   const step = signal<"email" | "code">("email");
   const error = signal(props.notice ?? "");
   const busy = signal(false);
@@ -4764,6 +4785,9 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
     try {
       const r = await postJson(`${server()}/api/auth/start`, { email: e });
       if (r.status === 429) throw new Error(String(r.data.error ?? L("Too many requests. Try again later.", "请求太频繁，请稍后再试")));
+      const ip = ipBlocked(r.status, r.data);
+      if (ip) throw new Error(L(`This device's public IP ${ip} isn't on the allow-list (HUB_ALLOW_IPS). Add it on the host, then try again.`, `这台设备的出口 IP ${ip} 不在允许名单（HUB_ALLOW_IPS）里，在主机上加进去后再试。`));
+      if (r.data.error === "totp_not_setup") throw new Error(L("Two-step verification isn’t set up yet, so nobody can sign in. Run noop 2fa setup on your host first.", "还没有绑定两步验证，任何人都无法登录：先在你的主机上运行 noop 2fa setup"));
       if (r.status === 403) throw new Error(L("This email isn’t allowed to sign in", "这个邮箱不允许登录"));
       if (r.status === 503) throw new Error(L("The server can’t send email yet, so email sign-in isn’t available", "服务器还没有配置发信，暂时无法用邮箱登录"));
       if (r.status >= 400) throw new Error(L(`The server returned ${r.status}. This address may not be a noop server.`, `服务器返回 ${r.status}，这个地址可能不是 noop`));
@@ -4785,29 +4809,35 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
   }
 
   async function verify() {
-    const c = code().replace(/\D/g, "");
-    if (c.length !== 6 || busy()) return;
+    const c = code().toUpperCase().replace(/[^A-Z0-9]/g, ""), t = totp().replace(/\D/g, "");
+    if (c.length !== CODE_LEN || t.length !== 6 || busy()) return;
     busy.set(true);
     error.set("");
     try {
-      const r = await postJson(`${server()}/api/auth/verify`, { email: email().trim(), code: c });
-      if (r.status === 401) throw new Error(L("The code is wrong or expired. Enter it again.", "验证码不对或已过期，请重新输入"));
+      const r = await postJson(`${server()}/api/auth/verify`, { email: email().trim(), code: c, totp: t });
+      if (r.status === 401) throw new Error(typeof r.data.error === "string" ? r.data.error : L("The code is wrong or expired. Enter it again.", "验证码不对或已过期，请重新输入"));
+      if (r.status === 403 && typeof r.data.error === "string") throw new Error(r.data.error);
       if (r.status === 429) throw new Error(String(r.data.error ?? L("Too many attempts. Try again later.", "尝试太频繁，请稍后再试")));
       if (r.status >= 400 || typeof r.data.session !== "string") throw new Error(L(`The server returned ${r.status}`, `服务器返回 ${r.status}`));
       await Storage.setItem(KEYS.url, server());
       await Storage.setItem(KEYS.token, r.data.session);
       props.onLogin({ url: server(), token: r.data.session });
     } catch (err) {
-      code.set("");
+      totp.set(""); // a TOTP is good for 30 s: retype it; the email code stays (it survives a wrong TOTP)
       error.set(err instanceof Error && err.message !== "unreachable" ? err.message : unreachable());
     } finally {
       busy.set(false);
     }
   }
   const onCode = (v: string) => {
-    const digits = v.replace(/\D/g, "").slice(0, 6);
-    code.set(digits);
-    if (digits.length === 6) verify();
+    const c = v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, CODE_LEN);
+    code.set(c);
+    if (c.length === CODE_LEN && totp().length === 6) verify();
+  };
+  const onTotp = (v: string) => {
+    const t = v.replace(/\D/g, "").slice(0, 6);
+    totp.set(t);
+    if (t.length === 6 && code().length === CODE_LEN) verify();
   };
 
   return (
@@ -4818,7 +4848,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
             <Mark size={48} />
             <Text style={{ fontSize: 28, fontWeight: "600", color: colors.text, letterSpacing: -0.3 }}>{L("Sign in to Noop", "登录 Noop")}</Text>
             <Text style={{ fontSize: 15.5, lineHeight: 23, color: colors.muted, textAlign: "center" }}>
-              {step() === "email" ? L("Sign in with email. We’ll send you a 6-digit code.", "用邮箱登录：我们会发一个 6 位验证码给你。") : viaCli() ? L("Email isn’t set up yet. Run noop login in your host’s terminal to see the code.", "还没配置发信邮箱：在你的主机终端运行 noop login 查看验证码。") : L(`We sent a code to ${email().trim()}. Check your email.`, `验证码已发到 ${email().trim()}，请查收邮件。`)}
+              {step() === "email" ? L("Sign in with email. We’ll send you an 8-character code.", "用邮箱登录：我们会发一个 8 位验证码给你（字母和数字）。") : viaCli() ? L("Email isn’t set up yet. Run noop login in your host’s terminal to see the code.", "还没配置发信邮箱：在你的主机终端运行 noop login 查看验证码。") : L(`We sent a code to ${email().trim()}. Check your email.`, `验证码已发到 ${email().trim()}，请查收邮件。`)}
             </Text>
           </View>
           <View style={{ gap: 18, padding: 22, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}>
@@ -4859,12 +4889,21 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
                 value={code()}
                 onChange={onCode}
                 onSubmit={verify}
-                placeholder="······"
-                keyboardType="number-pad"
+                placeholder="········"
                 autoComplete="one-time-code"
                 autoFocus
                 big
                 testID="code"
+              />
+              <Field
+                label={L("Authenticator code", "两步验证码（验证器 App）")}
+                value={totp()}
+                onChange={onTotp}
+                onSubmit={verify}
+                placeholder="······"
+                keyboardType="number-pad"
+                big
+                testID="totp"
               />
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <View role="button" accessibilityLabel={L("Use another email", "换个邮箱")} onPress={() => { step.set("email"); error.set(""); }} hoverStyle={hovered()} style={{ height: 30, justifyContent: "center", paddingHorizontal: 8, borderRadius: 6 }}>
@@ -4895,7 +4934,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
               when={step() === "code"}
               else={<Btn testID="send-code" label={busy() ? L("Sending…", "发送中…") : L("Send code", "发送验证码")} kind="primary" busy={busy()} grow onPress={sendCode} />}
             >
-              <Btn testID="verify" label={busy() ? L("Signing in…", "登录中…") : L("Sign in", "登录")} kind="primary" busy={busy()} disabled={code().length !== 6} grow onPress={verify} />
+              <Btn testID="verify" label={busy() ? L("Signing in…", "登录中…") : L("Sign in", "登录")} kind="primary" busy={busy()} disabled={code().length !== CODE_LEN || totp().length !== 6} grow onPress={verify} />
             </If>
           </View>
         </View>

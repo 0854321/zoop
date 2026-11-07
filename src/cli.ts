@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // hub — CLI + daemon for the agent fleet.
+import { $ } from "bun";
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
@@ -80,15 +81,18 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
       journal(host, `📚 learn: ${d.turns} owner turns from ${d.sessions} sessions → ${id}`);
       continue;
     }
-    const queued = routineQueued(r.name); // a copy queued or running → this run is redundant
+    // scheduler "each": every machine runs its own copy, pinned to it (e.g. the weekly security check of this computer)
+    const pin = owner === "each" ? host : undefined;
+    const queued = routineQueued(r.name, pin); // a copy queued or running → this run is redundant
     if (queued) { state[r.name] = new Date().toISOString(); journal(host, `⏰ routine \`${r.name}\` skipped: ${queued} still queued/running`); continue; }
     if (r.signal && !signalChanged(r, state)) { state[r.name] = new Date().toISOString(); continue; } // nothing new → no AI run
     if (r.agent === "architect") computeMetrics(r.name === "evolve-deep" ? 30 : 7);
     const prompt = r.readonly ? `${r.prompt}\n\nRead-only routine: observe and report only. Do not change code, PRs, issues or settings; propose any change as a follow-up.` : r.prompt;
-    const id = newTask(`${r.name} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, prompt, {
+    const id = newTask(`${r.name}${pin ? ` · ${pin}` : ""} · ${new Date().toLocaleString("sv-SE").slice(0, 16)}`, prompt, {
       agent: r.agent, cli: r.cli, requires: r.requires, prefer: r.prefer, weight: r.weight, repo: r.repo, priority: r.priority, source: `routine:${r.name}`,
+      ...(pin ? { host: pin } : {}),
     });
-    const old = supersedeProposed(r.name, id); // a newer run replaces older unapproved copies
+    const old = supersedeProposed(r.name, id, pin); // a newer run replaces older unapproved copies
     if (old.length) journal(host, `⏰ routine \`${r.name}\`: ${id} supersedes ${old.join(", ")}`);
     state[r.name] = new Date().toISOString();
     journal(host, `⏰ routine \`${r.name}\` → ${id} (${r.agent})`);
@@ -917,6 +921,9 @@ const HELP = `Noop — your own AI team
   noop metrics [days]         per-agent success, judge vs owner decisions (feeds self-evolution)
   noop agents                 list fleet members
   noop notify "text"          test Slack/Discord
+  noop security [--json]      check this Noop deployment (2FA, sessions, OAuth clients, allow-lists) and this machine's Noop setup
+  noop 2fa setup              bind (or re-bind) the authenticator app every sign-in requires; noop 2fa confirm <code> · noop 2fa status
+  noop revoke-sessions        security valve: sign out every phone, browser and MCP connector at once (machines keep working)
 `;
 
 async function main() {
@@ -999,6 +1006,61 @@ async function main() {
       if (!r?.ok) return void console.log("没有待使用的验证码：先在 app 里输入邮箱，点「发送验证码」，再运行 noop login");
       const c = (await r.json()) as { email: string; code: string; expires: number };
       return void console.log(`\n  ${c.email} 的验证码：${c.code}  （${Math.max(1, Math.round((c.expires - Date.now()) / 60000))} 分钟内有效）\n`);
+    }
+    case "security": {
+      const { securityReport, formatReport } = await import("./security");
+      const items = await securityReport(cfg, host, isPrimary(cfg, host));
+      console.log(rest.includes("--json") ? JSON.stringify({ host, items }, null, 2) : formatReport(host, items));
+      if (items.some((i) => i.level === "bad")) process.exitCode = 1;
+      return;
+    }
+    case "2fa": { // the mandatory second factor; bound from a machine only (the machine key is the root of trust)
+      const url = String(cfg.cloud?.url ?? "").replace(/\/$/, "");
+      if (!url) return void console.log("没有配置 [cloud] url");
+      const call = (path: string, body?: unknown) => fetch(`${url}${path}`, { method: body === undefined ? "GET" : "POST",
+        headers: { Authorization: `Bearer ${cfg.server?.token}`, "x-noop-host": host, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      if (rest[0] === "status" || !rest[0]) {
+        const r = await call("/api/host/2fa");
+        if (!r.ok) { process.exitCode = 1; return void console.log(`查询失败：HTTP ${r.status} ${await r.text()}`); }
+        const d = (await r.json()) as { bound: boolean; since: number | null };
+        return void console.log(d.bound ? `✓ 两步验证已绑定（${new Date(d.since ?? 0).toLocaleString()}）` : "✗ 还没有绑定两步验证：任何人都无法登录。运行 noop 2fa setup");
+      }
+      if (rest[0] === "confirm") { // the second half of setup when it can't prompt (no terminal)
+        const c = await call("/api/host/2fa/confirm", { totp: String(rest[1] ?? "").trim() });
+        const d = (await c.json().catch(() => ({}))) as { error?: string; replaced?: boolean };
+        if (!c.ok) { process.exitCode = 1; return void console.log(`✗ ${d.error ?? `HTTP ${c.status}`}`); }
+        return void console.log(d.replaced ? "✓ 已换绑，旧的验证器已失效。" : "✓ 两步验证已开启：以后登录需要邮箱验证码 + 验证器上的数字。");
+      }
+      if (rest[0] !== "setup") return void console.log("usage: noop 2fa setup | noop 2fa confirm <6 位数字> | noop 2fa status");
+      const st = (await (await call("/api/host/2fa")).json().catch(() => ({}))) as { bound?: boolean };
+      if (st.bound) console.log("⚠ 已经绑定过：确认后旧的验证器立即失效。");
+      const r = await call("/api/host/2fa/setup", {});
+      if (!r.ok) { process.exitCode = 1; return void console.log(`失败：HTTP ${r.status} ${await r.text()}`); }
+      const { secret, uri } = (await r.json()) as { secret: string; uri: string };
+      console.log("\n用验证器 App（Google Authenticator / 1Password / Authy …）扫描二维码：\n");
+      const qr = Bun.which("qrencode") ? await $`qrencode -t ansiutf8 -m 2 ${uri}`.quiet().nothrow() : null;
+      if (qr?.exitCode === 0) console.log(qr.stdout.toString());
+      else console.log("（装了 qrencode 就能在这里显示二维码）");
+      console.log(`扫不了就手动输入密钥：${secret.match(/.{1,4}/g)!.join(" ")}\n`);
+      if (!process.stdin.isTTY) return void console.log("扫码后 10 分钟内运行：noop 2fa confirm <验证器上的 6 位数字>");
+      for (let i = 0; i < 3; i++) {
+        const code = (prompt("输入验证器 App 上的 6 位数字确认：") ?? "").trim();
+        if (!code) break;
+        const c = await call("/api/host/2fa/confirm", { totp: code });
+        const d = (await c.json().catch(() => ({}))) as { ok?: boolean; error?: string; replaced?: boolean };
+        if (c.ok) return void console.log(d.replaced ? "✓ 已换绑，旧的验证器已失效。" : "✓ 两步验证已开启：以后登录需要邮箱验证码 + 验证器上的数字。");
+        console.log(`✗ ${d.error ?? `HTTP ${c.status}`}`);
+      }
+      process.exitCode = 1;
+      return void console.log("没有确认，绑定未生效。");
+    }
+    case "revoke-sessions": { // a sign-in alert you didn't expect: everyone but the machines is out
+      const url = String(cfg.cloud?.url ?? "").replace(/\/$/, "");
+      if (!url) return void console.log("没有配置 [cloud] url");
+      const r = await fetch(`${url}/api/host/revoke-sessions`, { method: "POST", headers: { Authorization: `Bearer ${cfg.server?.token}`, "x-noop-host": host } }).catch((e) => e as Error);
+      if (r instanceof Error || !r.ok) { process.exitCode = 1; return void console.log(`撤销失败：${r instanceof Error ? r.message : `HTTP ${r.status} ${await r.text()}`}`); }
+      const { revoked } = (await r.json()) as { revoked: number };
+      return void console.log(`✓ 已撤销 ${revoked} 个登录（手机、浏览器、MCP 连接器）。需要重新用邮箱验证码登录。\n  如果怀疑邮箱被盗，先改邮箱密码，再考虑轮换机器密钥。`);
     }
     case "cloud": {
       if (rest[0] !== "deploy") return void console.log("usage: hub cloud deploy");
