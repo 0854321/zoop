@@ -161,6 +161,22 @@ describe("login", () => {
     expect(log.logouts).toBe(1);
     expect(app.storage()["hub.token"]).toBe(undefined);
   });
+  for (const platform of ["ios", "android"] as const) {
+    test(`the mobile account menu on ${platform} switches appearance and language`, async () => {
+      const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: platform === "android" ? 1200 : 390, height: 844, platform });
+      if (platform === "ios") await app.press("label:Menu");
+      await app.press("id:user-menu");
+      await app.press("id:theme-dark");
+      expect(app.storage()["hub.theme"]).toBe("dark");
+      await app.press("id:menu-language");
+      await app.press("id:menu-lang-zh");
+      expect(app.storage()["hub.lang"]).toBe("zh");
+      await app.waitUntil(() => !app.shows("id:menu-lang-zh"));
+      await app.press("id:user-menu");
+      await app.press("id:settings");
+      await app.waitFor(platform === "ios" ? "id:logout" : "id:settings-tab-account");
+    });
+  }
   test("the sidebar user menu switches appearance and language and opens settings", async () => {
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
     await app.press("id:user-menu");

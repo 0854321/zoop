@@ -1953,7 +1953,10 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
   const item = { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, height: 32, paddingHorizontal: 10, borderRadius: 6 };
   const touch = platform.os === "ios" || platform.os === "android";
   const row = () => ({ ...item, height: touch ? 48 : 36 });
-  const surface = (): ViewStyle => ({ ...glass(colors.surface, radius.control), minWidth: 248, padding: 6 });
+  const surface = (): ViewStyle => touch
+    ? { backgroundColor: colors.surface, borderRadius: radius.control, left: 12, right: 12,
+        bottom: Math.max(12, safeArea().bottom), padding: 8 }
+    : { ...glass(colors.surface, radius.control), minWidth: 248, padding: 6 };
   const appearance = (dark: boolean, title: string, icon: IconName) => (
     <MenuItem testID={dark ? "theme-dark" : "theme-light"} accessibilityLabel={title}
       role="menuitemradio" checked={isDark() === dark} closeOnSelect={false}
@@ -1980,6 +1983,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
       offset={6}
       margin={8}
       popupStyle={surface()}
+      backdropClass="bg-scrim"
       trigger={
         <View
           role="button"
@@ -1995,7 +1999,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
     >
       <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} style={row()}>
         <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Settings…", "设置…")}</Text>
-        <Text style={{ fontSize: 12, color: colors.faint }}>{keymap.label("mod+,")}</Text>
+        <If when={!touch}><Text style={{ fontSize: 12, color: colors.faint }}>{keymap.label("mod+,")}</Text></If>
       </MenuItem>
       <Submenu offset={4}
         trigger={<View testID="menu-language" hoverStyle={hovered()} style={row()}>
