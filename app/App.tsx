@@ -34,7 +34,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
+import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
 import { avatarOf } from "./avatars";
@@ -1889,14 +1889,63 @@ function Sidebar(props: {
           paddingBottom: touch ? safeArea().bottom : 0,
         }}
       >
-        <View style={{ flex: 1, gap: 1 }}>
-          <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text }}>{L("Channel", "主会话")}</Text>
-          <Text style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{props.hub.cfg.url.replace(/^https?:\/\//, "")}</Text>
-        </View>
-        <ToolButton icon={isDark() ? "sun" : "moon"} label={isDark() ? L("Light appearance", "浅色外观") : L("Dark appearance", "深色外观")} noTooltip onPress={toggleTheme} testID="theme" />
-        <ToolButton icon="settings" label={L("Settings", "设置")} shortcut={keymap.label("mod+,")} onPress={props.onSettings} testID="settings" />
+        <UserMenu hub={props.hub} onSettings={props.onSettings} />
       </View>
     </View>
+  );
+}
+
+/** The sidebar footer: who and where, opening the user menu (settings, appearance, language). */
+function UserMenu(props: { hub: Hub; onSettings: () => void }) {
+  const who = () => L("Channel", "主会话");
+  const item = { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, height: 32, paddingHorizontal: 10, borderRadius: 6 };
+  const label = (t: string) => <Text style={{ fontSize: 12, fontWeight: "600", color: colors.faint, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 2 }}>{t}</Text>;
+  const sep = () => <MenuSeparator style={{ height: 1, marginVertical: 4, marginHorizontal: 4, backgroundColor: colors.line }} />;
+  const radio = (text: string, on: () => boolean, pick: () => void, testID: string) => (
+    <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={hovered()} style={item}>
+      <View style={{ width: 14 }}>
+        <If when={on()}>
+          <Icon name="check" size={13} tint={colors.text} />
+        </If>
+      </View>
+      <Text style={{ fontSize: 14, color: colors.text }}>{text}</Text>
+    </MenuItem>
+  );
+  return (
+    <Menu
+      align="start"
+      offset={6}
+      margin={8}
+      popupStyle={{ minWidth: 220, padding: 4, borderRadius: radius.control, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface }}
+      trigger={
+        <View
+          role="button"
+          testID="user-menu"
+          accessibilityLabel={L("Account menu", "用户菜单")}
+          hoverStyle={hovered()}
+          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40, paddingHorizontal: 8, marginLeft: -8, borderRadius: radius.control }}
+        >
+          <View style={{ flex: 1, gap: 1 }}>
+            <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{who()}</Text>
+            <Text style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{props.hub.cfg.url.replace(/^https?:\/\//, "")}</Text>
+          </View>
+          <Icon name="chevron-up" size={13} tint={colors.muted} />
+        </View>
+      }
+    >
+      <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} style={item}>
+        <Icon name="settings" size={15} tint={colors.muted} />
+        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Settings", "设置")}</Text>
+        <Text style={{ fontSize: 12, color: colors.faint }}>{keymap.label("mod+,")}</Text>
+      </MenuItem>
+      {sep()}
+      {label(L("Appearance", "外观"))}
+      {radio(L("Light", "浅色"), () => !isDark(), () => toggleTheme(), "theme-light")}
+      {radio(L("Dark", "深色"), () => isDark(), () => toggleTheme(), "theme-dark")}
+      {sep()}
+      {label(L("Language", "语言"))}
+      <Each of={LANGS}>{(l) => radio(l().label, () => lang() === l().id, () => pickLang(l().id), `menu-lang-${l().id}`)}</Each>
+    </Menu>
   );
 }
 

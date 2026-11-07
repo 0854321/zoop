@@ -153,12 +153,26 @@ describe("login", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), ...auth(log), [`GET ${URL}/api/settings`]: { status: 500 } },
     });
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-account");
     await app.press("id:logout");
     await app.waitFor("Sign in to Noop");
     expect(log.logouts).toBe(1);
     expect(app.storage()["hub.token"]).toBe(undefined);
+  });
+  test("the sidebar user menu switches appearance and language and opens settings", async () => {
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
+    await app.press("id:user-menu");
+    await app.press("id:theme-dark");
+    expect(app.storage()["hub.theme"]).toBe("dark");
+    await app.press("id:user-menu");
+    await app.press("id:menu-lang-zh");
+    expect(app.storage()["hub.lang"]).toBe("zh");
+    await app.waitFor("主会话");
+    await app.press("id:user-menu");
+    await app.press("id:settings");
+    await app.waitFor("id:settings-tab-account");
   });
 });
 
@@ -565,6 +579,7 @@ describe("channel", () => {
     await app.press("label:Load 42% · Disk 120 GB free · 1 running");
     await app.waitFor("id:rev-linux-box");
     expect(app.shows("c1cc085")).toBe(true);
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-version");
     await app.waitFor("id:version-linux-box");
@@ -590,6 +605,7 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/settings`]: { status: 500 }, [`GET ${URL}/api/status`]: { body: { ...status, hosts, update: { at } } } },
     });
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-version");
     await app.waitFor("等 1 个任务跑完后重启…");
@@ -824,6 +840,7 @@ describe("team settings", () => {
         },
       },
     });
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-members");
     await app.waitFor("id:cli-reporter");
@@ -872,6 +889,7 @@ describe("team settings", () => {
         },
       },
     });
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-storage");
     await app.waitFor("id:media-days-90");
@@ -1384,6 +1402,7 @@ describe("commands", () => {
   test("settings adds, edits and deletes saved commands in an editor", async () => {
     const posts: { text: string; reply_to?: string }[] = [], puts: unknown[] = [], updates = { n: 0 };
     const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: server(posts, puts, updates) });
+    await app.press("id:user-menu");
     await app.press("id:settings");
     await app.press("id:settings-tab-commands");
     await app.waitFor("id:command-row-日报");
