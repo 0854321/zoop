@@ -22,7 +22,7 @@ import { medic } from "./medic";
 import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
 import { answerFromChat, appendEvent, cancelTask, drainInbound, feed, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setApplyOp, setCancelTask, setUpdateFleet, onSettingsSaved, startServer, status as hubStatus } from "./server";
-import { reopenTask, type BrainOut, ClaudeModel, SYSTEM, dataActs, localStore, logBrain, think } from "./brain";
+import { followUpTarget, reopenTask, type BrainOut, ClaudeModel, SYSTEM, dataActs, localStore, logBrain, think } from "./brain";
 import { runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { adoptCloudUrl, readHubToml } from "./sync";
@@ -802,7 +802,9 @@ async function daemon(cfg: Cfg) {
     } catch (err) {
       // no model (CLI missing, logged out, timeout): the message still becomes work, silently — never lost, never canned
       console.error(`chat brain: ${err}`);
-      const amended = reply ? await store.act({ tool: "amend_task", id: reply, text }) : null;
+      // a terse follow-up without a reply target continues the task the channel was just about
+      const target = reply ?? followUpTarget(text, feed(new Date(Date.now() - 15 * 60_000).toISOString(), 200));
+      const amended = target ? await store.act({ tool: "amend_task", id: target, text }) : null;
       const r = amended?.ok ? amended : await store.act({ tool: "create_task", title: text.split("\n")[0].slice(0, 80) });
       out = { reply: "", calls: [{ tool: "fallback", args: {}, ok: !!r.ok, result: r }], rounds: 0, ms: { model: [], total: Date.now() - got }, fallback: true };
     } finally { chatNow = null; }

@@ -309,6 +309,15 @@ export async function think(m: BrainIn, st: ToolStore, model: Model, post: (repl
 }
 
 /** Latency log (one JSON line per message): ~/.noop/brain.jsonl, local to this machine. */
+/** Without the model: the task a terse follow-up continues. A short one-line message sent within 10 minutes of the team's
+ *  last message about a task ("应该转发…", "给我中文") belongs to that task's conversation, not to a new task. */
+export function followUpTarget(text: string, events: { from: string; ts: string; ref?: string }[], now = Date.now()): string | undefined {
+  const t = text.trim();
+  if (!t || t.includes("\n") || [...t].length > 40) return undefined;
+  const last = [...events].reverse().find((e) => e.from !== "owner" && /^T-\w+$/.test(e.ref ?? ""));
+  return last && now - Date.parse(last.ts) <= 10 * 60_000 ? last.ref : undefined;
+}
+
 export function logBrain(m: BrainIn, out: BrainOut, receivedAt: number) {
   try {
     mkdirSync(HOME_DIR, { recursive: true });

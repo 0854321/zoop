@@ -173,3 +173,14 @@ test("list_routines: a change made in settings wins over config.toml, as it does
   const rows = listRoutines({ read: (p: string) => (files[p] === undefined ? undefined : { text: files[p] }) } as any);
   expect(rows.map((r) => [r.name, r.enabled, r.every])).toEqual([["macos-check", false, "1d"], ["nightly", true, "2h"]]);
 });
+
+import { followUpTarget } from "../src/brain";
+test("followUpTarget: terse follow-up continues the task the channel was just about", () => {
+  const now = Date.parse("2026-11-07T05:32:00Z");
+  const ev = [{ from: "Tripitaka", ts: "2026-11-07T05:30:00Z", ref: "T-0738" }, { from: "hub", ts: "2026-11-07T05:30:30Z", ref: "D-0148" }, { from: "owner", ts: "2026-11-07T05:31:00Z" }];
+  expect(followUpTarget("给我中文", ev, now)).toBe("T-0738");
+  expect(followUpTarget("应该转发他的 tweet 来回复", ev, now)).toBe("T-0738");
+  expect(followUpTarget("Noop 的流程，像这种连续的，并没有开始的，不能作为独立任务在任务列表列表显示，不然太繁琐了。改掉这个流程", ev, now)).toBeUndefined();
+  expect(followUpTarget("给我中文", ev, now + 20 * 60_000)).toBeUndefined();
+  expect(followUpTarget("给我中文", [], now)).toBeUndefined();
+});
