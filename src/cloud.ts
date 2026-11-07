@@ -94,9 +94,9 @@ export function startCloudBridge(cfg: Cfg) {
         for (const it of r?.items ?? []) {
           if (it.type === "message") {
             const e = it.event as Event;
-            if (e.id && seen.includes(e.id)) { after = it.seq; saveCursor(); continue; } // redelivered (restart, Worker switch): already handled
-            if (e.id) seen.push(e.id);
+            const fresh = claimInboxMessage(seen, e.id); // redelivered (restart, Worker switch): already handled
             after = it.seq; saveCursor(); // before handling, so a restart mid-message doesn't replay it
+            if (!fresh) continue;
             appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
             await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts, thread: e.thread });
           } else if (it.type === "op" && it.op) {
@@ -191,4 +191,12 @@ export async function cloudDeploy(cfg: Cfg) {
   });
   console.log(`✓ 已部署：${url}`);
   return url;
+}
+
+/** Record an owner message id as handled; false when it was already handled (a replay after a restart or Worker switch). */
+export function claimInboxMessage(seen: string[], id?: string): boolean {
+  if (!id) return true;
+  if (seen.includes(id)) return false;
+  seen.push(id);
+  return true;
 }
