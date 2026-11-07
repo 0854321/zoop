@@ -44,6 +44,7 @@ export type IconName =
   | "spark"
   | "sidebar"
   | "sun"
+  | "globe"
   | "moon"
   | "volume-low"
   | "volume-high"
@@ -461,6 +462,12 @@ const glyphs: Record<IconName, Draw> = {
       const a = (i * Math.PI) / 4;
       line(c, [10 + Math.cos(a) * 6, 10 + Math.sin(a) * 6, 10 + Math.cos(a) * 7.8, 10 + Math.sin(a) * 7.8]);
     }
+  },
+  globe: (c) => {
+    // The earth with a meridian and the equator.
+    circle(c, 10, 10, 7);
+    c.stroke(new Path2D("M10 3a3.2 7 0 0 1 0 14a3.2 7 0 0 1 0-14z"));
+    line(c, [3, 10, 17, 10]);
   },
   code: (c) => {
     line(c, [7, 6, 3, 10, 7, 14]);

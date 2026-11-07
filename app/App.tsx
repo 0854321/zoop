@@ -1946,32 +1946,46 @@ function Sidebar(props: {
 
 /** The sidebar account, opening the user menu (settings, appearance, language). */
 function UserMenu(props: { hub: Hub; onSettings: () => void }) {
-  /** The signed-in account as the email's local part; the server address stays out of the UI. */
-  const account = signal("");
-  void Storage.getItem(KEYS.email).then((e) => account.set((e ?? "").split("@")[0]));
-  const item = { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, height: 32, paddingHorizontal: 10, borderRadius: 6 };
+  /** The signed-in account: its email, shown as the local part; the server address stays out of the UI. */
+  const email = signal("");
+  void Storage.getItem(KEYS.email).then((e) => email.set(e ?? ""));
+  const account = () => email().split("@")[0] ?? "";
+  // A pointer gets a compact popup at the trigger; a finger gets the sheet at the bottom with rows it can hit.
   const touch = platform.os === "ios" || platform.os === "android";
-  const row = () => ({ ...item, height: touch ? 48 : 36 });
+  const m = touch
+    ? { row: 48, padX: 12, gap: 14, icon: 18, label: 16, value: 15, avatar: 40, name: 16, mail: 13.5, seg: 44, segH: 34, sepX: 12 }
+    : { row: 30, padX: 8, gap: 10, icon: 15, label: 13.5, value: 13, avatar: 30, name: 13.5, mail: 12, seg: 28, segH: 22, sepX: 8 };
   const surface = (): ViewStyle => touch
-    ? { backgroundColor: colors.surface, borderRadius: radius.control, left: 12, right: 12,
-        bottom: Math.max(12, safeArea().bottom), padding: 8 }
-    : { ...glass(colors.surface, radius.control), minWidth: 248, padding: 6 };
+    // Opaque on a phone: the sheet sits over the sidebar's own rows, which would show through glass.
+    ? { backgroundColor: colors.surface, borderRadius: 22, borderCurve: "continuous", boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
+        left: 10, right: 10, bottom: Math.max(10, safeArea().bottom), padding: 8, paddingTop: 6 }
+    : { ...glass(colors.surface, 12), minWidth: 264, padding: 5 };
+  const row = (): ViewStyle => ({ flexDirection: "row", alignItems: "center", gap: m.gap, height: m.row, paddingHorizontal: m.padX, borderRadius: touch ? 12 : 7, borderCurve: "continuous" });
+  const label = (text: string) => <Text style={{ flex: 1, fontSize: m.label, color: colors.text, numberOfLines: 1 }}>{text}</Text>;
+  const lead = (name: IconName) => <Icon name={name} size={m.icon} tint={colors.muted} />;
+  const sep = () => <MenuSeparator style={{ height: 1, marginVertical: touch ? 6 : 4, marginHorizontal: m.sepX, backgroundColor: alpha(colors.text, 0.07) }} />;
+  const initial = () => (account().slice(0, 1) || "?").toUpperCase();
+  const avatar = (box: number) => (
+    <View style={{ width: box, height: box, borderRadius: box / 2, flexShrink: 0, alignItems: "center", justifyContent: "center", backgroundColor: alpha(colors.text, 0.08) }}>
+      <Text style={{ fontSize: Math.round(box * 0.44), fontWeight: "600", color: colors.text }}>{initial()}</Text>
+    </View>
+  );
+  /** One of the two appearances, as a segment whose raised thumb marks the current one. */
   const appearance = (dark: boolean, title: string, icon: IconName) => (
     <MenuItem testID={dark ? "theme-dark" : "theme-light"} accessibilityLabel={title}
       role="menuitemradio" checked={isDark() === dark} closeOnSelect={false}
-      onSelect={() => { if (isDark() !== dark) toggleTheme(); }} hoverStyle={hovered()}
-      style={{ width: touch ? 44 : 28, height: touch ? 44 : 28, alignItems: "center", justifyContent: "center", borderRadius: 4,
-        backgroundColor: isDark() === dark ? colors.surface : "transparent", borderWidth: isDark() === dark ? 0.5 : 0, borderColor: surfaceEdge() }}>
-      <Icon name={icon} size={16} tint={isDark() === dark ? colors.text : colors.muted} />
+      onSelect={() => { if (isDark() !== dark) toggleTheme(); }}
+      style={{ width: m.seg, height: m.segH, alignItems: "center", justifyContent: "center", borderRadius: touch ? 8 : 6, borderCurve: "continuous",
+        ...(isDark() === dark ? { backgroundColor: colors.field, boxShadow: "0 1px 2px rgba(0,0,0,0.14)" } : {}) }}>
+      <Icon name={icon} size={touch ? 17 : 14} tint={isDark() === dark ? colors.text : colors.muted} />
     </MenuItem>
   );
-  const sep = () => <MenuSeparator style={{ height: 1, marginVertical: 4, marginHorizontal: 4, backgroundColor: colors.line }} />;
   const radio = (text: string, on: () => boolean, pick: () => void, testID: string) => (
     <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={hovered()} style={row()}>
-      <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{text}</Text>
-      <View style={{ width: 14 }}>
+      {label(text)}
+      <View style={{ width: m.icon }}>
         <If when={on()}>
-          <Icon name="check" size={13} tint={colors.text} />
+          <Icon name="check" size={m.icon - 2} tint={colors.text} />
         </If>
       </View>
     </MenuItem>
@@ -1989,30 +2003,43 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
           testID="user-menu"
           accessibilityLabel={L("Account menu", "用户菜单")}
           hoverStyle={hovered()}
-          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40, paddingHorizontal: 8, marginLeft: -8, borderRadius: radius.control }}
+          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40, paddingLeft: 6, paddingRight: 8, marginLeft: -6, borderRadius: radius.control, borderCurve: "continuous" }}
         >
+          {avatar(24)}
           <Text testID="user-account" style={{ flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
-          <Icon name="chevron-up" size={13} tint={colors.muted} />
+          <Icon name="chevron-up" size={12} tint={colors.faint} />
         </View>
       }
     >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: touch ? 12 : 10, paddingHorizontal: m.padX, paddingTop: touch ? 10 : 6, paddingBottom: touch ? 10 : 7 }}>
+        {avatar(m.avatar)}
+        <View style={{ flex: 1, gap: 1 }}>
+          <Text style={{ fontSize: m.name, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
+          <If when={email()}>
+            <Text style={{ fontSize: m.mail, color: colors.muted, numberOfLines: 1 }}>{email()}</Text>
+          </If>
+        </View>
+      </View>
+      {sep()}
       <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} style={row()}>
-        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Settings…", "设置…")}</Text>
+        {lead("settings")}
+        {label(L("Settings…", "设置…"))}
         <If when={!touch}><Text style={{ fontSize: 12, color: colors.faint }}>{keymap.label("mod+,")}</Text></If>
       </MenuItem>
       <Submenu offset={4}
         trigger={<View testID="menu-language" hoverStyle={hovered()} style={row()}>
-          <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Language", "语言")}</Text>
-          <Text style={{ fontSize: 13, color: colors.muted }}>{LANGS.find((l) => l.id === lang())?.label ?? "English"}</Text>
-          <Icon name="chevron" size={13} tint={colors.muted} />
+          {lead("globe")}
+          {label(L("Language", "语言"))}
+          <Text style={{ fontSize: m.value, color: colors.muted }}>{LANGS.find((l) => l.id === lang())?.label ?? "English"}</Text>
+          <Icon name="chevron" size={touch ? 14 : 12} tint={colors.faint} />
         </View>}
-        back={<View style={row()}><Icon name="back" size={14} tint={colors.muted} /><Text style={{ fontSize: 14, color: colors.text }}>{L("Back", "返回")}</Text></View>}>
+        back={<View style={row()}><Icon name="back" size={m.icon} tint={colors.muted} />{label(L("Back", "返回"))}</View>}>
         <Each of={LANGS}>{(l) => radio(l().label, () => lang() === l().id, () => pickLang(l().id), `menu-lang-${l().id}`)}</Each>
       </Submenu>
-      {sep()}
-      <View style={row()}>
-        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Appearance", "外观")}</Text>
-        <View style={{ flexDirection: "row", gap: 2, padding: 2, borderRadius: 6, backgroundColor: alpha(colors.text, 0.06) }}>
+      <View style={{ ...row(), height: touch ? 52 : 34 }}>
+        {lead(isDark() ? "moon" : "sun")}
+        {label(L("Appearance", "外观"))}
+        <View style={{ flexDirection: "row", gap: 2, padding: 2, borderRadius: touch ? 10 : 8, borderCurve: "continuous", backgroundColor: alpha(colors.text, 0.07) }}>
           {appearance(false, L("Light", "浅色"), "sun")}
           {appearance(true, L("Dark", "深色"), "moon")}
         </View>
