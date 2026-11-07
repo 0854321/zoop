@@ -68,7 +68,10 @@ export function classify(t: Task, ctx: Ctx): Verdict | null {
   if (plat && pin && !ctx.online.some((h) => h.host === pin) && capable(reqs(m).filter((r) => r !== `host:${pin}`)).length)
     return v(`host:${pin}`, "reroute", [`绑定的主机 ${pin} 离线`], reqs(m).filter((r) => r !== `host:${pin}`).join(","));
   if (!reasons.length && t.folder === "waiting") return null; // young and cycling normally
-  if (plat) return v(`platform:${plat}`, "escalate", [...reasons, capable([plat]).length ? `${plat} 主机在线但环境不可用` : `没有在线的 ${plat} 主机`]);
+  // platform host is online but the wait_check can't run here: hand the task back to that host to check itself
+  if (plat && capable([plat]).length && checkUnrunnable(m.wait_check, ctx.primaryOs) && !m.supervisor_requeued)
+    return v(`platform:${plat}`, "reroute", [...reasons, `${plat} 主机在线，交回该主机自行检查`], reqs(m).filter((r) => !r.startsWith("host:")).join(","));
+  if (plat) return v(`platform:${plat}`, "escalate", [...reasons, capable([plat]).length ? `${plat} 主机在线，但任务交回后仍未推进` : `没有在线的 ${plat} 主机`]);
   if (!reasons.length) reasons.push("被阻塞");
   return v(`slow:${m.claimed_by || "any"}`, "escalate", reasons);
 }
@@ -96,7 +99,7 @@ export function alreadyAsked(cause: string, ids: string[], cards: Meta[]): strin
 }
 
 const CAUSE_LABEL = (c: string) =>
-  c === "platform:os:macos" ? "macOS 桌面不可用" : c === "platform:os:windows" ? "Windows 环境不可用"
+  c === "platform:os:macos" ? "macOS 任务推不动" : c === "platform:os:windows" ? "Windows 任务推不动"
     : c.startsWith("host:") ? `主机 ${c.slice(5)} 不可用` : c === "no-wait" ? "没有记录等待条件" : c.startsWith("slow:") ? `${c.slice(5)} 上的长时间运行` : c;
 
 export function cardFor(cause: string, items: { id: string; title: string; reasons: string[] }[]) {
@@ -143,7 +146,7 @@ export function supervise(cfg: Cfg, host: string, t = Date.now()) {
       unlinkSync(task.path);
     };
     if (v.action === "reroute") {
-      back({ host: "any", requires: v.requires || undefined, resumed: "yes" }, `${v.reasons.join("; ")}. Re-routed to any host with ${v.requires || "the remaining requirements"}; local files on the old host are gone, redo what is needed.`);
+      back({ host: "any", requires: v.requires || undefined, resumed: "yes", ...(v.cause.startsWith("platform:") ? { supervisor_requeued: "yes" } : {}) }, `${v.reasons.join("; ")}. Re-routed to any host with ${v.requires || "the remaining requirements"}; local files on the old host are gone, redo what is needed.`);
       journal(host, `🧭 supervisor: ${meta.id} 改派（${v.reasons.join("；")}）`); counts.reroute++;
     } else if (v.action === "repin") {
       writeDoc(task.path, { ...meta, host: "any", requires: v.requires || undefined }, body ?? "");

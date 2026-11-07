@@ -67,7 +67,7 @@ test("supervise(): one card per cause, never twice; answering resumes every task
   writeFileSync(P("fleet", "hosts", "huacnlee-macbook.json"), JSON.stringify({ ...mac, seen }));
   writeFileSync(P("fleet", "hosts", "lb.json"), JSON.stringify({ ...lin, seen }));
   const t0 = new Date(Date.now() - 10 * H).toISOString();
-  for (const id of ["T-0101", "T-0102"]) writeDoc(P("tasks", "waiting", `${id}.md`), { id, title: id, requires: "os:macos", created: t0, waiting_on: "Mac 桌面", wait_check: "swift /Users/j/d.swift" }, "body");
+  for (const id of ["T-0101", "T-0102"]) writeDoc(P("tasks", "waiting", `${id}.md`), { id, title: id, requires: "os:macos", created: t0, waiting_on: "Mac 桌面", wait_check: "swift /Users/j/d.swift", supervisor_requeued: "yes" }, "body");
   writeDoc(P("tasks", "waiting", "T-0103.md"), { id: "T-0103", title: "old", requires: "host:omarchy-jason", claimed_by: "omarchy-jason", created: t0, waiting_on: "x" }, "body");
   const cfg = { supervisor: { retired_hosts: ["omarchy-jason"] }, fleet: {} };
   const first = supervise(cfg, "lb");
@@ -107,4 +107,10 @@ test("dated follow-ups are exempt; a delegated parent on a retired host is re-pi
   const stuck = classify(task({ id: "T-5", requires: "os:macos", wakes: "7" }), ctx())!;
   expect(classify(young, ctx())).toBeNull();
   expect(sweepPlatform([young], [stuck]).map((v) => [v.id, v.cause])).toEqual([["T-4", "platform:os:macos"]]);
+});
+
+test("macOS host online + wait_check unrunnable on the primary: hand back to the Mac once, not a card", () => {
+  const m = { id: "T-1", requires: "os:macos", created: new Date(NOW - 10 * H).toISOString(), waiting_on: "x", wait_check: "test -f /Users/j/done" };
+  expect(classify(task(m), ctx())!.action).toBe("reroute");
+  expect(classify(task({ ...m, supervisor_requeued: "yes" }), ctx())!.action).toBe("escalate");
 });
