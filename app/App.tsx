@@ -1329,31 +1329,14 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   const cancellable = () => ["active", "inbox", "nohost", "waiting", "parked", "blocked", "proposed"].includes(t()?.state ?? "");
   const cancelling = signal(false);
   async function cancel() {
-    const running = t()?.state === "active";
-    const r = await AlertDialog.show({
-      title: L(`Cancel ${props.id}?`, `取消 ${props.id}？`),
-      description: running ? L("The running agent will be stopped. Changes it already made stay in the repository.", "正在运行的 agent 会被停下，已经做了的改动保留在仓库里。") : L("This task won’t run again.", "这个任务不会再执行。"),
-      actions: [
-        { id: "keep", label: L("Keep", "不取消"), role: "cancel" },
-        { id: "cancel", label: L("Cancel task", "取消任务"), role: "destructive" },
-      ],
-    });
-    if (r.action !== "cancel") return;
+    if (!(await confirmEndTask(props.id, false, t()?.state === "active"))) return;
     cancelling.set(true);
     try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id }); }
     catch { cancelling.set(false); }
   }
   // the owner already finished it himself (merged by hand, …): end it as done, not cancelled
   async function finish() {
-    const r = await AlertDialog.show({
-      title: L(`Mark ${props.id} as done?`, `把 ${props.id} 标记为完成？`),
-      description: t()?.state === "active" ? L("The running agent will be stopped and the task marked done.", "正在运行的 agent 会被停下，任务记为完成。") : L("The task will be marked done and won’t run again.", "任务记为完成，不再执行。"),
-      actions: [
-        { id: "keep", label: L("Back", "返回"), role: "cancel" },
-        { id: "done", label: L("Mark as done", "标记完成") },
-      ],
-    });
-    if (r.action !== "done") return;
+    if (!(await confirmEndTask(props.id, true, t()?.state === "active"))) return;
     cancelling.set(true);
     try { await props.hub.api("POST", "/api/tasks/cancel", { id: props.id, done: true }); }
     catch { cancelling.set(false); }
@@ -1678,6 +1661,28 @@ function SideRow(props: { onPress?: () => void; selected?: boolean; title?: stri
   );
 }
 
+/** Ask before ending a task: cancel it, or mark it done when the owner finished it himself. */
+async function confirmEndTask(id: string, done: boolean, running: boolean): Promise<boolean> {
+  const r = done
+    ? await AlertDialog.show({
+      title: L(`Mark ${id} as done?`, `把 ${id} 标记为完成？`),
+      description: running ? L("The running agent will be stopped and the task marked done.", "正在运行的 agent 会被停下，任务记为完成。") : L("The task will be marked done and won’t run again.", "任务记为完成，不再执行。"),
+      actions: [
+        { id: "keep", label: L("Back", "返回"), role: "cancel" },
+        { id: "end", label: L("Mark as done", "标记完成") },
+      ],
+    })
+    : await AlertDialog.show({
+      title: L(`Cancel ${id}?`, `取消 ${id}？`),
+      description: running ? L("The running agent will be stopped. Changes it already made stay in the repository.", "正在运行的 agent 会被停下，已经做了的改动保留在仓库里。") : L("This task won’t run again.", "这个任务不会再执行。"),
+      actions: [
+        { id: "keep", label: L("Keep", "不取消"), role: "cancel" },
+        { id: "end", label: L("Cancel task", "取消任务"), role: "destructive" },
+      ],
+    });
+  return r.action === "end";
+}
+
 /** How far the wide layout's floating sidebar sits from the window's edges. */
 const sidebarInset = 8;
 
@@ -1707,6 +1712,21 @@ function Sidebar(props: {
   const s = () => props.hub.status();
   // the hub closes a decision on its next tick: one the channel already shows answered leaves the list now
   const waits = computed(() => { const done = answeredIds(props.hub.events()); return waiting(s()).filter((d) => !done.has(d.id)); });
+  // the sidebar's right-click menu: end a task that can't go on without opening it
+  const endTask = async (id: string, done: boolean) => {
+    const running = (s()?.active ?? []).some((a) => a.id === id);
+    if (await confirmEndTask(id, done, running)) await props.hub.api("POST", "/api/tasks/cancel", done ? { id, done: true } : { id }).catch(() => {});
+  };
+  const menuStyle = () => ({ minWidth: 160, padding: 4, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface });
+  const itemStyle = { height: 32, justifyContent: "center" as const, paddingHorizontal: 10, borderRadius: 6 };
+  const taskItems = (id: string) => [
+    <MenuItem testID={`side-done-${id}`} onSelect={() => void endTask(id, true)} hoverStyle={hovered()} style={itemStyle}>
+      <Text style={{ fontSize: 14, color: colors.text }}>{L("Mark as done", "标记完成")}</Text>
+    </MenuItem>,
+    <MenuItem testID={`side-cancel-${id}`} onSelect={() => void endTask(id, false)} hoverStyle={hovered()} style={itemStyle}>
+      <Text style={{ fontSize: 14, color: colors.danger }}>{L("Cancel task", "取消任务")}</Text>
+    </MenuItem>,
+  ];
   const queue = () => {
     const q = s()?.tasks;
     return [
@@ -1770,6 +1790,7 @@ function Sidebar(props: {
                 >
                   <Text style={{ fontSize: 14, color: colors.text }}>{L("Ignore, you decide", "忽略，你来定")}</Text>
                 </MenuItem>
+                {d().task ? taskItems(d().task!) : null}
               </ContextMenu>
             )}
           </Each>
@@ -1780,11 +1801,15 @@ function Sidebar(props: {
           <SideHeading title={L("In progress", "进行中")} count={s()?.active.length || undefined} />
           <Each of={s()?.active ?? []} key={(a) => a.id}>
             {(a) => (
-              <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${a().agent}${a().host ? ` @ ${a().host}` : ""}`}>
-                <Dot tone="run" />
-                <Text style={rowText()}>{a().title}</Text>
-                <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().started)}</Text>
-              </SideRow>
+              <ContextMenu margin={8} popupStyle={menuStyle()} trigger={
+                <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${a().agent}${a().host ? ` @ ${a().host}` : ""}`}>
+                  <Dot tone="run" />
+                  <Text style={rowText()}>{a().title}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().started)}</Text>
+                </SideRow>
+              }>
+                {taskItems(a().id)}
+              </ContextMenu>
             )}
           </Each>
           <If when={!s()?.active.length}>
@@ -1795,11 +1820,15 @@ function Sidebar(props: {
             <SideHeading title={L("Queued", "排队")} count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length} />
             <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state))} key={(a) => a.id}>
               {(a) => (
+                <ContextMenu margin={8} popupStyle={menuStyle()} trigger={
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{a().state === "waiting" ? L("Waiting on subtasks", "等子任务") : a().state === "parked" ? L("Waiting", "等待") : a().state === "nohost" ? L(`Waiting for ${needsLabel((a() as { needs?: string }).needs)}`, `等 ${needsLabel((a() as { needs?: string }).needs)}`) : L("Queued", "排队中")}</Text>
                 </SideRow>
+                }>
+                  {taskItems(a().id)}
+                </ContextMenu>
               )}
             </Each>
           </If>

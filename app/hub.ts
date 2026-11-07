@@ -64,7 +64,7 @@ export type Status = {
   tasks: Record<"proposed" | "inbox" | "active" | "blocked" | "failed" | "done", number>;
   active: TaskInfo[];
   recent?: TaskInfo[];
-  decisions: { id: string; kind: string; question?: string; held: boolean }[];
+  decisions: { id: string; kind: string; question?: string; held: boolean; task?: string }[];
   hosts: HostInfo[];
   /** The owner's latest "update every machine" request. */
   update?: { at: string };

@@ -189,7 +189,7 @@ export function status() {
       const open = rest.filter((t) => ["inbox", "nohost", "waiting", "parked", "blocked"].includes(t.state));
       return [...open, ...rest.filter((t) => !open.includes(t)).slice(0, 12)].sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
     })(),
-    decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held }; }),
+    decisions: list(P("decisions", "open")).map((p) => { const m = readDoc(p).meta; return { id: m.id, kind: m.kind ?? "decision", question: m.question, held: !!m.held, task: m.task }; }),
     hosts: hostViews(active, others.filter((t) => t.state === "done" || t.state === "failed")),
     /** The owner's latest "update every machine" (each host reports its progress on it in `hosts[].update`). */
     update: (() => { try { return { at: String(JSON.parse(readFileSync(UPDATE_REQUEST(), "utf8")).at ?? "") }; } catch { return undefined; } })(),

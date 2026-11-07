@@ -13,7 +13,7 @@ import { writeRules } from "./rules";
 import { backoffMinutes, isNoChangeRoutine, tooManyWakes, waitMeta } from "./waits";
 import { allowedParallel, budget, canRunHeavy, ensureDisk, sample } from "./resources";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { init, install, selfUpdate } from "./setup";
 import { computeMetrics } from "./metrics";
 import { collect, LEARN_PROMPT } from "./sessions";
@@ -721,6 +721,13 @@ async function daemon(cfg: Cfg) {
       if (done) writeDoc(P("tasks", "done", `${kid}.md`), { ...kd.meta, finished: now() }, `${kd.body}\n\n## Done ${now()}\nParent ${tid} was marked done by the owner.\n`);
       else writeDoc(P("tasks", "rejected", `${kid}.md`), { ...kd.meta, cancelled: now() }, `${kd.body}\n\n## Cancelled ${now()}\nParent ${tid} was cancelled.\n`);
       unlinkSync(P("tasks", k, `${kid}.md`));
+    }
+    for (const d of list(P("decisions", "open"))) { // its open cards go too: nothing is left to answer
+      const dd = readDoc(d);
+      if (dd.meta.task !== tid) continue;
+      writeDoc(P("decisions", "closed", basename(d)), { ...dd.meta, answer: done ? "已完成" : "已取消", answered_by: "owner(app)", answered: now() },
+        `${dd.body}\n## Closed (owner)\nTask ${tid} was ${done ? "marked done" : "cancelled"} by the owner.\n`);
+      unlinkSync(d);
     }
     journal(host, done ? `✅ ${tid} 你已标记为完成` : `🛑 ${tid} 已按你的要求取消`);
     await _commitPush(`[${host}] ${done ? "finish" : "cancel"} ${tid}`);

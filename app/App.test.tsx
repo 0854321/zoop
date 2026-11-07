@@ -412,6 +412,26 @@ describe("channel", () => {
     await app.waitUntil(() => !app.shows("id:ignore-D-0001"));
   });
 
+  test("the sidebar's right-click menu cancels a stuck task or marks it done", async () => {
+    const cancels: unknown[] = [];
+    const withTask = { ...status, decisions: [{ ...status.decisions[0], task: "T-0003" }] };
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub([]), [`GET ${URL}/api/status`]: { body: withTask }, [`POST ${URL}/api/tasks/cancel`]: (r: { body?: string | null }) => { cancels.push(JSON.parse(r.body!)); return { body: { ok: true } }; } },
+    });
+    await app.waitFor("text:要不要升级依赖？ >> nth=0");
+    app.onDialog((d) => (d.title === "Cancel T-0003?" ? "Cancel task" : null));
+    await app.rightClick("text:要不要升级依赖？ >> nth=0");
+    await app.press("id:side-cancel-T-0003");
+    await app.waitUntil(() => cancels.length === 1);
+    expect(cancels[0]).toEqual({ id: "T-0003" });
+    app.onDialog((d) => (d.title === "Mark T-0007 as done?" ? "Mark as done" : null));
+    await app.rightClick("text:截图检查 gallery >> nth=0");
+    await app.press("id:side-done-T-0007");
+    await app.waitUntil(() => cancels.length === 2);
+    expect(cancels[1]).toEqual({ id: "T-0007", done: true });
+  });
+
   test("Other instructions replies to the item from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
