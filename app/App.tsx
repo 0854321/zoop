@@ -36,7 +36,8 @@ import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
-import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage } from "nsh/updater";
+import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
+import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
@@ -2871,14 +2872,17 @@ function VersionRows(props: { hub: Hub }) {
   const request = () => props.hub.status()?.update?.at;
   const summary = () => updateSummary(props.hub.status(), clock());
   const toneColor = (t: UpdateLine["tone"]) => (t === "ok" ? colors.up : t === "bad" ? colors.danger : colors.muted);
+  // This app's own code: the release it was built for, or the OTA package it runs (nsh/updater).
+  const ota = runningPackage();
+  const client = ota ? L(`${ota.version} · OTA build ${ota.build}`, `${ota.version} · OTA 构建 ${ota.build}`) : CLIENT_VERSION;
   return (
     <>
+      <SetRow first label={L("This app", "本机客户端")} value={client} testID="version-client" />
       <Each of={hosts()} key={(h) => h.host}>
-        {(h, i) => {
+        {(h) => {
           const line = () => updateLine(h(), request(), clock());
           return (
             <SetRow
-              first={i() === 0}
               label={h().host}
               value={h().rev?.slice(0, 7) ?? L("Unknown", "未知")}
               chevron={!!h().rev_url}

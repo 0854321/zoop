@@ -61,6 +61,8 @@ jobs:
         run: |
           args=(--build "$GITHUB_RUN_NUMBER")
           [ "$GITHUB_REF_TYPE" != tag ] || args+=(--app-version "${GITHUB_REF_NAME#v}")
+          # Settings › Version shows the release the app was built for.
+          [ "$GITHUB_REF_TYPE" != tag ] || printf 'export const CLIENT_VERSION = "%s";\n' "${GITHUB_REF_NAME#v}" > app/version.ts
           out="$RUNNER_TEMP/out"
           mkdir -p assets
           if [ "$TARGET" = android ]; then
@@ -153,6 +155,7 @@ jobs:
           NSH_PACKAGE_CERT: ${{ secrets.NSH_PACKAGE_CERT }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          printf 'export const CLIENT_VERSION = "%s";\n' "$version" > app/version.ts
           keys="$RUNNER_TEMP/keys"
           (umask 077 && mkdir -p "$keys" && printf '%s\n' "$NSH_PACKAGE_KEY" > "$keys/release.secret")
           printf '%s\n' "$NSH_PACKAGE_CERT" > "$keys/release.cert"
