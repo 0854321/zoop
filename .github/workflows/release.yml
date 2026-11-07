@@ -22,9 +22,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Includes OTA updates through signed packages (longbridge/nsh#1189), on top of Tray and Notifications.show's
-  # `silent` (longbridge/nsh#1140).
-  NSH_REF: 5a54856b94e884ce0e0b9e0c0bd79f7c9579e266
+  # Includes OTA updates through signed packages (longbridge/nsh#1189) with the Android bindgen fix for NDK 27
+  # (longbridge/nsh#1193), on top of Tray and Notifications.show's `silent` (longbridge/nsh#1140).
+  NSH_REF: a2a46107eecc264b9e75b1a12ccc1b1d098f8f47
 
 defaults:
   run:
