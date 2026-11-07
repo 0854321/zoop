@@ -289,3 +289,17 @@ test("checkWaits: a waiting task wakes early once its wait_check exit code chang
   expect([...(await checkWaits(t0 + 2000, 1000))]).toEqual(["T-9101"]);
   rmSync(flag, { force: true });
 });
+
+test("checkWaits: a wait that finished while the daemon was down still wakes after a restart", async () => {
+  const { writeDoc, P } = await import("../src/core");
+  const { checkWaits } = await import("../src/cli");
+  const flag = `${tmpdir()}/noop-waitcheck-r-${process.pid}`.replace(/\\/g, "/");
+  rmSync(flag, { force: true });
+  const wake = new Date(Date.now() + 3600_000).toISOString();
+  const cmd = `test -f ${flag}`;
+  // An earlier daemon saw the check pending (exit 1) and recorded that baseline in the task.
+  writeDoc(P("tasks", "waiting", "T-9102.md"), { id: "T-9102", title: "wait", wake_at: wake, wait_check: cmd, wait_check_base: `1 ${cmd}` }, "x");
+  await Bun.write(flag, "1"); // finished during the restart
+  expect([...(await checkWaits(Date.now() + 999_999_999, 1000))]).toContain("T-9102");
+  rmSync(flag, { force: true });
+});

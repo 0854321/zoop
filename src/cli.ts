@@ -214,7 +214,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     const wakes = Number(meta.wakes ?? 0);
     // the owner's approval covers the whole task: a wait for CI before the approved merge must not revoke it
     writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, waiting_since: meta.waiting_since || now(), wake_at: w.wake_at, wait_kind: w.kind, wakes: wakes ? String(wakes) : undefined,
-      waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined },
+      waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined, wait_check_base: undefined },
       body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (${w.kind === "human" ? "wakes on the owner's answer or an event" : `check again ${w.wake_at}`})\n`);
     journal(host, w.kind === "human" ? `⏳ ${meta.id} 等你处理：${res.waiting_on ?? ""}（不定时唤醒，事件到达再继续）` : `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${w.minutes} 分钟后再看`);
   } else if (res.status === "needs_decision") {
@@ -479,7 +479,7 @@ const runningIds = new Set<string>();
 const waitChecks = new Map<string, { cmd: string; base?: number; next: number; n: number }>();
 export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Set<string>> {
   const ready = new Set<string>();
-  const due: [string, string][] = [];
+  const due: [string, string, string][] = [];
   const waiting = new Set<string>();
   for (const p of list(P("tasks", "waiting"), /^T-.*\.md$/)) {
     const { meta } = readDoc(p);
@@ -487,9 +487,9 @@ export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Se
     waiting.add(meta.id);
     const c = waitChecks.get(meta.id);
     if (c && c.cmd === meta.wait_check && c.next > now) continue;
-    due.push([meta.id, meta.wait_check]);
+    due.push([meta.id, meta.wait_check, p]);
   }
-  await Promise.all(due.map(async ([id, cmd]) => {
+  await Promise.all(due.map(async ([id, cmd, path]) => {
     const proc = Bun.spawn(["bash", "-lc", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
     const timer = setTimeout(() => proc.kill(), 60_000);
     const code = await proc.exited;
@@ -498,7 +498,14 @@ export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Se
     const prev = waitChecks.get(id);
     const same = prev && prev.cmd === cmd;
     const n = same ? prev.n + 1 : 0;
-    const base = same ? prev.base : undefined;
+    // The baseline is persisted in the task, so a daemon restart can't make a wait that finished meanwhile its new baseline.
+    let base = same ? prev.base : undefined;
+    if (base === undefined) {
+      const doc = existsSync(path) ? readDoc(path) : undefined;
+      const saved = doc?.meta.wait_check_base?.match(/^(-?\d+) ([\s\S]*)$/);
+      if (saved && saved[2] === cmd) base = Number(saved[1]);
+      else if (doc) writeDoc(path, { ...doc.meta, wait_check_base: `${code} ${cmd}` }, doc.body);
+    }
     waitChecks.set(id, { cmd, base: base ?? code, next: now + (everyMs ?? backoffMinutes(n) * 60_000), n });
     if (base !== undefined && code !== base) { ready.add(id); waitChecks.delete(id); }
   }));
