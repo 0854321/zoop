@@ -144,10 +144,12 @@ export async function cloudDeploy(cfg: Cfg) {
   if (!(await ensureWebClient())) return fail("客户端网页下载失败，Worker 没有部署。请检查网络后重新运行：noop cloud deploy");
   const name = cfg.cloud?.name ?? "noop";
   console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
-  const dep = await $`${wr} deploy --name ${name}`.cwd(dir).env(env).quiet().nothrow();
+  // [cloud] domain (e.g. noop.example.com on a zone in the same account) attaches a Custom Domain and becomes the URL
+  const domain = String(cfg.cloud?.domain ?? "").trim();
+  const dep = await $`${wr} deploy --name ${name} ${domain ? ["--domain", domain] : []}`.cwd(dir).env(env).quiet().nothrow();
   const out = dep.stdout.toString() + dep.stderr.toString();
   if (dep.exitCode !== 0) return fail(out.slice(-1500));
-  const url = out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
+  const url = domain ? `https://${domain}` : out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
   const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token };
   const e = cfg.email ?? {};
   if (e.to && e.host) {
@@ -165,12 +167,13 @@ export async function cloudDeploy(cfg: Cfg) {
   if ((await sec.exited) !== 0) return fail("设置 Worker 密钥失败：\n" + (await new Response(sec.stderr).text()).slice(-800));
   if (!url) return fail("部署成功，但没识别到地址；请把 workers.dev 地址写进 config.toml 的 [cloud] url");
   // ---- record the URL (machine-local noop.toml first: the data sync itself goes through this Worker)
-  writeHubToml({ cloud: { url, name, ...(account ? { account } : {}) } });
+  writeHubToml({ cloud: { url, name, ...(account ? { account } : {}), ...(domain ? { domain } : {}) } });
   await locked(async () => {
     await _pull();
     const f = P("config.toml");
     let s = readFileSync(f, "utf8");
-    s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `[cloud]\nurl = "${url}"\nname = "${name}"\n\n`) : `${s.trimEnd()}\n\n[cloud]\nurl = "${url}"\nname = "${name}"\n`;
+    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${domain ? `domain = "${domain}"\n` : ""}`;
+    s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `${block}\n`) : `${s.trimEnd()}\n\n${block}`;
     writeFileSync(f, s);
     writeFileSync(P("README.md"), `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`);
     journal(hostName(cfg), `☁️ cloud hub deployed: ${url}`);
