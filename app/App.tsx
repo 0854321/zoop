@@ -6,6 +6,7 @@ import { L, lang, LANG_KEY, LANGS } from "./i18n";
 import {
   cleanup,
   createAnimatedValue,
+  createMotion,
   colorScheme,
   computed,
   effect,
@@ -38,6 +39,7 @@ import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
 import { avatarOf } from "./avatars";
 import { appendQuote } from "./quote";
+import { createTimelineWindow } from "./timeline";
 import { CHECK_EVERY_MS, createUpdates, type UpdateState } from "./update";
 import {
   alpha,
@@ -3446,14 +3448,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const PAGE = 200;
   const limit = signal(PAGE);
   let built = new Map<string, TimelineRow>();
+  const timelineWindow = createTimelineWindow(PAGE);
   const UNREAD: TimelineRow = { key: "unread", unread: true };
   const timeline = computed((): TimelineRow[] => {
     const d = divider();
     const next = new Map<string, TimelineRow>();
     const out: TimelineRow[] = [];
     const all = shown();
-    const hidden = Math.max(0, all.length - limit());
-    if (hidden) out.push({ key: "more", more: hidden });
+    const hidden = timelineWindow.update(all, hub.loaded(), limit(), untracked(atEnd) && untracked(onChannel));
+    if (hidden) {
+      const old = built.get("more");
+      const more = old && "more" in old && old.more === hidden ? old : { key: "more", more: hidden };
+      next.set("more", more);
+      out.push(more);
+    }
     for (const row of rows(hidden ? all.slice(hidden) : all)) {
       if ("event" in row && row.event.id === d) out.push(UNREAD);
       const old = built.get(row.key);
@@ -4038,27 +4046,32 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         </View>
                       );
                     }
+                    const entrance = timelineWindow.takeArrival(row.event.id) ? createMotion({
+                      enter: { keyframes: { opacity: [0, 1], translateY: [8, 0] }, duration: 180, easing: "easeOut" },
+                    }) : undefined;
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRecall={() => undo(row.event.id)} onRef={pick} />;
+                      return <View style={entrance?.style}><OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRecall={() => undo(row.event.id)} onRef={pick} /></View>;
                     }
                     return (
-                      <Message
-                        hub={hub}
-                        event={row.event}
-                        answered={answered}
-                        target={target}
-                        onAnswer={answer}
-                        onReply={reply}
-                        onQuote={(markdown, ref) => {
-                          draft.update((value) => appendQuote(value, markdown));
-                          replyNote.set(null);
-                          replyTo.set(ref ?? null);
-                          composer?.focus();
-                          composer?.setSelection(draft().length);
-                        }}
-                        selection={proposalSelection}
-                      />
+                      <View style={entrance?.style}>
+                        <Message
+                          hub={hub}
+                          event={row.event}
+                          answered={answered}
+                          target={target}
+                          onAnswer={answer}
+                          onReply={reply}
+                          onQuote={(markdown, ref) => {
+                            draft.update((value) => appendQuote(value, markdown));
+                            replyNote.set(null);
+                            replyTo.set(ref ?? null);
+                            composer?.focus();
+                            composer?.setSelection(draft().length);
+                          }}
+                          selection={proposalSelection}
+                        />
+                      </View>
                     );
                   }}
                 </Each>

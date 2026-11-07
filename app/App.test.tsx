@@ -189,19 +189,22 @@ describe("channel", () => {
     await toTop("Paged message 0");
     expect(app.shows("Paged message 0")).toBe(true);
   });
-  test("a new message leaves a timeline scrolled up where it is; at the end it follows", async () => {
-    const many = Array.from({ length: 90 }, (_, i) => ({ id: `tail-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Tail message ${i}` }));
+  for (const platform of ["ios", "macos", "android"] as const) test(`a new message leaves a timeline scrolled up where it is; at the end it follows (${platform})`, async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ id: `tail-${i}`, ts: ts(10 + i / 100), from: "agent", kind: "notice", text: `Tail message ${i}` }));
     const later: unknown[] = [];
     const arrive = (text: string) => later.push({ id: text, ts: new Date().toISOString(), from: "agent", kind: "notice", text });
     const app = await open("./App.tsx", {
-      storage: STORAGE, width: 390, height: 800, platform: "ios",
+      storage: STORAGE, width: 390, height: 800, platform,
       network: { ...hub([], many), [`GET ${URL}/api/feed?*`]: () => ({ body: { events: later.splice(0) } }) },
     });
-    await app.waitFor("Tail message 89");
+    await app.waitUntil(() => app.texts().some((text) => text.startsWith("Tail message")));
+    if (app.shows("label:Jump to latest")) await app.press("label:Jump to latest");
+    await app.waitFor("Tail message 249");
+    await app.wait(300); // Let initial list measurements and the initial scroll settle.
     expect(app.shows("label:Jump to latest")).toBe(false);
 
     // Just off the end, closer than a message: it stays put and counts what came below.
-    await app.scroll("id:timeline", -40);
+    await app.scroll("id:timeline", platform === "ios" ? -40 : -240);
     await app.waitFor("Jump to latest");
     arrive("Below the fold");
     await app.waitFor("1 new messages", { timeout: 10000 });
@@ -226,6 +229,27 @@ describe("channel", () => {
     arrive("Followed");
     await app.waitFor("Followed", { timeout: 10000 });
     expect(app.shows("label:Jump to latest")).toBe(false);
+  });
+
+  test("a new message preserves existing content", async () => {
+    const url = "http://hub.test:8787";
+    let arrival = false;
+    const old = { id: "old", ts: "2026-11-07T01:00:00Z", from: "lead", kind: "notice", text: "Existing message stays in place" };
+    const next = { id: "next", ts: "2026-11-07T02:00:00Z", from: "lead", kind: "notice", text: "New message enters smoothly" };
+    const app = await open("./App.tsx", {
+      width: 600, height: 800,
+      storage: { "hub.url": url, "hub.token": "tok" },
+      network: {
+        [`GET ${url}/api/feed`]: { body: { events: [old] } },
+        [`GET ${url}/api/feed?*`]: () => ({ body: { events: arrival ? [next] : [] } }),
+        [`GET ${url}/api/status`]: { body: { tasks: {}, active: [], decisions: [], recent: [], hosts: [] } },
+      },
+    });
+    await app.waitFor(old.text);
+    arrival = true;
+    await app.waitFor(next.text, { timeout: 10000 });
+    await app.wait(300);
+    expect(app.shows(old.text)).toBe(true);
   });
 
   test("proposal selection survives a recycled timeline cell", async () => {
