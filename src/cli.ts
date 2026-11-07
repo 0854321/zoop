@@ -56,7 +56,8 @@ export function due(every: string, last: string | undefined, t = new Date()): bo
  * A failing command counts as changed (the agent then looks). */
 export function signalChanged(r: { name: string; signal?: string }, state: Record<string, string>): boolean {
   const key = `${r.name}#signal`;
-  const res = Bun.spawnSync(["bash", "-lc", r.signal!], { cwd: existsSync(ROOT) ? ROOT : undefined, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  // Non-login: the service already carries the user's PATH, and sourcing their profile can cost seconds (conda, etc.).
+  const res = Bun.spawnSync(["bash", "-c", r.signal!], { cwd: existsSync(ROOT) ? ROOT : undefined, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   if (res.exitCode !== 0) return true;
   const hash = new Bun.CryptoHasher("sha1").update(res.stdout).digest("hex");
   if (state[key] === hash) return false;
@@ -494,7 +495,8 @@ export async function checkWaits(now = Date.now(), everyMs?: number): Promise<Se
     due.push([meta.id, meta.wait_check, p]);
   }
   await Promise.all(due.map(async ([id, cmd, path]) => {
-    const proc = Bun.spawn(["bash", "-lc", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
+    // Non-login: the service already carries the user's PATH, and sourcing their profile can cost seconds (conda, etc.).
+    const proc = Bun.spawn(["bash", "-c", cmd], { stdout: "ignore", stderr: "ignore", cwd: homedir() });
     const timer = setTimeout(() => proc.kill(), 60_000);
     const code = await proc.exited;
     clearTimeout(timer);
