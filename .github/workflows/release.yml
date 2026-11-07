@@ -24,7 +24,7 @@ concurrency:
 env:
   # Includes OTA updates through signed packages (longbridge/nsh#1189), on top of Tray and Notifications.show's
   # `silent` (longbridge/nsh#1140).
-  NSH_REF: e10bc644f0552da6dfd99046b2bfe7beb6e9fccd
+  NSH_REF: 4e8808cec33c71faedb83a8e4598d05e31727f28
 
 defaults:
   run:
