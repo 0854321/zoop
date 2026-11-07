@@ -1943,6 +1943,9 @@ function Sidebar(props: {
 /** The sidebar footer: who and where, opening the user menu (settings, appearance, language). */
 function UserMenu(props: { hub: Hub; onSettings: () => void }) {
   const who = () => L("Channel", "主会话");
+  /** The signed-in account as the email's local part; the server address stays out of the UI. */
+  const account = signal("");
+  void Storage.getItem(KEYS.email).then((e) => account.set((e ?? "").split("@")[0]));
   const item = { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, height: 32, paddingHorizontal: 10, borderRadius: 6 };
   const label = (t: string) => <Text style={{ fontSize: 12, fontWeight: "600", color: colors.faint, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 2 }}>{t}</Text>;
   const sep = () => <MenuSeparator style={{ height: 1, marginVertical: 4, marginHorizontal: 4, backgroundColor: colors.line }} />;
@@ -1972,7 +1975,9 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
         >
           <View style={{ flex: 1, gap: 1 }}>
             <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{who()}</Text>
-            <Text style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{props.hub.cfg.url.replace(/^https?:\/\//, "")}</Text>
+            <If when={account()}>
+              <Text testID="user-account" style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{account()}</Text>
+            </If>
           </View>
           <Icon name="chevron-up" size={13} tint={colors.muted} />
         </View>
@@ -4703,6 +4708,7 @@ function Login(props: { url: string; served: boolean; email: string; notice?: st
     try {
       const r = await postJson(`${server()}/api/auth/start`, { email: e });
       if (r.status === 429) throw new Error(String(r.data.error ?? L("Too many requests. Try again later.", "请求太频繁，请稍后再试")));
+      if (r.status === 403) throw new Error(L("This email isn’t allowed to sign in", "这个邮箱不允许登录"));
       if (r.status === 503) throw new Error(L("The server can’t send email yet, so email sign-in isn’t available", "服务器还没有配置发信，暂时无法用邮箱登录"));
       if (r.status >= 400) throw new Error(L(`The server returned ${r.status}. This address may not be a noop server.`, `服务器返回 ${r.status}，这个地址可能不是 noop`));
       await Storage.setItem(KEYS.email, e);

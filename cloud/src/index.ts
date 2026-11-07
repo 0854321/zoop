@@ -353,25 +353,25 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/auth/start") {
       const email = normEmail(body?.email);
       if (!validEmail(email)) return json({ error: "invalid email" }, 400);
+      const owners = (this.env.HUB_OWNER_EMAIL ?? "").split(",").map(normEmail).filter(Boolean);
+      // Only the allow-list may sign in: anyone else is told so at once, with no code, no mail and no row written.
+      if (owners.length && !owners.includes(email)) return json({ error: "这个邮箱不允许登录" }, 403);
       let smtp: SmtpCfg | null = null;
       try { smtp = this.env.HUB_SMTP ? JSON.parse(this.env.HUB_SMTP) : null; } catch {}
       // No email set up yet: the code is shown on the owner's own machine instead (`noop login`, needs the machine key).
       const cf = !smtp?.host && !!this.env.EMAIL && !!this.env.HUB_MAIL_FROM;
       const cli = !smtp?.host && !cf;
       this.sql.exec("DELETE FROM auth_sends WHERE ts < ?", now - 3600_000);
-      // Per-email throttle applies to every address alike, so it reveals nothing about the allow-list.
-      const recent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE email = ? AND ts > ?", email, now - RESEND_MS).one().n as number;
+            const recent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE email = ? AND ts > ?", email, now - RESEND_MS).one().n as number;
       if (recent) return json({ error: "请稍等一分钟再重新获取验证码" }, 429);
       const sent = this.sql.exec("SELECT COUNT(*) AS n FROM auth_sends WHERE sent = 1").one().n as number;
       if (sent >= SENDS_PER_HOUR) return json({ error: "验证码发送太频繁，请一小时后再试" }, 429);
-      const owners = (this.env.HUB_OWNER_EMAIL ?? "").split(",").map(normEmail).filter(Boolean);
       const isOwner = owners.includes(email) || (cli && !owners.length);
       this.sql.exec("INSERT INTO auth_sends (email, ts, sent) VALUES (?, ?, ?)", email, now, isOwner ? 1 : 0);
-      if (!isOwner) return json(cli ? { ok: true, delivery: "cli" } : { ok: true });
+      if (!isOwner) return json({ error: "这个邮箱不允许登录" }, 403); // no allow-list and email set up: nobody is the owner
       const code = sixDigits();
       this.sql.exec("INSERT OR REPLACE INTO auth_codes (email, hash, expires, attempts) VALUES (?, ?, ?, 0)", email, await sha256(`${email}:${code}`), now + CODE_TTL);
       if (cli) { this.set("cli_code", { email, code, expires: now + CODE_TTL }); return json({ ok: true, delivery: "cli" }); }
-      if (!isOwner) return json({ ok: true });
       try {
         const subject = `Noop 登录验证码：${code}`;
         const text = `你的 Noop 登录验证码是：\n\n    ${code}\n\n10 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件。\n`;

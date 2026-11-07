@@ -62,9 +62,9 @@ ok((await post("/api/host/revoke-sessions", {}, auth)).status === 403, "session 
 ok((await post("/api/auth/logout", {}, auth)).status === 200, "logout → 200");
 ok((await fetch(BASE + "/api/status", { headers: auth })).status === 401, "after logout → 401");
 
-// non-owner: 200, no mail
+// non-owner: refused outright, no mail
 n0 = mails().length;
-ok((await post("/api/auth/start", { email: "stranger@example.com" })).status === 200, "non-owner → 200"); await wait();
+ok((await post("/api/auth/start", { email: "stranger@example.com" })).status === 403, "non-owner → 403"); await wait();
 ok(mails().length === n0, "non-owner gets no mail");
 
 // revoke-sessions with HUB_TOKEN
