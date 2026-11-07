@@ -166,7 +166,7 @@ describe("login", () => {
     await app.press("id:user-menu");
     await app.press("id:theme-dark");
     expect(app.storage()["hub.theme"]).toBe("dark");
-    await app.press("id:user-menu");
+    await app.press("id:menu-language");
     await app.press("id:menu-lang-zh");
     expect(app.storage()["hub.lang"]).toBe("zh");
     await app.waitFor("主会话");

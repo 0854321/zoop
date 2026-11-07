@@ -34,7 +34,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
+import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage } from "nsh/updater";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
@@ -1942,23 +1942,33 @@ function Sidebar(props: {
   );
 }
 
-/** The sidebar footer: who and where, opening the user menu (settings, appearance, language). */
+/** The sidebar account, opening the user menu (settings, appearance, language). */
 function UserMenu(props: { hub: Hub; onSettings: () => void }) {
-  const who = () => L("Channel", "主会话");
   /** The signed-in account as the email's local part; the server address stays out of the UI. */
   const account = signal("");
   void Storage.getItem(KEYS.email).then((e) => account.set((e ?? "").split("@")[0]));
   const item = { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, height: 32, paddingHorizontal: 10, borderRadius: 6 };
-  const label = (t: string) => <Text style={{ fontSize: 12, fontWeight: "600", color: colors.faint, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 2 }}>{t}</Text>;
+  const touch = platform.os === "ios" || platform.os === "android";
+  const row = () => ({ ...item, height: touch ? 48 : 36 });
+  const surface = (): ViewStyle => ({ ...glass(colors.surface, radius.control), minWidth: 248, padding: 6 });
+  const appearance = (dark: boolean, title: string, icon: IconName) => (
+    <MenuItem testID={dark ? "theme-dark" : "theme-light"} accessibilityLabel={title}
+      role="menuitemradio" checked={isDark() === dark} closeOnSelect={false}
+      onSelect={() => { if (isDark() !== dark) toggleTheme(); }} hoverStyle={hovered()}
+      style={{ width: touch ? 44 : 28, height: touch ? 44 : 28, alignItems: "center", justifyContent: "center", borderRadius: 4,
+        backgroundColor: isDark() === dark ? colors.surface : "transparent", borderWidth: isDark() === dark ? 0.5 : 0, borderColor: surfaceEdge() }}>
+      <Icon name={icon} size={16} tint={isDark() === dark ? colors.text : colors.muted} />
+    </MenuItem>
+  );
   const sep = () => <MenuSeparator style={{ height: 1, marginVertical: 4, marginHorizontal: 4, backgroundColor: colors.line }} />;
   const radio = (text: string, on: () => boolean, pick: () => void, testID: string) => (
-    <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={hovered()} style={item}>
+    <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={hovered()} style={row()}>
+      <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{text}</Text>
       <View style={{ width: 14 }}>
         <If when={on()}>
           <Icon name="check" size={13} tint={colors.text} />
         </If>
       </View>
-      <Text style={{ fontSize: 14, color: colors.text }}>{text}</Text>
     </MenuItem>
   );
   return (
@@ -1966,7 +1976,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
       align="start"
       offset={6}
       margin={8}
-      popupStyle={{ minWidth: 220, padding: 4, borderRadius: radius.control, borderCurve: "continuous", borderWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.surface }}
+      popupStyle={surface()}
       trigger={
         <View
           role="button"
@@ -1975,28 +1985,32 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
           hoverStyle={hovered()}
           style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40, paddingHorizontal: 8, marginLeft: -8, borderRadius: radius.control }}
         >
-          <View style={{ flex: 1, gap: 1 }}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{who()}</Text>
-            <If when={account()}>
-              <Text testID="user-account" style={{ fontSize: 12, color: colors.muted, numberOfLines: 1 }}>{account()}</Text>
-            </If>
-          </View>
+          <Text testID="user-account" style={{ flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
           <Icon name="chevron-up" size={13} tint={colors.muted} />
         </View>
       }
     >
-      <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} style={item}>
-        <Icon name="settings" size={15} tint={colors.muted} />
-        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Settings", "设置")}</Text>
+      <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} style={row()}>
+        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Settings…", "设置…")}</Text>
         <Text style={{ fontSize: 12, color: colors.faint }}>{keymap.label("mod+,")}</Text>
       </MenuItem>
+      <Submenu offset={4}
+        trigger={<View testID="menu-language" hoverStyle={hovered()} style={row()}>
+          <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Language", "语言")}</Text>
+          <Text style={{ fontSize: 13, color: colors.muted }}>{LANGS.find((l) => l.id === lang())?.label ?? "English"}</Text>
+          <Icon name="chevron" size={13} tint={colors.muted} />
+        </View>}
+        back={<View style={row()}><Icon name="back" size={14} tint={colors.muted} /><Text style={{ fontSize: 14, color: colors.text }}>{L("Back", "返回")}</Text></View>}>
+        <Each of={LANGS}>{(l) => radio(l().label, () => lang() === l().id, () => pickLang(l().id), `menu-lang-${l().id}`)}</Each>
+      </Submenu>
       {sep()}
-      {label(L("Appearance", "外观"))}
-      {radio(L("Light", "浅色"), () => !isDark(), () => toggleTheme(), "theme-light")}
-      {radio(L("Dark", "深色"), () => isDark(), () => toggleTheme(), "theme-dark")}
-      {sep()}
-      {label(L("Language", "语言"))}
-      <Each of={LANGS}>{(l) => radio(l().label, () => lang() === l().id, () => pickLang(l().id), `menu-lang-${l().id}`)}</Each>
+      <View style={row()}>
+        <Text style={{ flex: 1, fontSize: 14, color: colors.text }}>{L("Appearance", "外观")}</Text>
+        <View style={{ flexDirection: "row", gap: 2, padding: 2, borderRadius: 6, backgroundColor: alpha(colors.text, 0.06) }}>
+          {appearance(false, L("Light", "浅色"), "sun")}
+          {appearance(true, L("Dark", "深色"), "moon")}
+        </View>
+      </View>
     </Menu>
   );
 }
