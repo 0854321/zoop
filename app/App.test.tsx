@@ -753,6 +753,17 @@ describe("keyboard", () => {
     await app.waitUntil(() => !app.shows("id:recall-send"));
   });
 
+  test("a delivered message shows a check that goes away on its own", async () => {
+    const posts: { text: string }[] = [];
+    const app = await open("./App.tsx", { ...desk, network: hub(posts) });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "送达了吗");
+    await app.submit("id:composer");
+    expect(app.shows("id:sent-check")).toBe(false);
+    await app.waitFor("id:sent-check", { timeout: 8000 });
+    await app.waitUntil(() => !app.shows("id:sent-check"), { timeout: 4000 });
+  });
+
   test("Enter sends from the composer", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const app = await open("./App.tsx", { ...desk, network: hub(posts) });

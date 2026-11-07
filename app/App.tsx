@@ -283,6 +283,7 @@ function createHub(cfg: Config) {
     if (!r.ok) throw new Error(L(`Send failed (${r.status})`, `发送失败（${r.status}）`));
     const ev = (await r.json()) as HubEvent;
     if (ev?.id) events.update((evs) => merge(evs, [ev]));
+    return ev?.id;
   }
 
   async function settings(patch?: Record<string, unknown>): Promise<SettingsView> {
@@ -817,6 +818,35 @@ function Media(props: { hub: Hub; path: string }) {
 
 // ---------------------------------------------------------------- timeline
 
+/** Messages the hub just confirmed: their bubble shows a check that pops in, then fades. */
+const justSent = signal<Set<string>>(new Set());
+const SENT_CHECK_MS = 1600;
+function markSent(id: string | undefined) {
+  if (!id) return;
+  justSent.update((s) => new Set(s).add(id));
+  setTimeout(() => justSent.update((s) => { const n = new Set(s); n.delete(id); return n; }), SENT_CHECK_MS);
+}
+
+/** The check beside a just-delivered message: pops in, holds, fades out. */
+function SentCheck() {
+  const still = reduceMotion();
+  const v = createAnimatedValue(still ? 1 : 0);
+  const fade = createAnimatedValue(1);
+  if (!still) v.timing(1, { duration: 280, easing: "easeOut" });
+  const t = setTimeout(() => fade.timing(0, { duration: still ? 0 : 300, easing: "easeOut" }), SENT_CHECK_MS - 320);
+  cleanup(() => clearTimeout(t));
+  return (
+    <View
+      testID="sent-check"
+      accessibilityLabel={L("Sent", "已发送")}
+      style={{ width: 16, height: 16, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: colors.up,
+        opacity: fade.mul(v), scale: v.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.3, 1.2, 1] }) }}
+    >
+      <Icon name="check" size={11} tint={colors.onAccent} />
+    </View>
+  );
+}
+
 /** A message the owner sent that the hub has not confirmed yet: it reads as sent unless delivery fails. */
 type Outgoing = { id: string; ts: string; text: string; ref: string | null; files: Attachment[]; state: "held" | "sending" | "failed" };
 
@@ -1077,6 +1107,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
                   <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.muted }}>{L("Undo", "撤回")}</Text>
                 </View>
               </If>
+              <If when={justSent().has(e.id)}><SentCheck /></If>
               <Text style={{ fontSize: size.tiny, color: colors.faint }}>{timeOf(e.ts)}</Text>
             </View>
           }
@@ -3616,7 +3647,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const { text, ref, files } = o;
     outbox.update((l) => l.map((x) => (x.id === id ? { ...x, state: "sending" } : x)));
     try {
-      await hub.send(text, ref, files);
+      markSent(await hub.send(text, ref, files));
       outbox.update((o) => o.filter((x) => x.id !== id));
     } catch {
       outbox.update((o) => o.map((x) => (x.id === id ? { ...x, state: "failed" } : x)));
