@@ -55,6 +55,7 @@ export function startCloudBridge(cfg: Cfg) {
   };
   setMirror((e) => { pending.push(e); void flush(); });
 
+  const seenMessages = new Set<string>();
   let after = 0, n = 0, busy = false, lastStatus = "", lastShape = "", lastPush = 0;
   // push the dashboard at once when its shape changes (an answered decision must leave "待你决定" at once); live agent
   // activity alone is pushed at most once a minute, and an unchanged dashboard every ~5 min (Worker writes are budgeted)
@@ -87,6 +88,9 @@ export function startCloudBridge(cfg: Cfg) {
         for (const it of r?.items ?? []) {
           if (it.type === "message") {
             const e = it.event as Event;
+            // a Worker switch (old one forwarding, new one direct) resets seq: never act on the same message twice
+            if (e.id && seenMessages.has(e.id)) { after = it.seq; continue; }
+            if (e.id) { seenMessages.add(e.id); if (seenMessages.size > 500) seenMessages.delete(seenMessages.values().next().value!); }
             appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
             await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts, thread: e.thread });
           } else if (it.type === "op" && it.op) {
