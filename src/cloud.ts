@@ -182,7 +182,8 @@ export async function cloudDeploy(cfg: Cfg) {
     await _pull();
     const f = P("config.toml");
     let s = readFileSync(f, "utf8");
-    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${domain ? `domain = "${domain}"\n` : ""}`;
+    // keep the account too: without it the primary's next redeploy (on every update) may land in another account
+    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}`;
     s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `${block}\n`) : `${s.trimEnd()}\n\n${block}`;
     writeFileSync(f, s);
     writeFileSync(P("README.md"), `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`);
