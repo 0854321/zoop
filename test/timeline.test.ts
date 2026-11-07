@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTimelineWindow } from "../app/timeline";
-import type { HubEvent } from "../app/hub";
-const event = (n: number): HubEvent => ({ id: `${n}`, ts: new Date(n * 1000).toISOString(), from: "agent", kind: "notice", text: `Message ${n}` });
+const event = (n: number) => ({ id: `${n}`, ts: new Date(n * 1000).toISOString(), from: "agent", kind: "notice", text: `Message ${n}` });
 
 test("initial history is paged, live arrivals keep the first visible message and load-more works", () => {
   const window = createTimelineWindow(200);

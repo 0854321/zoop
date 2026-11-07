@@ -1,5 +1,3 @@
-import type { HubEvent } from "./hub";
-
 /** Keep the start of an open conversation fixed. Sliding a 200-message window
  * on every append removes and inserts at both ends, invalidating List's entire
  * measured range. Initial history stays paged; live messages extend this window. */
@@ -9,7 +7,7 @@ export function createTimelineWindow(pageSize: number) {
   let latest = "";
   const arrivals = new Map<string, number>();
   return {
-    update(events: HubEvent[], loaded: boolean, limit: number, animate: boolean, now = Date.now()) {
+    update(events: readonly { id: string; ts: string }[], loaded: boolean, limit: number, animate: boolean, now = Date.now()) {
       for (const [id, until] of arrivals) if (until < now) arrivals.delete(id);
       if (start !== undefined && animate) {
         for (const event of events) {

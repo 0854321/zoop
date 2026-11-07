@@ -41,14 +41,15 @@ runs:
     - if: steps.cache.outputs.cache-hit != 'true'
       uses: dtolnay/rust-toolchain@stable
 
-    - if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+    # Linux runtime libraries are needed even when the built NSH distribution is cached.
+    - if: runner.os == 'Linux' && (steps.cache.outputs.cache-hit != 'true' || inputs.target == 'linux')
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
       run: |
         sudo apt-get update
         sudo apt-get install -y clang llvm libclang-dev pkg-config
-        [ "$TARGET" != linux ] || sudo apt-get install -y libgtk-4-dev
+        [ "$TARGET" != linux ] || sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
     - if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
       shell: bash
       run: |

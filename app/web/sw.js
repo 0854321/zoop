@@ -54,6 +54,7 @@ async function show(p) {
     tag: p.tag || p.ref || undefined,
     renotify: ask && !!(p.tag || p.ref),
     requireInteraction: ask,
+    silent: true, // Noop is quiet: no sound or vibration, the notification alone
     icon: `${scope}icons/192.png`,
     badge: `${scope}icons/192.png`,
     data: { ref: p.ref || null, url: p.url || (p.ref ? `${scope}?ref=${encodeURIComponent(p.ref)}` : scope), kind: p.kind || "" },
@@ -99,6 +100,7 @@ async function answer(ref, value) {
   await self.registration.showNotification(ok ? `已回复 ${ref}` : `回复 ${ref} 失败`, {
     body: ok ? `你选了 ${value}` : "点这里打开 Noop 再试一次",
     tag: `answered:${ref}`,
+    silent: true,
     icon: `${self.registration.scope}icons/192.png`,
     data: { ref, url: `${self.registration.scope}?ref=${encodeURIComponent(ref)}` },
   });

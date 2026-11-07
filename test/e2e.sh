@@ -4,7 +4,7 @@
 set -euo pipefail
 SRC=$(cd "$(dirname "$0")/.." && pwd)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
-export HUB_DATA="$W/data" HUB_HOST=pc HUB_SYNC_FAKE="$W/worker.sqlite"
+export NOOP_HOME="$W" HUB_DATA="$W/data" HUB_HOST=pc HUB_SYNC_FAKE="$W/worker.sqlite"
 cd "$SRC"; hub() { bun "$SRC/src/cli.ts" "$@"; }
 hub init --primary >/dev/null
 cd "$W/data"
@@ -84,7 +84,7 @@ tick_until "grep -qs 'Results from delegated subtasks' tasks/done/$SPL.md"
 grep -q "Results from delegated subtasks" tasks/done/$SPL.md
 ! grep -l "parent: $SPL" tasks/proposed/*.md 2>/dev/null
 # a second host joins and mirrors the same data
-HUB_DATA="$W/w2/data" HUB_HOST=w2 bun "$SRC/src/cli.ts" init --worker http://unused --token x >/dev/null
+NOOP_HOME="$W/w2" HUB_DATA="$W/w2/data" HUB_HOST=w2 bun "$SRC/src/cli.ts" init --worker http://unused --token x >/dev/null
 cmp tasks/done/T-0001.md "$W/w2/data/tasks/done/T-0001.md"
 test ! -e "$W/w2/data/config.local.toml.pc" && ! grep -q fake-agent "$W/w2/data/config.local.toml"
 echo "E2E OK"; cat journal/*.md
