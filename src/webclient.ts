@@ -36,7 +36,8 @@ export async function ensureWebClient(dir = WEB_DIR, base = process.env.NOOP_CLI
     const out = join(work, "noop");
     mkdirSync(out, { recursive: true });
     writeFileSync(join(work, ASSET), new Uint8Array(bytes));
-    const tar = await $`tar -xzf ${join(work, ASSET)} -C ${out}`.quiet().nothrow();
+    // Run inside work with relative names: tar on Windows reads an absolute "C:\..." path as a remote host.
+    const tar = await $`tar -xzf ${ASSET} -C noop`.cwd(work).quiet().nothrow();
     if (tar.exitCode !== 0 || !existsSync(join(out, "index.html"))) throw new Error(`${ASSET}: not a web client`);
     rmSync(client, { recursive: true, force: true });
     renameSync(out, client);

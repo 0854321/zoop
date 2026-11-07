@@ -277,7 +277,8 @@ test("codex can write to project checkouts and scratch, not only its cwd", async
 test("checkWaits: a waiting task wakes early once its wait_check exit code changes", async () => {
   const { writeDoc, P } = await import("../src/core");
   const { checkWaits } = await import("../src/cli");
-  const flag = `${tmpdir()}/noop-waitcheck-${process.pid}`;
+  // The check runs in bash, which reads a Windows "C:\..." path as an escape, so keep it POSIX-style.
+  const flag = `${tmpdir()}/noop-waitcheck-${process.pid}`.replace(/\\/g, "/");
   rmSync(flag, { force: true });
   const wake = new Date(Date.now() + 3600_000).toISOString();
   writeDoc(P("tasks", "waiting", "T-9101.md"), { id: "T-9101", title: "wait for CI", wake_at: wake, wait_check: `test -f ${flag}` }, "x");
