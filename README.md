@@ -4,7 +4,7 @@ Your own AI team, so your day can be a no-op.
 
 [Website](https://huacnlee.github.io/noop/) · [Download the app](https://github.com/huacnlee/noop/releases) · [Install](#install)
 
-<img width="2000" height="1385" alt="The Noop app: a team channel with agent updates and a decision card" src="website/public/screenshot.png" />
+<img width="2000" height="1390" alt="The Noop app: the team channel with agent updates, beside lists of tasks" src="website/public/screenshot.png" />
 
 Noop runs a small team of Claude Code and Codex agents on your own computers. They do your daily work, decide what they can based on how you've decided before, and only ask you when something really needs you — with a short list of options you answer in one tap.
 

@@ -100,9 +100,9 @@ const relatedProjects = [
       </section>
       <aside class="sponsor"><p>{t.sponsorText}</p><a class="sponsor-button" href={sponsorUrl} target="_blank" rel="noopener">{t.sponsorButton}</a></aside>
       <figure class="app-screenshot">
-        <img src={asset('screenshot.png')} width="2000" height="1385" loading="lazy" decoding="async" alt={t.screenshot} />
+        <img src={asset('screenshot.png')} width="2000" height="1390" loading="lazy" decoding="async" alt={t.screenshot} />
       </figure>
-      <div class="gallery">{t.gallery.map(([file, title, body]) => <figure><a href={asset(file)}><img src={asset(file)} width="2000" height="1385" loading="lazy" decoding="async" alt={title} /></a><figcaption><strong>{title}</strong><span>{body}</span></figcaption></figure>)}</div>
+      <div class="gallery">{t.gallery.map(([file, title, body]) => <figure><a href={asset(file)}><img src={asset(file)} width="2000" height="1390" loading="lazy" decoding="async" alt={title} /></a><figcaption><strong>{title}</strong><span>{body}</span></figcaption></figure>)}</div>
       <section id="workflow" class="section workflow">
         <div class="section-heading"><span class="index" aria-hidden="true">01 /</span><h2>{t.workflow}</h2><p>{t.workflowIntro}</p></div>
         <ol class="steps">{t.steps.map(([title, body], i) => <li><span class="step-number" aria-hidden="true">0{i + 1}</span><div><h3>{title}</h3><p>{body}</p></div></li>)}</ol>
@@ -121,7 +121,7 @@ const relatedProjects = [
         root.setAttribute('data-theme-changing', '');
         root.dataset.theme = light ? 'light' : 'dark';
         toggle?.setAttribute('aria-pressed', String(!light));
-        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#fbf7f0' : '#101114');
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#ffffff' : '#101114');
         requestAnimationFrame(() => requestAnimationFrame(() => root.removeAttribute('data-theme-changing')));
       }
       applyMode(root.dataset.theme === 'light');

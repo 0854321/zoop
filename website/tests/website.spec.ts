@@ -39,18 +39,18 @@ test('screenshot loads at its declared size', async ({ page }) => {
   await page.goto('./');
   const image = page.locator('.app-screenshot img');
   await image.scrollIntoViewIfNeeded();
-  await expect.poll(() => image.evaluate((element: HTMLImageElement) => [element.naturalWidth, element.naturalHeight])).toEqual([2000, 1385]);
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => [element.naturalWidth, element.naturalHeight])).toEqual([2000, 1390]);
 });
 
 test('gallery images load and link to full size', async ({ page }) => {
   await page.goto('./');
   const images = page.locator('.gallery img');
-  await expect(images).toHaveCount(3);
+  await expect(images).toHaveCount(5);
   for (const image of await images.all()) {
     await image.scrollIntoViewIfNeeded();
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(2000);
   }
-  await expect(page.locator('.gallery a').first()).toHaveAttribute('href', '/noop/screenshot-machine.png');
+  await expect(page.locator('.gallery a').first()).toHaveAttribute('href', '/noop/screenshot-task.png');
 });
 
 test('related projects link to the other projects in both languages', async ({ page }) => {
