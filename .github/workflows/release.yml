@@ -98,6 +98,17 @@ jobs:
           esac
           ls -l assets
 
+      - name: Verify the macOS package
+        if: matrix.target == 'macos'
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          app="$RUNNER_TEMP/verify/Noop.app"
+          ditto -x -k "assets/$ASSET" "$RUNNER_TEMP/verify"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          lipo "$app/Contents/MacOS/$executable" -verify_arch arm64
+          codesign --verify --deep --strict "$app"
+
       - name: Try the installer on this package
         if: matrix.installer != ''
         env:
@@ -125,6 +136,41 @@ jobs:
               grep -q "^Exec=$HOME/.local/share/noop-client/Noop" "$HOME/.local/share/applications/dev.noop.app.desktop" ;;
           esac
           rm assets/SHA256SUMS
+
+      # Reuse this ARM runner for Intel after packaging and testing the native app.
+      # The installer currently supports only Apple silicon; Intel users download the archive.
+      - name: Set up Intel nsh
+        if: matrix.target == 'macos'
+        uses: ./.github/actions/setup-nsh
+        with:
+          ref: ${{ env.NSH_REF }}
+          target: macos
+          rust-target: x86_64-apple-darwin
+
+      - name: Package and verify Intel macOS
+        if: matrix.target == 'macos'
+        run: |
+          args=(--build "$GITHUB_RUN_NUMBER")
+          [ "$GITHUB_REF_TYPE" != tag ] || args+=(--app-version "${GITHUB_REF_NAME#v}")
+          out="$RUNNER_TEMP/out-x86_64"
+          mkdir -p assets-intel
+          # The Intel CLI runs through Rosetta and also names OTA archives macos-x86_64.
+          (cd app && nsh package --target macos -o "$out" "${args[@]}")
+          ditto -c -k --keepParent "$out/Noop.app" assets-intel/Noop-macos-x86_64.zip
+          mv "$out"/Noop-*-macos-x86_64.tar.gz assets-intel/
+          app="$RUNNER_TEMP/verify-x86_64/Noop.app"
+          ditto -x -k assets-intel/Noop-macos-x86_64.zip "$RUNNER_TEMP/verify-x86_64"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          lipo "$app/Contents/MacOS/$executable" -verify_arch x86_64
+          codesign --verify --deep --strict "$app"
+
+      - name: Upload Intel macOS package
+        if: matrix.target == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Noop-macos-x86_64.zip
+          path: assets-intel/
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
