@@ -1,4 +1,5 @@
 // noop core — shared files as the world (stigmergy; synced via the owner's Worker, src/sync.ts), task queue, agent runner, journal, memory.
+import { OFFLINE_AFTER_MINUTES } from "../cloud/src/budget";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -74,13 +75,13 @@ export function locked<T>(fn: () => Promise<T> | T): Promise<T> {
 
 export const hasRemote = async () => (await sync.syncMode()) === "remote";
 
-export const pull = () => locked(_pull);
+export const pull = (opts?: { force?: boolean }) => locked(() => _pull(opts));
 /** Apply remote changes to DATA (remote wins on paths edited on both sides, except mergeable appends). */
-export const _pull = (): Promise<boolean> => sync.pull();
+export const _pull = (opts?: { force?: boolean }): Promise<boolean> => sync.pull(opts);
 
 /** Commit every local change via the Worker's compare-and-swap; false if we lost a race (or are offline). */
-export const commitPush = (msg: string) => locked(() => _commitPush(msg));
-export const _commitPush = (msg: string): Promise<boolean> => sync.commitPush(msg);
+export const commitPush = (msg: string, opts?: { force?: boolean }) => locked(() => _commitPush(msg, opts));
+export const _commitPush = (msg: string, opts?: { force?: boolean }): Promise<boolean> => sync.commitPush(msg, opts);
 
 /** Discard local edits and re-pull. */
 export const resetToUpstream = () => sync.resetToUpstream();
@@ -277,7 +278,8 @@ export function heartbeat(cfg: Cfg, busy: number, stats?: unknown) {
 }
 
 export function onlineHosts(cfg: Cfg): HostBeat[] {
-  const staleMs = (cfg.fleet?.offline_after_minutes ?? 5) * 60_000;
+  // heartbeats go up lazily (LAZY_PUSH_MS), so a shorter window would flap machines offline
+  const staleMs = Math.max(cfg.fleet?.offline_after_minutes ?? 0, OFFLINE_AFTER_MINUTES) * 60_000;
   return list(P("fleet", "hosts"), /\.json$/).map((p) => JSON.parse(readFileSync(p, "utf8")) as HostBeat)
     .filter((h) => Date.now() - Date.parse(h.seen) < staleMs);
 }

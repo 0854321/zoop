@@ -240,14 +240,16 @@ function createHub(cfg: Config) {
     ws.onopen = () => {
       failures = 0;
       conn.set("live");
+      loadStatus(); // whatever changed while disconnected; from here on the hub pushes it
     };
     ws.onmessage = (m: { data: unknown }) => {
       try {
-        events.update((evs) => merge(evs, [JSON.parse(String(m.data)) as HubEvent]));
+        const d = JSON.parse(String(m.data)) as HubEvent & { $status?: Status };
+        if (d.$status) status.set(d.$status);
+        else events.update((evs) => merge(evs, [d]));
       } catch {
-        return;
+        /* not JSON */
       }
-      loadStatus();
     };
     ws.onclose = () => {
       if (disposed) return;
@@ -281,7 +283,6 @@ function createHub(cfg: Config) {
     if (!r.ok) throw new Error(L(`Send failed (${r.status})`, `发送失败（${r.status}）`));
     const ev = (await r.json()) as HubEvent;
     if (ev?.id) events.update((evs) => merge(evs, [ev]));
-    loadStatus();
   }
 
   async function settings(patch?: Record<string, unknown>): Promise<SettingsView> {
@@ -318,7 +319,8 @@ function createHub(cfg: Config) {
 
   loadFeed().then(stream);
   loadStatus();
-  const timer = setInterval(loadStatus, 15000);
+  // the socket pushes the dashboard; only without it does the app poll, and slowly (Cloudflare free plan)
+  const timer = setInterval(() => untracked(conn) !== "live" && loadStatus(), 120_000);
   const dispose = () => {
     disposed = true;
     clearInterval(timer);

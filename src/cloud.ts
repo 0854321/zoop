@@ -63,63 +63,95 @@ export function startCloudBridge(cfg: Cfg) {
   const seen: string[] = Array.isArray(saved.seen) ? saved.seen : [];
   const saveCursor = () => { try { writeFileSync(cursorFile, JSON.stringify({ url: base(cfg), after, seen: seen.slice(-500) })); } catch {} };
   let after = sameHub ? Number(saved.after) || 0 : 0, n = 0, busy = false, lastStatus = "", lastShape = "", lastPush = 0;
+  let watchers = 1; // owner clients connected (the Worker reports it); until it says otherwise, assume someone looks
   // push the dashboard at once when its shape changes (an answered decision must leave "待你决定" at once); live agent
-  // activity alone is pushed at most once a minute, and an unchanged dashboard every ~5 min (Worker writes are budgeted)
+  // activity alone is pushed at most once a minute and only while an owner client is open; an unchanged dashboard
+  // every ~15 min (Cloudflare free plan: cloud/src/budget.ts)
   const pushStatus = async (force = false) => {
     const s = status();
     const st = JSON.stringify(s);
     const shape = JSON.stringify({ ...s, active: s.active.map(({ activity: _, ...t }) => t) });
-    const due = shape !== lastShape || (st !== lastStatus && Date.now() - lastPush > 60_000) || force;
+    const due = shape !== lastShape || (watchers > 0 && st !== lastStatus && Date.now() - lastPush > 60_000) || force;
     if (!due) return;
-    if (await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ status: s, settings: settingsView() }) })) {
-      lastStatus = st; lastShape = shape; lastPush = Date.now();
-    }
+    const r = await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ status: s, settings: settingsView() }) });
+    if (r) { lastStatus = st; lastShape = shape; lastPush = Date.now(); if (typeof r.watchers === "number") watchers = r.watchers; }
   };
-  // housekeeping every few seconds: mirror events up, push the dashboard
+  // housekeeping every few seconds: mirror events up, push the dashboard (both cost nothing when nothing changed)
   const loop = async () => {
     if (busy) return; busy = true;
     try {
       await flush();
-      await pushStatus(n++ % 100 === 0); // a forced re-push every ~5 min; the Worker skips unchanged writes
+      await pushStatus(n++ % 300 === 0); // a forced re-push every ~15 min; the Worker skips unchanged writes
+      if (!live && Date.now() - lastDrain > 60_000) void drain(); // no socket: poll the inbox once a minute
     } catch (err) { console.error(`cloud bridge: ${err}`); }
     busy = false;
   };
-  // the owner→fleet inbox, long-polled: the Worker holds the request until a message arrives, so the chat brain here
-  // gets it within milliseconds (the owner's model login never leaves this machine; only the message and the reply travel)
-  const inbox = async () => {
-    for (;;) {
-      const t0 = Date.now();
-      try {
-        const r = await call(cfg, `/api/host/inbox?after=${after}&wait=25`, {}, 40_000);
-        for (const it of r?.items ?? []) {
-          if (it.type === "message") {
-            const e = it.event as Event;
-            const fresh = claimInboxMessage(seen, e.id); // redelivered (restart, Worker switch): already handled
-            after = it.seq; saveCursor(); // before handling, so a restart mid-message doesn't replay it
-            if (!fresh) continue;
-            appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
-            await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts, thread: e.thread });
-          } else if (it.type === "op" && it.op) {
-            await applyOp(it.op);
-          } else if (it.type === "cancel" && typeof it.id === "string") {
-            await cancelTask(it.id, it.done === true);
-          } else if (it.type === "update") {
-            await updateFleet();
-          } else if (it.type === "settings") {
-            await saveSettings(it.patch);
-            await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });
-          }
-          after = it.seq; saveCursor();
-        }
-        if (r?.items?.length) await pushStatus();
-      } catch (err) { console.error(`cloud bridge inbox: ${err}`); }
-      // an older Worker (no long-poll) or an error answers at once: don't spin
-      const left = (cfg.cloud?.poll_seconds ?? 3) * 1000 - (Date.now() - t0);
-      if (left > 0) await Bun.sleep(left);
+  // the owner→fleet inbox. A hibernating WebSocket carries a nudge per item (the Durable Object sleeps in between, and
+  // pings are answered without waking it), then the items come over plain GETs, so the chat brain here gets an owner
+  // message within milliseconds (the owner's model login never leaves this machine; only the message and the reply travel)
+  let live = false, lastDrain = 0, draining = false, again = false;
+  const handle = async (it: any) => {
+    if (it.type === "message") {
+      const e = it.event as Event;
+      const fresh = claimInboxMessage(seen, e.id); // redelivered (restart, Worker switch): already handled
+      after = it.seq; saveCursor(); // before handling, so a restart mid-message doesn't replay it
+      if (!fresh) return;
+      appendEvent(e, { mirror: false }); // keep the local record (learning reads it); the cloud already has it
+      await handleOwnerMessage(e.text, e.ref, false, { paths: e.attachments, key: e.id, fetch: (p) => cloudMedia(cfg, p), sentAt: e.ts, thread: e.thread });
+    } else if (it.type === "op" && it.op) {
+      await applyOp(it.op);
+    } else if (it.type === "cancel" && typeof it.id === "string") {
+      await cancelTask(it.id, it.done === true);
+    } else if (it.type === "update") {
+      await updateFleet();
+    } else if (it.type === "settings") {
+      await saveSettings(it.patch);
+      await call(cfg, "/api/host/state", { method: "PUT", body: JSON.stringify({ settings: settingsView() }) });
     }
+    after = it.seq; saveCursor();
+  };
+  /** Fetch and handle inbox items until none are left (each call also acks what came before `after`). */
+  const drain = async () => {
+    if (draining) { again = true; return; }
+    draining = true; lastDrain = Date.now();
+    try {
+      do {
+        again = false;
+        for (let page = 0; page < 20; page++) {
+          const r = await call(cfg, `/api/host/inbox?after=${after}`);
+          const items = r?.items ?? [];
+          for (const it of items) await handle(it);
+          if (!items.length) break;
+          await pushStatus();
+        }
+      } while (again);
+    } catch (err) { console.error(`cloud bridge inbox: ${err}`); }
+    draining = false;
+  };
+  let backoff = 5_000;
+  const connect = () => {
+    const ws = new WebSocket(base(cfg).replace(/^http/i, "ws") + "/api/host/stream", { headers: { Authorization: `Bearer ${cfg.server?.token}` } } as any);
+    let ping: ReturnType<typeof setInterval> | undefined, pong = Date.now();
+    ws.onopen = () => {
+      live = true; backoff = 5_000; pong = Date.now();
+      // keep NAT paths open and notice a dead link; the Worker answers "ping" without waking up
+      ping = setInterval(() => { if (Date.now() - pong > 150_000) ws.close(); else try { ws.send("ping"); } catch {} }, 60_000);
+      void drain(); // whatever arrived while disconnected
+    };
+    ws.onmessage = (m) => {
+      pong = Date.now();
+      let d: any; try { d = JSON.parse(String(m.data)); } catch { return; } // "pong"
+      if (d?.type === "inbox") void drain();
+      else if (d?.type === "watchers" && typeof d.n === "number") { const was = watchers; watchers = d.n; if (d.n > was) void pushStatus(true); }
+    };
+    ws.onclose = () => {
+      live = false; clearInterval(ping);
+      setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5 * 60_000);
+    };
+    ws.onerror = () => {};
   };
   void loop();
-  void inbox();
+  connect();
   setInterval(loop, (cfg.cloud?.poll_seconds ?? 3) * 1000);
   console.log(`cloud bridge → ${base(cfg)}`);
 }

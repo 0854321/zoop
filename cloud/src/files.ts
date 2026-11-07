@@ -14,20 +14,21 @@
 //
 // Every write gets its own global `rev` (monotonic), so `changes?since=` pagination never splits a row.
 // History keeps ≤ 90 days, ≤ 20k rows and ≤ 30 versions per path, but always the latest row of each path.
-// Journals, logs and heartbeats keep only their latest row: each write is a full copy, and an append-only journal
-// rewritten every minute alone grew history past a gigabyte.
+// Journals, logs and heartbeats keep no history (their history view is the current row): each write was a full copy,
+// and an append-only journal rewritten every minute alone grew history past a gigabyte. Past TARGET.storageBytes the
+// daily prune keeps only the latest row of every path.
 
 /** Structural subset of Cloudflare's SqlStorage (also satisfied by a bun:sqlite adapter in tests). */
-export interface FilesSql { exec(query: string, ...bindings: any[]): { toArray(): any[] } }
+export interface FilesSql { exec(query: string, ...bindings: any[]): { toArray(): any[] }; readonly databaseSize?: number }
 
 export const MAX_FILE = 1_500_000;          // bytes per file (SQLite row limit is 2 MB)
 const PAGE_BYTES = 8_000_000;               // response budget for one changes page
 const PAGE_ROWS = 1000;
 const HISTORY_DAYS = 90, HISTORY_ROWS = 20_000, HISTORY_PER_PATH = 30;
-/** Paths rewritten constantly whose old versions are worth nothing (append-only logs, machine heartbeats). */
-export const latestOnly = (p: string) =>
-  p.startsWith("journal/") || p.startsWith("logs/") || p.startsWith("fleet/") || p === "memory/lessons.md" || p === "memory/judge-feedback.md";
+export { latestOnly };
 const LATEST_ONLY_SQL = `(path LIKE 'journal/%' OR path LIKE 'logs/%' OR path LIKE 'fleet/%' OR path IN ('memory/lessons.md', 'memory/judge-feedback.md'))`;
+
+import { TARGET, latestOnly } from "./budget";
 
 const json = (d: unknown, status = 200) => Response.json(d, { status });
 
@@ -88,17 +89,16 @@ function applyCas(sql: FilesSql, items: Prepared[], actor: string, msg: string):
       ON CONFLICT(path) DO UPDATE SET content = excluded.content, hash = excluded.hash, version = excluded.version,
         updated = excluded.updated, by = excluded.by, deleted = excluded.deleted, rev = excluded.rev`,
       it.path, it.content ? blob(it.content) : null, it.hash, version, ts, actor, it.content ? 0 : 1, rev);
-    if (latestOnly(it.path)) sql.exec("DELETE FROM history WHERE path = ?", it.path);
-    sql.exec("INSERT INTO history (path, version, hash, content, ts, by, msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    if (!latestOnly(it.path)) sql.exec("INSERT INTO history (path, version, hash, content, ts, by, msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
       it.path, version, it.hash, it.content ? blob(it.content) : null, ts, actor, msg);
     out.push({ path: it.path, version, hash: it.hash, deleted: !it.content });
   }
   setRev(sql, rev);
-  pruneHistory(sql);
+  pruneHistory(sql, Date.now(), sql.databaseSize ?? 0);
   return json({ rev, files: out });
 }
 
-export function pruneHistory(sql: FilesSql, now = Date.now()) {
+export function pruneHistory(sql: FilesSql, now = Date.now(), dbBytes = 0) {
   // the prune scans the whole history (rows_read is billed per row, tens of thousands here): once a day, not on every commit
   const last = Number(sql.exec("SELECT v FROM files_meta WHERE k = 'pruned'").toArray()[0]?.v ?? 0);
   if (now - last < 86_400_000) return;
@@ -106,10 +106,11 @@ export function pruneHistory(sql: FilesSql, now = Date.now()) {
   const cutoff = new Date(now - HISTORY_DAYS * 86400_000).toISOString();
   sql.exec(`DELETE FROM history WHERE (ts < ? OR seq <= (SELECT MAX(seq) FROM history) - ?)
     AND seq NOT IN (SELECT MAX(seq) FROM history GROUP BY path)`, cutoff, HISTORY_ROWS);
-  // older versions beyond the per-path cap, and everything but the latest row of latest-only paths
-  sql.exec(`DELETE FROM history WHERE seq IN (SELECT seq FROM (SELECT seq, path,
-      ROW_NUMBER() OVER (PARTITION BY path ORDER BY seq DESC) AS rn FROM history)
-    WHERE rn > ? OR (rn > 1 AND ${LATEST_ONLY_SQL}))`, HISTORY_PER_PATH);
+  sql.exec(`DELETE FROM history WHERE ${LATEST_ONLY_SQL}`);
+  // older versions beyond the per-path cap (all but the latest once the database is over its storage target)
+  sql.exec(`DELETE FROM history WHERE seq IN (SELECT seq FROM (SELECT seq,
+      ROW_NUMBER() OVER (PARTITION BY path ORDER BY seq DESC) AS rn FROM history) WHERE rn > ?)`,
+    dbBytes > TARGET.storageBytes ? 1 : HISTORY_PER_PATH);
 }
 
 /** Prefixes the owner session may read (rules, memory, agent profiles, closed decisions). Never config / secrets. */
@@ -194,7 +195,9 @@ export async function handleFiles(sql: FilesSql, req: Request, url: URL, actor: 
     if (!validPath(path)) return json({ error: "path required" }, 400);
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 50) || 50));
     const withContent = url.searchParams.get("content") === "1";
-    const rows = sql.exec("SELECT seq, version, hash, content, ts, by, msg FROM history WHERE path = ? ORDER BY seq DESC LIMIT ?", path, limit).toArray();
+    const rows = latestOnly(path) // no history kept: the current version is all there is
+      ? sql.exec("SELECT 0 AS seq, version, hash, CASE WHEN deleted THEN NULL ELSE content END AS content, updated AS ts, by, '' AS msg FROM files WHERE path = ?", path).toArray()
+      : sql.exec("SELECT seq, version, hash, content, ts, by, msg FROM history WHERE path = ? ORDER BY seq DESC LIMIT ?", path, limit).toArray();
     return json({
       history: rows.map((r) => {
         const c = r.content == null ? null : bytes(r.content);

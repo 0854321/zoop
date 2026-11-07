@@ -17,6 +17,7 @@
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
 import { b64dec, b64enc, handleFiles, handleReadFiles, initFilesSchema } from "./files";
+import { FREE, LEAN, SHED, TARGET, latestOnly } from "./budget";
 import { taskHistory, taskInfo } from "./tools";
 import { ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
@@ -48,8 +49,7 @@ const json = (d: unknown, status = 200) => Response.json(d, { status });
 const CHUNK = 1_000_000; // SQLite row limit is 2 MB
 const MAX_MEDIA = 30_000_000;
 const STALE_MS = 3 * 60_000;
-/** Daily write budget (free plan: 100k rows_written/day per account, shared by every DO in it). */
-const WRITE_LEAN = 40_000, WRITE_SHED = 70_000;
+// Free-plan budget (cloud/src/budget.ts): every request and every row read/written is metered below.
 const SHEDDABLE = new Set(["system", "daemon", "notice"]);
 const HOT = new Set(["status", "host_seen"]), HOT_PERSIST_MS = 5 * 60_000;
 const CODE_TTL = 10 * 60_000, CODE_TRIES = 5, RESEND_MS = 60_000, SENDS_PER_HOUR = 10, SEEN_EVERY = 3600_000;
@@ -89,9 +89,16 @@ type Ev = { id: string; ts: string; from: string; kind: string; text: string; re
 export class Hub extends DurableObject<Env> {
   sql: SqlStorage;
   mcp: Mcp;
+  /** Every cursor since the last settle(): their rowsRead / rowsWritten are what Cloudflare bills. */
+  cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
+  usage = { day: "", requests: 0, rowsRead: 0, rowsWritten: 0 };
+  usageSaved = 0;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.sql = ctx.storage.sql;
+    const raw = ctx.storage.sql, cursors = this.cursors;
+    this.sql = { exec: (q: string, ...b: SqlStorageValue[]) => { const c = raw.exec(q, ...b); cursors.push(c); return c; }, get databaseSize() { return raw.databaseSize; } } as unknown as SqlStorage;
+    // a host keeps one hibernating socket open for "inbox has something"; its keepalive never wakes this object
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.sql.exec(`CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, json TEXT);
       CREATE TABLE IF NOT EXISTS inbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT);
       CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
@@ -102,6 +109,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, email TEXT, created INTEGER, last_seen INTEGER, ua TEXT);
       CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, session TEXT, p256dh TEXT, auth TEXT, label TEXT, created INTEGER);`);
     initFilesSchema(this.sql);
+    try { Object.assign(this.usage, JSON.parse(String(raw.exec("SELECT v FROM kv WHERE k = 'usage'").toArray()[0]?.v ?? "{}"))); } catch { /* fresh */ }
     // events.ref, indexed: a task's conversation is read by ref, never by scanning every event's JSON (rows_read is billed per row)
     try { this.sql.exec("ALTER TABLE events ADD COLUMN ref TEXT"); } catch { /* exists */ }
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_ref ON events (ref)");
@@ -145,22 +153,32 @@ export class Hub extends DurableObject<Env> {
     return session;
   }
 
-  // ---- write budget. The free plan allows 100k rows_written a day per account; past that every DO write errors until
-  // 00:00 UTC. Hot state lives in memory and is persisted lazily; a daily counter sheds non-essential writes well before the cap.
+  // ---- free-plan budget. Past the daily allowance every DO operation of that kind errors until 00:00 UTC, so the Hub
+  // meters itself (requests, and the rows each query really read and wrote) and gets frugal well before the cap:
+  // "lean" persists hot state rarely, "shed" refuses fleet chatter (heartbeats, journals, routine notices).
   mem = new Map<string, string>();
   flushed = new Map<string, number>();
-  budget = { day: "", n: 0 };
-  /** Estimated rows written today (a write statement counts ≥ 2: row + index/rowid). */
-  spend(rows = 2) {
+  today() {
     const day = new Date().toISOString().slice(0, 10);
-    if (this.budget.day !== day) this.budget = { day, n: 0 };
-    this.budget.n += rows;
+    if (this.usage.day !== day) this.usage = { day, requests: 0, rowsRead: 0, rowsWritten: 0 };
+    return this.usage;
   }
-  /** Writes allowed today: "ok", "lean" (hot state persisted rarely) or "shed" (only owner-critical writes). */
-  level(): "ok" | "lean" | "shed" {
-    const day = new Date().toISOString().slice(0, 10);
-    const n = this.budget.day === day ? this.budget.n : 0;
-    return n < WRITE_LEAN ? "ok" : n < WRITE_SHED ? "lean" : "shed";
+  /** Count the rows of every query since the last call; persist the counters every few minutes. */
+  settle(requests = 1) {
+    const u = this.today();
+    u.requests += requests;
+    for (const c of this.cursors.splice(0)) { u.rowsRead += c.rowsRead; u.rowsWritten += c.rowsWritten; }
+    if (Date.now() - this.usageSaved > 5 * 60_000) {
+      this.usageSaved = Date.now();
+      this.ctx.storage.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES ('usage', ?)", JSON.stringify(u)); // unmetered: a few hundred rows a day
+    }
+  }
+  /** The tightest of today's allowances, as a fraction of the free plan. */
+  used() { const u = this.today(); return Math.max(u.requests / FREE.requests, u.rowsRead / FREE.rowsRead, u.rowsWritten / FREE.rowsWritten); }
+  level(): "ok" | "lean" | "shed" { const f = this.used(); return f < LEAN ? "ok" : f < SHED ? "lean" : "shed"; }
+  usageView() {
+    return { ...this.today(), level: this.level(), dbBytes: this.ctx.storage.sql.databaseSize, free: FREE, target: TARGET,
+      sockets: { owner: this.ctx.getWebSockets("owner").length, host: this.ctx.getWebSockets("host").length } };
   }
 
   get(k: string): any {
@@ -182,18 +200,16 @@ export class Hub extends DurableObject<Env> {
       if (Date.now() - (this.flushed.get(k) ?? 0) < every) return;
     }
     this.flushed.set(k, Date.now());
-    this.spend();
     this.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)", k, s);
   }
   touchHost() { this.set("host_seen", Date.now()); }
 
   append(e: Partial<Ev>): Ev {
     const ev = { id: crypto.randomUUID(), ts: new Date().toISOString(), ...e } as Ev;
-    this.spend(3);
     this.sql.exec("INSERT INTO events (ts, json, ref) VALUES (?, ?, ?)", ev.ts, JSON.stringify(ev), typeof ev.ref === "string" ? ev.ref : null);
     if (Math.random() < 0.02) this.sql.exec("DELETE FROM events WHERE seq <= (SELECT MAX(seq) - 5000 FROM events)");
     const s = JSON.stringify(ev);
-    for (const ws of this.ctx.getWebSockets()) try { ws.send(s); } catch {}
+    for (const ws of this.ctx.getWebSockets("owner")) try { ws.send(s); } catch {}
     try { this.mcp.onEvent(ev); } catch (err) { console.error(`mcp: ${err}`); }
     this.pruneMedia();
     const n = this.notification(ev);
@@ -216,9 +232,9 @@ export class Hub extends DurableObject<Env> {
   inboxWaiters = new Set<() => void>();
   acked = 0;
   toInbox(item: Record<string, unknown>) {
-    this.spend();
     this.sql.exec("INSERT INTO inbox (json) VALUES (?)", JSON.stringify(item));
     for (const w of [...this.inboxWaiters]) w();
+    for (const ws of this.ctx.getWebSockets("host")) try { ws.send('{"type":"inbox"}'); } catch {}
   }
 
   ownerMessage(text: string, ref?: string, attachments?: string[], thread = false): Ev {
@@ -300,7 +316,17 @@ export class Hub extends DurableObject<Env> {
     return json({ error: "not found" }, 404);
   }
 
-  hostOnline() { const seen = this.get("host_seen"); return !!seen && Date.now() - seen < STALE_MS; }
+  hostOnline() { if (this.ctx.getWebSockets("host").length) return true; const seen = this.get("host_seen"); return !!seen && Date.now() - seen < STALE_MS; }
+  /** The primary pushes live agent activity only while someone looks: tell it when that changes. */
+  tellWatchers() {
+    const n = this.ctx.getWebSockets("owner").filter((ws) => ws.readyState === WebSocket.OPEN).length;
+    for (const ws of this.ctx.getWebSockets("host")) try { ws.send(JSON.stringify({ type: "watchers", n })); } catch {}
+  }
+  /** Owner clients that asked for status frames (?v=2) get the dashboard pushed instead of polling for it. */
+  pushStatus() {
+    const s = JSON.stringify({ $status: this.statusView() });
+    for (const ws of this.ctx.getWebSockets("v2")) try { ws.send(s); } catch {}
+  }
 
   // ---- auth
   credential(req: Request, url: URL) {
@@ -375,6 +401,10 @@ export class Hub extends DurableObject<Env> {
   }
 
   async fetch(req: Request): Promise<Response> {
+    try { return await this.handle(req); } finally { this.settle(); }
+  }
+
+  async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const p = url.pathname, m = req.method;
 
@@ -386,6 +416,11 @@ export class Hub extends DurableObject<Env> {
     if ((p === "/api/files/list" || p === "/api/files/read") && m === "GET") { // owner (and machine) read of READABLE prefixes
       const r = handleReadFiles(this.sql, url);
       if (r) return r;
+    }
+    if (p === "/api/files/commit" && m === "POST" && this.level() === "shed") { // over budget: heartbeats and journals wait
+      const b = (await req.clone().json().catch(() => null)) as { changes?: { path?: string }[] } | null;
+      if (b?.changes?.length && b.changes.every((c) => latestOnly(String(c.path ?? ""))))
+        return Response.json({ error: "over the daily budget", retry_after: 600 }, { status: 429, headers: { "retry-after": "600" } });
     }
     if (p.startsWith("/api/files/")) {
       const ownerOnly = p === "/api/files/history" || p === "/api/files/revert";
@@ -433,8 +468,11 @@ export class Hub extends DurableObject<Env> {
       const names = this.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map((r) => r.name as string);
       if (!t) return json({ tables: Object.fromEntries(names.map((n) => [n, this.sql.exec(`SELECT COUNT(*) AS n FROM "${n}"`).one().n])) });
       if (!names.includes(t)) return json({ error: "no such table" }, 404);
-      const offset = Number(url.searchParams.get("offset") ?? 0), limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 1000);
-      const rows = this.sql.exec(`SELECT * FROM "${t}" ORDER BY rowid LIMIT ? OFFSET ?`, limit, offset).toArray().map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) =>
+      // ?after=<rowid of the last row> walks the table by key; ?offset= (old copiers) re-reads every skipped row
+      const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 1000), after = url.searchParams.get("after");
+      const rows = (after != null
+        ? this.sql.exec(`SELECT rowid AS _rowid, * FROM "${t}" WHERE rowid > ? ORDER BY rowid LIMIT ?`, Number(after), limit)
+        : this.sql.exec(`SELECT rowid AS _rowid, * FROM "${t}" ORDER BY rowid LIMIT ? OFFSET ?`, limit, Number(url.searchParams.get("offset") ?? 0))).toArray().map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) =>
         [k, v instanceof ArrayBuffer ? { $b64: b64enc(new Uint8Array(v)) } : v])));
       return json({ rows });
     }
@@ -446,7 +484,7 @@ export class Hub extends DurableObject<Env> {
       this.ctx.storage.transactionSync(() => {
         if (reset) this.sql.exec(`DELETE FROM "${t}"`);
         for (const r of rows) {
-          const cols = Object.keys(r);
+          const cols = Object.keys(r).filter((c) => c !== "_rowid"); // the export's paging key
           const vals = cols.map((c) => { const v = r[c] as any; return v && typeof v === "object" && "$b64" in v ? b64dec(v.$b64) : v; });
           this.sql.exec(`INSERT OR REPLACE INTO "${t}" (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map(() => "?").join(",")})`, ...vals);
         }
@@ -456,9 +494,12 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/stream") {
       if (req.headers.get("upgrade") !== "websocket") return json({ error: "websocket expected" }, 426);
       const [client, server] = Object.values(new WebSocketPair());
-      this.ctx.acceptWebSocket(server);
+      // ?v=2 clients take {"$status": …} frames, so they need not poll /api/status
+      this.ctx.acceptWebSocket(server, url.searchParams.get("v") === "2" ? ["owner", "v2"] : ["owner"]);
+      this.tellWatchers();
       return new Response(null, { status: 101, webSocket: client });
     }
+    if (p === "/api/usage" && m === "GET") return json(this.usageView());
 
     if (p === "/api/feed") {
       const since = url.searchParams.get("since") ?? "";
@@ -554,14 +595,27 @@ export class Hub extends DurableObject<Env> {
     }
     if (p === "/api/host/state" && m === "PUT") {
       const { status, settings } = (await req.json()) as { status?: unknown; settings?: unknown };
-      if (status) { this.set("status", status); this.mcp.onChanged(["noop://status"]); }
+      // over budget the dashboard refreshes at most every 10 minutes
+      const shed = this.level() === "shed" && Date.now() - (this.flushed.get("status_at") ?? 0) < 10 * 60_000;
+      if (status && !shed) { this.flushed.set("status_at", Date.now()); this.set("status", status); this.mcp.onChanged(["noop://status"]); this.pushStatus(); }
       if (settings) this.set("settings", settings);
       this.touchHost();
-      return json({ ok: true });
+      // watchers: owner clients connected right now. With none, the primary skips live-activity-only refreshes.
+      return json({ ok: true, watchers: this.ctx.getWebSockets("owner").length, level: this.level() });
+    }
+    if (p === "/api/host/stream") { // the daemon's hibernating socket: a nudge per inbox item instead of a long-poll
+      if (who !== "machine") return json({ error: "forbidden" }, 403);
+      if (req.headers.get("upgrade") !== "websocket") return json({ error: "websocket expected" }, 426);
+      const [client, server] = Object.values(new WebSocketPair());
+      this.ctx.acceptWebSocket(server, ["host"]);
+      this.touchHost();
+      this.pushStatus();
+      this.tellWatchers();
+      return new Response(null, { status: 101, webSocket: client });
     }
     if (p === "/api/host/inbox") {
       const after = Number(url.searchParams.get("after") ?? 0);
-      if (after > this.acked) { this.sql.exec("DELETE FROM inbox WHERE seq <= ?", after); this.acked = after; this.spend(); } // acked
+      if (after > this.acked) { this.sql.exec("DELETE FROM inbox WHERE seq <= ?", after); this.acked = after; } // acked
       this.touchHost();
       const read = () => this.sql.exec("SELECT seq, json FROM inbox ORDER BY seq LIMIT 50").toArray()
         .map((r) => ({ seq: r.seq as number, ...JSON.parse(r.json as string) }));
@@ -584,6 +638,12 @@ export class Hub extends DurableObject<Env> {
     return json({ error: "not found" }, 404);
   }
 
-  webSocketMessage() {}
-  webSocketClose(ws: WebSocket) { try { ws.close(); } catch {} }
+  webSocketMessage() { this.settle(1 / 20); } // incoming frames bill as 1/20 of a request (pings are auto-answered)
+  webSocketClose(ws: WebSocket) {
+    try { ws.close(); } catch {}
+    const tags = this.ctx.getTags(ws);
+    if (tags.includes("host")) { this.touchHost(); this.pushStatus(); }
+    if (tags.includes("owner")) this.tellWatchers();
+    this.settle(0);
+  }
 }

@@ -18,6 +18,8 @@ beforeAll(async () => {
   hosts.a = join(W, "a", "data"); hosts.b = join(W, "b", "data");
   mkdirSync(hosts.a, { recursive: true }); mkdirSync(hosts.b, { recursive: true });
   t = await sync.fakeTransport(join(W, "worker.sqlite"), "test");
+  // these tests check sync semantics; pacing (pull debounce, lazy journal pushes) is test/budget.test.ts's
+  sync.syncTiming.pullMinMs = 0; sync.syncTiming.lazyPushMs = 0;
 });
 afterAll(() => { try { rmSync(W, { recursive: true, force: true }); } catch {} }); // Windows keeps the open worker.sqlite locked
 
@@ -129,7 +131,7 @@ test("history pruning keeps the latest row of each path", async () => {
   expect(sql.exec("SELECT path, version FROM history ORDER BY path").toArray()).toEqual([{ path: "a", version: 2 }, { path: "b", version: 1 }]);
 });
 
-test("history pruning caps versions per path and keeps only the latest of journals and heartbeats", async () => {
+test("history pruning caps versions per path and drops journals and heartbeats", async () => {
   const { initFilesSchema, pruneHistory } = await import("../cloud/src/files");
   const { Database } = await import("bun:sqlite");
   const db = new Database(":memory:");
@@ -140,14 +142,10 @@ test("history pruning caps versions per path and keeps only the latest of journa
     sql.exec("INSERT INTO history (path, version, ts) VALUES (?, ?, ?)", p, v, ts);
   pruneHistory(sql);
   const rows = sql.exec("SELECT path, COUNT(*) AS n, MIN(version) AS lo, MAX(version) AS hi FROM history GROUP BY path ORDER BY path").toArray();
-  expect(rows).toEqual([
-    { path: "fleet/hosts/a.json", n: 1, lo: 40, hi: 40 },
-    { path: "journal/2026-11-06.md", n: 1, lo: 40, hi: 40 },
-    { path: "tasks/done/T-1.md", n: 30, lo: 11, hi: 40 },
-  ]);
+  expect(rows).toEqual([{ path: "tasks/done/T-1.md", n: 30, lo: 11, hi: 40 }]);
 });
 
-test("worker API: a journal write replaces its history row instead of adding a full copy", async () => {
+test("worker API: a journal keeps no history; its history view is the current version", async () => {
   const b64 = (s: string) => Buffer.from(s).toString("base64");
   let v = 0;
   for (const text of ["- a\n", "- a\n- b\n", "- a\n- b\n- c\n"]) {

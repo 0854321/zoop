@@ -5,10 +5,12 @@ S=$1 D=$2 TOK=$3; H="Authorization: Bearer $TOK"; tmp=$(mktemp -d); chmod 700 $t
 curl -sf "$S/api/host/export" -H "$H" > $tmp/t.json
 for t in $(jq -r '.tables|keys[]' $tmp/t.json); do
   n=$(jq -r --arg t $t '.tables[$t]' $tmp/t.json); lim=200; case $t in media) lim=2;; files|history) lim=50;; esac
-  off=0; reset=true
+  off=0; after=0; reset=true
   [ $n = 0 ] && { jq -n --arg t $t '{table:$t,rows:[],reset:true}' | curl -sf -XPOST "$D/api/host/import" -H "$H" --data-binary @- >/dev/null; }
   while [ $off -lt $n ]; do
-    curl -sf "$S/api/host/export?table=$t&offset=$off&limit=$lim" -H "$H" > $tmp/p.json
+    # after= pages by key on current Workers (offset= re-reads every skipped row); older Workers ignore it and use offset=
+    curl -sf "$S/api/host/export?table=$t&after=$after&offset=$off&limit=$lim" -H "$H" > $tmp/p.json
+    after=$(jq -r '.rows[-1]._rowid // empty' $tmp/p.json); after=${after:-0}
     jq --arg t $t --argjson r $reset '{table:$t,rows:.rows,reset:$r}' $tmp/p.json | curl -sf -XPOST "$D/api/host/import" -H "$H" --data-binary @- >/dev/null
     off=$((off+lim)); reset=false
   done

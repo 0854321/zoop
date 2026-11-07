@@ -2,6 +2,17 @@
 
 For small fixes with clear scope and acceptance criteria, make the change directly and verify it. Do not create design documents, specs, implementation plans, or extra approval checkpoints. Use a full design and planning workflow only when the change affects architecture or public APIs, spans multiple subsystems, or has materially ambiguous requirements.
 
+## Cloudflare Free Plan Budget (hard rule)
+
+Noop must run on the owner's Cloudflare Workers Free plan. The free plan allows, per account per day, 100k requests, 5M SQLite rows read and 100k rows written, and 5 GB of storage in total. Past a limit every operation of that kind fails until 00:00 UTC, and the account is shared with other projects. Noop's own steady state must stay under `TARGET` in `cloud/src/budget.ts`, a fifth of the free plan.
+
+- `test/budget.test.ts` simulates a fleet day and fails when it goes over `TARGET`. Never raise `TARGET` or loosen the simulation to make a change pass. Redesign the change instead.
+- Anything that talks to the Worker on a timer, or once per event, needs a budget argument before it lands: requests per day for three machines, rows written per request, and what it costs while nobody is looking.
+- No polling where a push exists. Owner clients take `$status` frames over `/api/stream?v=2`, and the primary takes inbox nudges over the hibernating `/api/host/stream`. Fall back to slow polling only while the socket is down.
+- Journals, logs and heartbeats (`latestOnly`) keep no history and are pushed lazily. Pulls are debounced. Do not add `{ force: true }` pushes outside shutdown and owner-visible update steps.
+- No `OFFSET` pagination and no full-table scans on request paths. Rows read are billed per row, so walk by key and keep an index for every `WHERE`.
+- The Worker meters itself (`/api/usage`; `noop status` prints today's numbers) and sheds fleet chatter past `SHED`. After deploying a change that affects traffic, check `/api/usage` or the Cloudflare analytics a few hours later.
+
 ## Update Noop on the user's iPhone
 
 When asked to update Noop on the user's iPhone, build the current working-tree app, install it over Wi-Fi, and verify that it launches. The paired iPhone is `00008150-001603543C08401C`; the app bundle ID is `dev.noop.app`. Use `xcrun devicectl list devices` and device details to check connectivity.

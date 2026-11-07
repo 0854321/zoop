@@ -12,6 +12,7 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { hostname } from "node:os";
+import { LAZY_PUSH_MS, PULL_MIN_MS, latestOnly } from "../cloud/src/budget";
 
 export const MAX_FILE = 1_500_000;
 
@@ -44,7 +45,7 @@ export function writeHubToml(patch: Record<string, Record<string, string>>) {
 
 // ------------------------------------------------------------------ transport
 export type Reply = { status: number; json: any } | null; // null = network failure
-export type Transport = (path: string, init?: { method?: string; body?: unknown }) => Promise<Reply>;
+export type Transport = ((path: string, init?: { method?: string; body?: unknown }) => Promise<Reply>) & { meter?: { requests: number; rowsWritten: number } };
 let transport: Transport | null | undefined;
 export function setTransport(t: Transport | null) { transport = t; }
 
@@ -76,16 +77,23 @@ export async function fakeTransport(file: string, actor = hostname()): Promise<T
     },
   };
   initFilesSchema(sql);
-  return async (path, init = {}) => {
+  const meter = { requests: 0, rowsWritten: 0 }; // what the free plan would bill (rows changed; Cloudflare also counts index rows)
+  const changes = () => Number((db.query("SELECT total_changes() AS n").get() as { n: number }).n);
+  const t: Transport = async (path, init = {}) => {
+    meter.requests++;
+    const c0 = changes();
     const req = new Request(`http://fake${path}`, { method: init.method ?? "GET", body: init.body === undefined ? undefined : JSON.stringify(init.body) });
     // a real DO runs one request at a time; BEGIN IMMEDIATE gives the same isolation across processes
     db.exec("BEGIN IMMEDIATE");
     try {
       const r = await handleFiles(sql, req, new URL(req.url), process.env.HUB_HOST || actor);
       db.exec("COMMIT");
+      meter.rowsWritten += changes() - c0;
       return r ? { status: r.status, json: await r.json() } : { status: 404, json: {} };
     } catch (e) { db.exec("ROLLBACK"); throw e; }
   };
+  t.meter = meter;
+  return t;
 }
 
 async function getTransport(): Promise<Transport | null> {
@@ -108,6 +116,13 @@ export function adoptCloudUrl(url: unknown): boolean {
   return true;
 }
 export async function syncMode(): Promise<"remote" | "local"> { return (await getTransport()) ? "remote" : "local"; }
+
+// ------------------------------------------------------------------ pacing (Cloudflare free plan: cloud/src/budget.ts)
+/** Clock and intervals, replaceable in tests. pullMinMs: a pull this soon after the last one is skipped (commits still
+ *  detect races through compare-and-swap). lazyPushMs: changes only to journals/heartbeats wait this long, or ride along
+ *  with the next real change. */
+export const syncTiming = { now: () => Date.now(), pullMinMs: PULL_MIN_MS, lazyPushMs: LAZY_PUSH_MS };
+const lastPull = new Map<string, number>(), lastPush = new Map<string, number>(); // per mirror (tests switch between hosts)
 
 // ------------------------------------------------------------------ state
 type Entry = { v: number; h: string; m: number; s: number };
@@ -288,10 +303,15 @@ async function _pull(st: State, t: Transport): Promise<{ ok: boolean; lost: Set<
   return { ok: true, lost, seen };
 }
 
-export async function pull(): Promise<boolean> {
+export async function pull(opts: { force?: boolean } = {}): Promise<boolean> {
   const t = await getTransport();
   if (!t) return true;
-  return withLock(async () => (await _pull(loadState(), t)).ok);
+  if (!opts.force && syncTiming.now() - (lastPull.get(HOME()) ?? -Infinity) < syncTiming.pullMinMs) return true;
+  return withLock(async () => {
+    const ok = (await _pull(loadState(), t)).ok;
+    if (ok) lastPull.set(HOME(), syncTiming.now());
+    return ok;
+  });
 }
 
 // ------------------------------------------------------------------ replaced Worker
@@ -343,8 +363,9 @@ function recordCommitted(st: State, changes: Change[], files: { path: string; ve
 
 const wire = (c: Change[]) => c.map(({ _bytes, _hash, ...w }) => w);
 
-/** Commit all local changes. true = pushed (or nothing to do / local mode); false = lost a race or offline. */
-export async function commitPush(msg: string): Promise<boolean> {
+/** Commit all local changes. true = pushed (or nothing to do / local mode / only journals and heartbeats changed,
+ *  which wait for the next real change or LAZY_PUSH_MS); false = lost a race or offline. force: push those too. */
+export async function commitPush(msg: string, opts: { force?: boolean } = {}): Promise<boolean> {
   const t = await getTransport();
   if (!t) return true;
   return withLock(async () => {
@@ -352,9 +373,12 @@ export async function commitPush(msg: string): Promise<boolean> {
     for (let attempt = 0; attempt < 4; attempt++) {
       const changes = scan(st);
       if (!changes.length) { saveState(st); return true; }
+      const lazy = changes.every((c) => latestOnly(c.path));
+      if (lazy && !opts.force && syncTiming.now() - (lastPush.get(HOME()) ?? -Infinity) < syncTiming.lazyPushMs) { saveState(st); return true; }
       const r = await t("/api/files/commit", { method: "POST", body: { msg, changes: wire(changes) } });
       if (!r) { saveState(st); return false; } // offline: changes stay pending locally
-      if (r.status === 200) { recordCommitted(st, changes, r.json.files); saveState(st); return true; }
+      if (r.status === 429) { lastPush.set(HOME(), syncTiming.now()); saveState(st); return false; } // over the Worker's budget: later
+      if (r.status === 200) { recordCommitted(st, changes, r.json.files); lastPush.set(HOME(), syncTiming.now()); saveState(st); return true; }
       if (r.status !== 409) { console.error(`sync: commit rejected ${r.status}: ${JSON.stringify(r.json).slice(0, 300)}`); saveState(st); return false; }
       const conflicts: string[] = r.json.conflicts ?? [];
       const { ok, lost, seen } = await _pull(st, t);
