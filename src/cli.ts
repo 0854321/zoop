@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { init, install, selfUpdate } from "./setup";
 import { computeMetrics } from "./metrics";
+import { supervise } from "./supervisor";
 import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
 import { githubStarved } from "./github";
@@ -212,7 +213,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
     const w = waitMeta(res);
     const wakes = Number(meta.wakes ?? 0);
     // the owner's approval covers the whole task: a wait for CI before the approved merge must not revoke it
-    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, wake_at: w.wake_at, wait_kind: w.kind, wakes: wakes ? String(wakes) : undefined,
+    writeDoc(P("tasks", "waiting", `${meta.id}.md`), { ...done, gate_override: meta.gate_override, waiting_since: meta.waiting_since || now(), wake_at: w.wake_at, wait_kind: w.kind, wakes: wakes ? String(wakes) : undefined,
       waiting_on: res.waiting_on ?? "", wait_check: res.wait_check || undefined },
       body + runNote + `\n**Waiting on:** ${res.waiting_on ?? "?"} (${w.kind === "human" ? "wakes on the owner's answer or an event" : `check again ${w.wake_at}`})\n`);
     journal(host, w.kind === "human" ? `⏳ ${meta.id} 等你处理：${res.waiting_on ?? ""}（不定时唤醒，事件到达再继续）` : `⏳ ${meta.id} 等待 ${res.waiting_on ?? ""}，${w.minutes} 分钟后再看`);
@@ -545,6 +546,16 @@ function pruneMediaHourly(cfg: Cfg) {
   } catch (e) { console.error(`media prune: ${e}`); }
 }
 
+/** Stall supervisor (T-0728): every [supervisor] every_minutes (30) chase waiting/blocked tasks like a team lead. */
+let lastSupervise = 0;
+function maybeSupervise(cfg: Cfg, host: string) {
+  if (cfg.supervisor?.enabled === false) return;
+  const every = (cfg.supervisor?.every_minutes ?? 30) * 60_000;
+  if (Date.now() - lastSupervise < every) return;
+  lastSupervise = Date.now();
+  try { supervise(cfg, host); } catch (e) { journal(host, `💥 supervisor: ${e}`); }
+}
+
 export async function tick(cfg: Cfg, background = false) {
   const host = hostName(cfg);
   const primary = isPrimary(cfg, host);
@@ -557,6 +568,7 @@ export async function tick(cfg: Cfg, background = false) {
       runRoutines(cfg, host, primary);
       reapStale(cfg, host);
       wakeParents(host, ready);
+      maybeSupervise(cfg, host);
       await proposeBatch(cfg, host);
       noteUnservable(cfg, host);
     } else reapStale(cfg, host, true);

@@ -77,6 +77,9 @@ function learn(meta: Record<string, string>, answer: string, by: string): Record
   return extra;
 }
 
+/** Tasks a card resumes: a supervisor card covers several tasks that share one cause. */
+const cardTasks = (meta: Record<string, string>) => (meta.tasks || meta.task || "").split(",").filter(Boolean);
+
 /** Close a decision and put its task back in the inbox with the answer appended. */
 export function closeDecision(id: string, answer: string, by: string, note = ""): boolean {
   const src = P("decisions", "open", `${id}.md`);
@@ -85,16 +88,18 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer, answered_by: by, answered: now(), ...learn(meta, answer, by) },
     `${body}\n## Answer (${by})\n${answer}\n${note}`);
   unlinkSync(src);
-  const t = P("tasks", "blocked", `${meta.task}.md`);
+  for (const task of cardTasks(meta)) {
+  const t = P("tasks", "blocked", `${task}.md`);
   if (existsSync(t)) {
     const { meta: tm, body: tb } = readDoc(t);
     // the owner answered the question the gate raised: unlock it for that run; the agent reads the answer and
-    // only acts if the answer says so (no keyword matching on the owner's words)
-    const gated = /^owner/.test(by);
-    writeDoc(P("tasks", "inbox", `${meta.task}.md`),
+    // only acts if the answer says so (no keyword matching on the owner's words). Supervisor cards never open a gate.
+    const gated = /^owner/.test(by) && !meta.supervisor_cause;
+    writeDoc(P("tasks", "inbox", `${task}.md`),
       { ...tm, claimed_by: undefined, status: undefined, resumes: id, gate_override: gated ? id : undefined },
       `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nA: **${answer}**\nContinue the task accordingly.\n`);
     unlinkSync(t);
+  }
   }
   return true;
 }
@@ -111,16 +116,18 @@ export function ignoreDecision(id: string, by: string): boolean {
   writeDoc(P("decisions", "closed", `${id}.md`), { ...meta, answer: IGNORE, answered_by: by, answered: now(), ignored: "yes" },
     `${body}\n## Answer (${by})\n${IGNORE}: the owner skipped this card without choosing. Not a rejection; the agent decides. Do not ask it again.\n`);
   unlinkSync(src);
-  const t = P("tasks", "blocked", `${meta.task}.md`);
+  for (const task of cardTasks(meta)) {
+  const t = P("tasks", "blocked", `${task}.md`);
   if (existsSync(t)) {
     const { meta: tm, body: tb } = readDoc(t);
     // no gate_override: skipping a card never authorises a gated action (merge, release, external message)
-    writeDoc(P("tasks", "inbox", `${meta.task}.md`), { ...tm, claimed_by: undefined, status: undefined, resumes: id },
+    writeDoc(P("tasks", "inbox", `${task}.md`), { ...tm, claimed_by: undefined, status: undefined, resumes: id },
       `${tb}\n\n## Decision ${id} (${by})\nQ: ${meta.question}\nA: **${IGNORE}** — the owner skipped this card without choosing; it is NOT a rejection and NOT a reason to stop. ` +
       `First check the chat after the card: the owner may have answered there in their own words; follow that. Otherwise decide yourself ` +
       `(usually the recommendation) within the autonomy policy. A gated step (merge, release, public API, external message) stays undone: ` +
       `finish everything else and report it as pending, without sending the same card again.\n`);
     unlinkSync(t);
+  }
   }
   return true;
 }
