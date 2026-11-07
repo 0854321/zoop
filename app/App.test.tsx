@@ -966,7 +966,8 @@ describe("notifications", () => {
     await app.waitFor("id:push-test");
     await app.press("id:push-test");
     await app.waitUntil(() => log.tests === 1);
-    await app.waitFor("text:/Test notification sent/");
+    await app.waitFor("id:settings-toast >> text:/Test notification sent/");
+    expect(app.shows("id:push-note")).toBe(false);
     await app.press("id:notify-result");
     await app.waitUntil(() => log.puts.length === 1);
     const p = log.puts[0] as { notify_prefs: { kinds: Record<string, boolean>; quiet_hours: unknown; tz: string } };
@@ -1150,6 +1151,37 @@ describe("phones", () => {
         return { body: v };
       },
     };
+  }
+
+  for (const platform of ["ios", "android", "macos"] as const) {
+    test(`${platform}: settings success uses a dismissible toast without an inline note`, async () => {
+      const desktop = platform === "macos";
+      const app = await open("./App.tsx", {
+        storage: { ...STORAGE, "hub.notifyAsked": "1" },
+        width: desktop ? 1100 : 390, height: 844, platform, network: settingsServer([]),
+      });
+      await app.waitFor("id:composer");
+      if (desktop) await app.keyboard.press("mod+,");
+      else await app.press("id:settings-top");
+      if (desktop) {
+        await app.waitFor("id:settings-tab-members");
+        await app.press("id:settings-tab-members");
+        await app.waitFor("id:cli-reporter");
+        await app.press("id:cli-reporter");
+      } else {
+        await app.press("id:member-reporter");
+      }
+      await app.press("id:cli-reporter-claude");
+      await app.waitFor("id:settings-toast");
+      expect(app.shows("id:settings-toast >> text:Saved")).toBe(true);
+      expect(app.shows("id:settings-note")).toBe(false);
+      await app.waitUntil(() => !app.shows("id:settings-toast"));
+      if (desktop) await app.press("id:cli-reporter");
+      await app.press("id:cli-reporter-codex");
+      await app.waitFor("id:settings-toast");
+      if (desktop) await app.keyboard.press("Escape");
+      await app.waitUntil(() => !app.shows("id:settings-toast"));
+    });
   }
 
   test("phone settings checks a model immediately while saving", async () => {
