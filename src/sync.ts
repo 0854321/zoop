@@ -96,6 +96,17 @@ async function getTransport(): Promise<Transport | null> {
   const url = h.cloud?.url, token = h.server?.token;
   return (transport = url && token ? httpTransport(String(url), String(token)) : null);
 }
+/** The shared config names a different Worker (the hub moved, e.g. to another account): switch this machine to it. */
+export function adoptCloudUrl(url: unknown): boolean {
+  const next = String(url ?? "").replace(/\/$/, "");
+  if (!/^https:\/\//.test(next) || process.env.HUB_SYNC_FAKE || process.env.HUB_SYNC === "local") return false;
+  const cur = String(readHubToml().cloud?.url ?? "").replace(/\/$/, "");
+  if (!cur || cur === next) return false;
+  writeHubToml({ cloud: { url: next } });
+  transport = undefined;
+  console.error(`sync: the hub moved, now syncing with ${next}`);
+  return true;
+}
 export async function syncMode(): Promise<"remote" | "local"> { return (await getTransport()) ? "remote" : "local"; }
 
 // ------------------------------------------------------------------ state

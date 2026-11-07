@@ -41,6 +41,7 @@ interface Env {
   HUB_MAIL_FROM?: string;   // sender on a domain with Email Routing on, e.g. noop@example.com
   HUB_VAPID_PUBLIC?: string;  // b64url raw P-256 point
   HUB_VAPID_PRIVATE?: string; // JWK JSON
+  HUB_MOVED_TO?: string;    // the hub moved to another Worker (e.g. another account): forward every request there
 }
 
 const json = (d: unknown, status = 200) => Response.json(d, { status });
@@ -71,6 +72,8 @@ const validEmail = (e: string) => e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    // Moved: machines still pointing here keep working (and pick up the new [cloud] url from the shared config).
+    if (env.HUB_MOVED_TO) return fetch(new Request(env.HUB_MOVED_TO.replace(/\/$/, "") + url.pathname + url.search, req));
     const mcp = isMcpPath(url.pathname);
     if (mcp && req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     if (!mcp && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/media/")) return env.ASSETS.fetch(req);
