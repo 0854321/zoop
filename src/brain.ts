@@ -116,7 +116,7 @@ export class ClaudeModel implements Model {
     mkdirSync(BRAIN_DIR, { recursive: true });
     const proc = Bun.spawn([this.cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--model", this.model, "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands",
-      "--no-session-persistence", "--system-prompt", system], { cwd: BRAIN_DIR, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+      "--no-session-persistence", "--system-prompt", system], { cwd: BRAIN_DIR, stdin: "pipe", stdout: "pipe", stderr: "ignore", env: { ...process.env, ...userSettingsEnv() } });
     return { proc, system };
   }
   /** Spawn the next process now (the daemon calls this at start), so the first message is fast too. */
@@ -331,4 +331,15 @@ export function logBrain(m: BrainIn, out: BrainOut, receivedAt: number) {
       calls: out.calls.map((c) => ({ tool: c.tool, ok: c.ok, ...(c.error ? { error: c.error } : {}) })),
     }) + "\n");
   } catch {}
+}
+
+/** `--setting-sources ""` also drops the `env` block of ~/.claude/settings.json, where an API gateway
+ *  (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY) is configured; without it the brain falls back to the OAuth login
+ *  and fails with "Not logged in" while every task run works. Pass that env through explicitly. */
+export function userSettingsEnv(path = `${process.env.CLAUDE_CONFIG_DIR ?? `${process.env.HOME}/.claude`}/settings.json`): Record<string, string> {
+  try {
+    const env = JSON.parse(readFileSync(path, "utf8"))?.env;
+    if (!env || typeof env !== "object") return {};
+    return Object.fromEntries(Object.entries(env).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+  } catch { return {}; }
 }
