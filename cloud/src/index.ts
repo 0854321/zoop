@@ -544,7 +544,10 @@ export class Hub extends DurableObject<Env> {
     if (p.startsWith("/api/host/2fa")) {
       if (who !== "machine") return json({ error: "forbidden" }, 403);
       const host = req.headers.get("x-noop-host") ?? "持有机器密钥的主机";
-      if (p === "/api/host/2fa" && m === "GET") { const t = this.totp(); return json({ bound: !!t, since: t?.bound ?? null }); }
+      if (p === "/api/host/2fa" && m === "GET") { // also what `noop security` can't see from config.toml: the live allow-list
+        const t = this.totp(), allow = parseAllowList(this.env.HUB_ALLOW_IPS);
+        return json({ bound: !!t, since: t?.bound ?? null, allow_ips: this.env.HUB_ALLOW_IPS?.trim() ? allow.nets.length : null });
+      }
       if (p === "/api/host/2fa/setup" && m === "POST") {
         const secret = newSecret();
         this.set("totp_pending", { secret, expires: Date.now() + 10 * 60_000 });

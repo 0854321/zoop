@@ -14,6 +14,7 @@ export async function securityReport(cfg: Cfg, host: string, primary: boolean): 
   const add = (level: Finding["level"], area: Finding["area"], text: string) => out.push({ level, area, text });
   const url = String(cfg.cloud?.url ?? "").replace(/\/$/, "");
   const token = String(cfg.server?.token ?? "");
+  let live: number | null | undefined; // entries in the Worker's HUB_ALLOW_IPS (null: off; undefined: Worker didn't say)
 
   // ---- the Worker (the owner's own Cloudflare deployment)
   if (!url) add("warn", "Worker", "没有配置 [cloud] url：没有云端部署可查");
@@ -27,7 +28,8 @@ export async function securityReport(cfg: Cfg, host: string, primary: boolean): 
     else if (tf.status === 401) add("bad", "Worker", "机器密钥被 Worker 拒绝（401）：本机的 [server] token 和 Worker 的 HUB_TOKEN 不一致");
     else if (!tf.ok) add("bad", "Worker", `查询两步验证失败：HTTP ${tf.status}`);
     else {
-      const d = (await tf.json()) as { bound: boolean; since: number | null };
+      const d = (await tf.json()) as { bound: boolean; since: number | null; allow_ips?: number | null };
+      live = d.allow_ips;
       add(d.bound ? "ok" : "bad", "Worker", d.bound ? `两步验证已绑定（${new Date(d.since ?? 0).toISOString().slice(0, 10)}）` : "两步验证还没绑定：任何人都无法登录。运行 noop 2fa setup");
       const rows = async (table: string) => {
         const r = await call(`/api/host/export?table=${table}&after=0&limit=200`).catch(() => null);
@@ -57,12 +59,14 @@ export async function securityReport(cfg: Cfg, host: string, primary: boolean): 
     // configuration that `noop cloud deploy` turns into Worker secrets
     add(owners(cfg).length ? "ok" : "bad", "Worker", owners(cfg).length ? `owner 邮箱白名单：${owners(cfg).join(", ")}` : "没有配置 [email] to：没有 owner 白名单，登录通知也发不出去");
     add(cfg.email?.host || cfg.email?.from ? "ok" : "warn", "Worker", cfg.email?.host || cfg.email?.from ? "发信已配置（验证码、登录通知）" : "没有配置发信：收不到新登录通知");
+    // what the Worker enforces (live) against what config.toml says the next deploy will set
     const allow = allowIps(cfg);
-    if (!allow) add("warn", "Worker", "没有开启 IP 白名单（[cloud] allow_ips）：任何网络都能访问登录页");
-    else {
-      const { bad } = parseAllowList(allow);
-      add(bad.length ? "bad" : "ok", "Worker", bad.length ? `[cloud] allow_ips 有无法识别的项：${bad.join(" ")}` : `IP 白名单：${allow}`);
-    }
+    const { nets, bad } = parseAllowList(allow ?? "");
+    if (bad.length) add("bad", "Worker", `[cloud] allow_ips 有无法识别的项：${bad.join(" ")}`);
+    if (live === null) add("warn", "Worker", allow ? `IP 白名单没有生效（Worker 上为空），但 [cloud] allow_ips 有 ${nets.length} 项：运行 noop cloud deploy` : "没有开启 IP 白名单：任何网络都能访问登录页");
+    else if (typeof live === "number") add(allow !== undefined && nets.length !== live ? "warn" : "ok", "Worker",
+      `IP 白名单生效中：${live} 项${allow === undefined ? "（config.toml 里没有 allow_ips，部署不会改动它）" : nets.length !== live ? `，但 [cloud] allow_ips 有 ${nets.length} 项：运行 noop cloud deploy` : `（${allow}）`}`);
+    else if (allow) add("ok", "Worker", `IP 白名单（配置）：${allow}`);
   }
 
   // ---- this machine's Noop setup

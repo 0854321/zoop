@@ -167,8 +167,11 @@ async function vapidKeys(): Promise<{ publicKey: string; privateJwk: Jwk }> {
   return k;
 }
 
-/** [cloud] allow_ips (a string or a list of IPs / CIDRs) → the HUB_ALLOW_IPS secret ("" = no IP restriction). */
-export function allowIps(cfg: Cfg): string {
+/** [cloud] allow_ips (a string or a list of IPs / CIDRs) → the HUB_ALLOW_IPS secret ("" = no IP restriction).
+ *  undefined when config.toml has no allow_ips at all: a deploy then leaves the Worker's list as it is, so a machine
+ *  whose config is behind (not synced yet) cannot switch the allow-list off by redeploying. */
+export function allowIps(cfg: Cfg): string | undefined {
+  if (!cfg.cloud || !("allow_ips" in cfg.cloud)) return undefined;
   const v = cfg.cloud?.allow_ips;
   return (Array.isArray(v) ? v.map(String) : String(v ?? "").split(/[\s,]+/)).map((x) => x.trim()).filter(Boolean).join(",");
 }
@@ -208,7 +211,7 @@ export async function cloudDeploy(cfg: Cfg) {
   const out = dep.stdout.toString() + dep.stderr.toString();
   if (dep.exitCode !== 0) return fail(out.slice(-1500));
   const url = domain ? `https://${domain}` : out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
-  const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token, HUB_ALLOW_IPS: allow };
+  const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token, ...(allow !== undefined ? { HUB_ALLOW_IPS: allow } : {}) };
   const e = cfg.email ?? {};
   if (e.to && e.host) {
     secrets.HUB_OWNER_EMAIL = String(e.to);
@@ -231,7 +234,7 @@ export async function cloudDeploy(cfg: Cfg) {
     const f = P("config.toml");
     let s = readFileSync(f, "utf8");
     // keep the account too: without it the primary's next redeploy (on every update) may land in another account
-    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}${allow ? `allow_ips = "${allow}"\n` : ""}`;
+    const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}${allow !== undefined ? `allow_ips = "${allow}"\n` : ""}`;
     s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `${block}\n`) : `${s.trimEnd()}\n\n${block}`;
     writeFileSync(f, s);
     writeFileSync(P("README.md"), `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`);
