@@ -46,6 +46,7 @@ import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
+import { type Channel, parseSeen, sortChannels, unreadIn, type SeenMap } from "./channels";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
 import { createTimelineWindow } from "./timeline";
@@ -1299,6 +1300,117 @@ function since(iso?: string, end?: string): string {
 
 const HISTORY_PAGE = 50;
 
+const SEEN_KEY = "noop.channels.seen", SINCE_KEY = "noop.channels.since";
+
+/** The channels list, kept fresh while the app is open, and when each was last opened on this device. */
+function createChannels(hub: Hub) {
+  const list = signal<Channel[]>([]);
+  const seen = signal<SeenMap>({});
+  const since = signal(new Date().toISOString());
+  void (async () => {
+    seen.set(parseSeen(await Storage.getItem(SEEN_KEY)));
+    const s = await Storage.getItem(SINCE_KEY);
+    if (s) since.set(s); else void Storage.setItem(SINCE_KEY, untracked(since));
+  })();
+  const load = async () => {
+    const r = await hub.api("GET", "/api/channels").catch(() => null);
+    if (r?.ok && Array.isArray(r.data.channels)) list.set(sortChannels(r.data.channels as Channel[]));
+  };
+  void load();
+  const timer = setInterval(() => void load(), 60_000);
+  cleanup(() => clearInterval(timer));
+  return {
+    list, load,
+    unread: (c: Channel) => unreadIn(c, seen(), since()),
+    open: (slug: string) => { const next = { ...untracked(seen), [slug]: new Date().toISOString() }; seen.set(next); void Storage.setItem(SEEN_KEY, JSON.stringify(next)); },
+    async save(slug: string, patch: { goal?: string; archived?: boolean }) {
+      const r = await hub.api("POST", "/api/channels", { slug, ...patch });
+      if (r.ok) list.set(sortChannels(untracked(list).map((c) => (c.slug === slug ? { ...c, ...(patch.goal !== undefined ? { goal: patch.goal } : {}), ...(patch.archived !== undefined ? { status: patch.archived ? "archived" : "active" } : {}) } : c))));
+      return r.ok;
+    },
+  };
+}
+type Channels = ReturnType<typeof createChannels>;
+
+/** One channel: its goal (editable), archive, and the tasks and cards that belong to it, newest first. */
+function ChannelPage(props: { channels: Channels; slug: string; wide: boolean; onTask: (id: string) => void; onPick: (ref: string) => void }) {
+  const ch = () => props.channels.list().find((c) => c.slug === props.slug);
+  const editing = signal(false);
+  const goal = signal("");
+  const busy = signal(false);
+  props.channels.open(props.slug);
+  const saveGoal = async () => {
+    busy.set(true);
+    if (await props.channels.save(props.slug, { goal: untracked(goal).trim() })) editing.set(false);
+    busy.set(false);
+  };
+  return (
+    <Scroll testID="channel-page" style={{ flex: 1 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 14, paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 20 }}>
+        <If when={ch()} else={<Text style={{ fontSize: 14, color: colors.faint }}>{L("Loading…", "读取中…")}</Text>}>
+          <View style={{ gap: 6 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={{ flex: 1, fontSize: 20, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{`# ${ch()!.name}`}</Text>
+              <Btn testID="channel-archive" kind="ghost" label={ch()!.status === "archived" ? L("Unarchive", "取消归档") : L("Archive", "归档")}
+                onPress={() => void props.channels.save(props.slug, { archived: ch()!.status !== "archived" })} />
+            </View>
+            <If when={ch()!.status === "archived"}>
+              <Text testID="channel-archived" style={{ fontSize: 13.5, color: colors.warn }}>{L("Archived: the team no longer adds work here.", "已归档：团队不再往这里归类新的工作。")}</Text>
+            </If>
+            <If when={ch()!.status === "active" && ch()!.stale}>
+              <Text testID="channel-stale" style={{ fontSize: 13.5, color: colors.muted }}>{L("No activity in 7 days", "7 天没有动静")}</Text>
+            </If>
+          </View>
+          <View style={{ gap: 8 }}>
+            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{L("Goal", "目标")}</Text>
+            <If when={editing()} else={
+              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+                <Text testID="channel-goal" style={{ flex: 1, fontSize: 14.5, lineHeight: 21, color: ch()!.goal ? colors.text : colors.faint, userSelect: "text" }}>{ch()!.goal || L("No goal yet", "还没有目标")}</Text>
+                <Btn testID="channel-edit-goal" kind="secondary" label={L("Edit", "编辑")} onPress={() => { goal.set(ch()!.goal); editing.set(true); }} />
+              </View>
+            }>
+              <Input
+                testID="channel-goal-input"
+                value={goal()}
+                onChange={({ value }) => goal.set(value)}
+                onSubmit={() => void saveGoal()}
+                placeholder={L("What this channel is for: the team assigns work by it", "这个 channel 是做什么的，团队按它归类工作")}
+                class="placeholder:text-faint"
+                style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
+              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Btn testID="channel-save-goal" kind="primary" label={L("Save", "保存")} disabled={busy()} onPress={() => void saveGoal()} />
+                <Btn testID="channel-cancel-goal" kind="ghost" label={L("Cancel", "取消")} onPress={() => editing.set(false)} />
+              </View>
+            </If>
+          </View>
+          <View>
+            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4, paddingBottom: 6 }}>{L(`Items (${ch()!.count})`, `内容（${ch()!.count}）`)}</Text>
+            <If when={!ch()!.items.length}><Text style={{ fontSize: 14, color: colors.faint }}>{L("Nothing here yet", "还没有内容")}</Text></If>
+            <Each of={ch()!.items} key={(i) => `${i.kind}:${i.id}`}>
+              {(i) => (
+                <View
+                  role="button"
+                  testID={`channel-item-${i().id}`}
+                  accessibilityLabel={`${i().id} ${i().title}`}
+                  onPress={() => (i().kind === "decision" && i().state === "open" ? props.onPick(i().id) : props.onTask(i().task ?? i().id))}
+                  hoverStyle={hovered()}
+                  style={{ minHeight: size.row, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, marginHorizontal: -10, borderRadius: 7 }}
+                >
+                  <Dot tone={i().kind === "decision" ? (i().state === "open" ? "wait" : "on") : TONE[i().state] ?? "off"} />
+                  <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{i().id}</Text>
+                  <Text style={{ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{i().title}</Text>
+                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{clock(i().updated)}</Text>
+                </View>
+              )}
+            </Each>
+          </View>
+        </If>
+      </View>
+    </Scroll>
+  );
+}
+
 /** 全部任务: every task the team has, newest first, a page at a time. */
 function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => void }) {
   const tasks = signal<TaskInfo[]>([]);
@@ -1764,6 +1876,9 @@ function Sidebar(props: {
   onRules: () => void;
   tasks: () => boolean;
   onTasks: () => void;
+  channels: Channels;
+  channel: () => string | null;
+  onChannel: (slug: string) => void;
   onHelp: () => void;
   onClose?: () => void;
   chrome?: boolean;
@@ -1904,6 +2019,25 @@ function Sidebar(props: {
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />
                   <Text style={{ ...rowText(), color: colors.muted }}>{a().title}</Text>
                   <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{since(a().updated)}</Text>
+                </SideRow>
+              )}
+            </Each>
+          </If>
+
+          <If when={props.channels.list().length}>
+            <SideHeading title={L("Channels", "Channels")} count={props.channels.list().reduce((n, c) => n + props.channels.unread(c), 0) || undefined} accent />
+            <Each of={props.channels.list()} key={(c) => c.slug}>
+              {(c) => (
+                <SideRow onPress={() => props.onChannel(c().slug)} selected={props.channel() === c().slug} title={c().goal || c().name}>
+                  <Text style={{ width: 17, textAlign: "center", fontSize: 15, color: colors.faint }}>#</Text>
+                  <Text testID={`side-channel-${c().slug}`} style={{ ...rowText(), color: c().status === "archived" || c().stale ? colors.faint : props.channels.unread(c()) ? colors.text : colors.muted, fontWeight: props.channels.unread(c()) ? "600" : "400" }}>{c().name}</Text>
+                  <If when={props.channels.unread(c())} else={
+                    <If when={c().status === "archived" || c().stale}>
+                      <Text style={{ fontSize: 12.5, color: colors.faint }}>{c().status === "archived" ? L("Archived", "已归档") : L("Quiet 7d", "7 天无动静")}</Text>
+                    </If>
+                  }>
+                    <Text testID={`side-channel-unread-${c().slug}`} style={{ fontSize: 12.5, fontWeight: "600", color: colors.accent, fontVariant: ["tabular-nums"] }}>{String(props.channels.unread(c()))}</Text>
+                  </If>
                 </SideRow>
               )}
             </Each>
@@ -3518,6 +3652,7 @@ type Route =
   | { name: "routine"; routine: string }
   | { name: "rules" }
   | { name: "tasks" }
+  | { name: "topic"; slug: string }
   | { name: "doc"; path: string };
 const CHANNEL: Route = { name: "channel" };
 
@@ -3525,6 +3660,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const hub = props.hub;
   const settings = createSettings(hub);
   const push = createPush(hub, settings.toast.show);
+  const channels = createChannels(hub);
   const wide = () => windowSize().width >= WIDE;
   const drawer = signal(false);
   const drawerDragging = signal(false);
@@ -4128,6 +4264,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onRules={() => openRules()}
       tasks={() => top().name === "tasks"}
       onTasks={() => show({ name: "tasks" })}
+      channels={channels}
+      channel={() => { const t = top(); return t.name === "topic" ? t.slug : null; }}
+      onChannel={(slug) => show({ name: "topic", slug })}
       onHelp={() => help.set(true)}
       onClose={inDrawer ? () => drawer.set(false) : undefined}
       chrome={!inDrawer}
@@ -4503,6 +4642,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "team": return wide() ? L("Team settings", "团队设置") : L("Settings", "设置");
       case "task": return L(`Task ${r.id}`, `任务 ${r.id}`);
       case "tasks": return L("All tasks", "全部任务");
+      case "topic": return `# ${channels.list().find((c) => c.slug === r.slug)?.name ?? r.slug}`;
       case "host": return L(`Machine ${r.host}`, `机器 ${r.host}`);
       case "notify": return L("Notifications", "通知");
       case "member": return displayName(r.id);
@@ -4578,6 +4718,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "channel": return channelPage();
       case "task": return <TaskDetail hub={hub} id={r.id} wide={wide()} />;
       case "tasks": return <TaskHistory hub={hub} wide={wide()} onTask={openTask} />;
+      case "topic": return <ChannelPage channels={channels} slug={r.slug} wide={wide()} onTask={openTask} onPick={pick} />;
       case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
       case "team":
         return (
