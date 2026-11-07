@@ -4,7 +4,12 @@
   "version": "0.1.0",
   "build": 1,
   "updater": {
-    "github": "huacnlee/noop"
+    "github": "huacnlee/noop",
+    "packages": {
+      "roots": [
+        "SJl1kuuXiy0WqZM03S0Q16OIGNX7e+RTI8H5Flk8JLo="
+      ]
+    }
   },
   "appearance": "system",
   "theme": "theme.json",

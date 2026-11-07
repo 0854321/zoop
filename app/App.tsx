@@ -36,7 +36,7 @@ import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
-import { checkForUpdate, downloadUpdate, installAndRestart } from "nsh/updater";
+import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage } from "nsh/updater";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { avatarOf } from "./avatars";
 import { appendQuote } from "./quote";
@@ -2003,7 +2003,11 @@ function UserMenu(props: { hub: Hub; onSettings: () => void }) {
 
 const appUpdate = signal<UpdateState>({ kind: "none" });
 const updates = createUpdates(
-  { check: checkForUpdate, download: () => downloadUpdate(), install: installAndRestart },
+  {
+    check: checkForUpdate, download: () => downloadUpdate(), install: installAndRestart,
+    // OTA: a signed package of the app's code. Phones cannot restart an app, so there it runs from the next launch.
+    packages: { check: checkForPackage, download: () => downloadPackage(), restart: platform.os === "ios" || platform.os === "android" ? null : restartToPackage },
+  },
   (state) => appUpdate.set(state),
 );
 /** The first check waits for the app to settle; nsh/updater answers null where apps do not update (the web, a dev run). */
@@ -2030,7 +2034,7 @@ function UpdateRow(props: { onRestart: () => void }) {
     else if (u.kind !== "installing") props.onRestart();
   };
   return (
-    <If when={state().kind !== "none"}>
+    <If when={state().kind !== "none" && state().kind !== "staged"}>
       <View
         role="button"
         testID="app-update"

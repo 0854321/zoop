@@ -22,8 +22,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Includes Tray and Notifications.show's `silent` (longbridge/nsh#1140).
-  NSH_REF: 05f77b7af55d6f7323ca371a133d72675f7fd908
+  # Includes OTA updates through signed packages (longbridge/nsh#1189), on top of Tray and Notifications.show's
+  # `silent` (longbridge/nsh#1140).
+  NSH_REF: e10bc644f0552da6dfd99046b2bfe7beb6e9fccd
 
 defaults:
   run:
@@ -142,14 +143,32 @@ jobs:
         with:
           path: assets
           merge-multiple: true
-      # The apps fetch `releases/latest/download/latest.json` and the versioned archives next to it (nsh/updater).
-      # The installers keep using the unversioned assets. An APK cannot replace itself: Android gets a link.
+      # OTA: the app's code as a package signed with the release key (certified by the root whose public key is in
+      # app/nsh.json). Installed apps on every platform, iOS and Android included, run it from their next launch when
+      # its build is newer than theirs and their NSH runtime is new enough; otherwise they take the whole app below.
+      # It has this run's build number, as the apps packaged above do, so only older installs pick it up.
+      - name: Sign the OTA package
+        env:
+          NSH_PACKAGE_KEY: ${{ secrets.NSH_PACKAGE_KEY }}
+          NSH_PACKAGE_CERT: ${{ secrets.NSH_PACKAGE_CERT }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          keys="$RUNNER_TEMP/keys"
+          (umask 077 && mkdir -p "$keys" && printf '%s\n' "$NSH_PACKAGE_KEY" > "$keys/release.secret")
+          printf '%s\n' "$NSH_PACKAGE_CERT" > "$keys/release.cert"
+          (cd app && nsh publish App.tsx --key "$keys/release.secret" --cert "$keys/release.cert" \
+            --build "$GITHUB_RUN_NUMBER" --app-version "$version" -o "$GITHUB_WORKSPACE/assets/Noop-$version.nshpkg")
+          rm -rf "$keys"
+      # The apps fetch `releases/latest/download/latest.json`, the versioned archives and the package next to it
+      # (nsh/updater). The installers keep using the unversioned assets. An APK cannot replace itself: Android gets a
+      # link for the whole app, and the package for its code.
       - name: Write the update manifest
         run: |
           version="${GITHUB_REF_NAME#v}"
           jq --arg version "$version" '.version = $version' app/nsh.json > "$RUNNER_TEMP/nsh.json"
           mv "$RUNNER_TEMP/nsh.json" app/nsh.json
           nsh update-manifest assets/Noop-"$version"-*.tar.gz assets/Noop-"$version"-*.zip --entry app --out assets \
+            --package assets/Noop-"$version".nshpkg \
             --link "android=https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Noop-android.apk"
       - name: Publish the release
         env:

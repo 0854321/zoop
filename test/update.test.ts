@@ -75,3 +75,56 @@ test("a failed install says why and can be pressed again", async () => {
   await t.updates.install();
   expect(t.states.map((s) => s.kind)).toEqual(["ready", "installing", "failed", "installing"]);
 });
+
+function withPackages(found: { version: string; build: number } | null, restart = true) {
+  const t = setup(update);
+  const packages = {
+    check: async () => { t.calls.push("pkg-check"); return found; },
+    download: async () => { t.calls.push("pkg-download"); },
+    restart: restart ? async () => { t.calls.push("pkg-restart"); } : null,
+  };
+  const api = { ...t.api, packages };
+  const updates = createUpdates(api, (s) => t.states.push(s));
+  return { ...t, packages, updates };
+}
+const pkg = { version: "1.2.0", build: 42 };
+
+test("a package is preferred over the whole app, and a press restarts into it", async () => {
+  const t = withPackages(pkg);
+  await t.updates.check();
+  expect(t.calls).toEqual(["pkg-check", "pkg-download"]);
+  expect(t.last()).toEqual({ kind: "ready", version: "1.2.0", package: true });
+  await t.updates.install();
+  expect(t.calls).toEqual(["pkg-check", "pkg-download", "pkg-restart"]);
+});
+
+test("where the app cannot restart itself a package is staged silently for the next launch", async () => {
+  const t = withPackages(pkg, false);
+  await t.updates.check();
+  expect(t.last()).toEqual({ kind: "staged", version: "1.2.0" });
+  await t.updates.install();
+  expect(t.calls).toEqual(["pkg-check", "pkg-download"]);
+  await t.updates.check(); // the same package is not downloaded again
+  expect(t.calls).toEqual(["pkg-check", "pkg-download", "pkg-check"]);
+});
+
+test("with no package this runtime can run, the whole app updates as before", async () => {
+  const t = withPackages(null);
+  await t.updates.check();
+  expect(t.calls).toEqual(["pkg-check", "check", "download"]);
+  expect(t.last()).toEqual({ kind: "ready", version: "1.2.0" });
+  await t.updates.install();
+  expect(t.calls.at(-1)).toBe("install");
+});
+
+test("a failed package download falls back to the app check, and a failed restart retries the package", async () => {
+  const t = withPackages(pkg);
+  t.packages.download = async () => { throw new Error("bad signature"); };
+  await t.updates.check();
+  expect(t.calls).toEqual(["pkg-check", "check", "download"]);
+  const t2 = withPackages(pkg);
+  await t2.updates.check();
+  t2.packages.restart = async () => { throw new Error("busy"); };
+  await t2.updates.install();
+  expect(t2.last()).toEqual({ kind: "failed", version: "1.2.0", message: "busy", package: true });
+});
