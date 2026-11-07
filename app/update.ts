@@ -16,6 +16,8 @@ export type PackageApi = {
   download: () => Promise<void>;
   /** Restarts into it now; null where the platform cannot restart an app (iOS, Android). */
   restart: (() => Promise<void>) | null;
+  /** The package this run's code came from, or null when it is the app's own. */
+  running?: () => FoundPackage | null;
 };
 
 export type UpdaterApi = {
@@ -56,7 +58,7 @@ export function createUpdates(api: UpdaterApi, onChange: (state: UpdateState) =>
     try {
       if (await checkPackage()) return;
       const found = await api.check();
-      if (!found) { if (state.kind !== "none") set({ kind: "none" }); return; }
+      if (!found || runsAtLeast(found.version)) { if (state.kind !== "none") set({ kind: "none" }); return; }
       if (!found.canInstall) return set({ kind: "link", version: found.version, url: found.url });
       if (state.kind === "ready" && state.version === found.version) return;
       downloading = true;
@@ -89,6 +91,12 @@ export function createUpdates(api: UpdaterApi, onChange: (state: UpdateState) =>
     }
   }
 
+  /** The whole app's version is the one it was built for, so a run on a package of that release or later is current. */
+  function runsAtLeast(version: string): boolean {
+    const running = api.packages?.running?.();
+    return !!running && compareVersions(running.version, version) >= 0;
+  }
+
   /** Exits this run when it works; a failure leaves the app as it was, and the same download can be tried again. */
   async function install() {
     if (state.kind !== "ready" && state.kind !== "failed") return;
@@ -103,4 +111,14 @@ export function createUpdates(api: UpdaterApi, onChange: (state: UpdateState) =>
   }
 
   return { check, install };
+}
+
+/** Compares dotted release numbers (`0.2.10` > `0.2.9`); a missing part counts as 0. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0), pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
 }

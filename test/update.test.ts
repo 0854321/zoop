@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createUpdates, type FoundUpdate, type UpdateState } from "../app/update";
+import { compareVersions, createUpdates, type FoundUpdate, type UpdateState } from "../app/update";
 
 function setup(found: FoundUpdate | null) {
   const states: UpdateState[] = [];
@@ -82,6 +82,7 @@ function withPackages(found: { version: string; build: number } | null, restart 
     check: async () => { t.calls.push("pkg-check"); return found; },
     download: async () => { t.calls.push("pkg-download"); },
     restart: restart ? async () => { t.calls.push("pkg-restart"); } : null,
+    running: (() => null) as () => { version: string; build: number } | null,
   };
   const api = { ...t.api, packages };
   const updates = createUpdates(api, (s) => t.states.push(s));
@@ -127,4 +128,24 @@ test("a failed package download falls back to the app check, and a failed restar
   t2.packages.restart = async () => { throw new Error("busy"); };
   await t2.updates.install();
   expect(t2.last()).toEqual({ kind: "failed", version: "1.2.0", message: "busy", package: true });
+});
+
+test("running a package of the release already, the whole app is not offered again", async () => {
+  // The desktop restarted into the 0.2.1 package; latest.json still says 0.2.1 while the app itself is 0.2.0.
+  const t = withPackages(null);
+  t.packages.running = () => pkg;
+  await t.updates.check();
+  expect(t.calls).toEqual(["pkg-check", "check"]);
+  expect(t.states).toEqual([]);
+  // A release newer than the running package (one that needs a newer runtime) still comes as the whole app.
+  const t2 = withPackages(null);
+  t2.packages.running = () => ({ version: "1.1.9", build: 41 });
+  await t2.updates.check();
+  expect(t2.last()).toEqual({ kind: "ready", version: "1.2.0" });
+});
+
+test("release numbers compare by part", () => {
+  expect(compareVersions("0.2.10", "0.2.9")).toBeGreaterThan(0);
+  expect(compareVersions("0.2.1", "0.2.1")).toBe(0);
+  expect(compareVersions("0.2", "0.2.1")).toBeLessThan(0);
 });

@@ -2028,7 +2028,7 @@ const updates = createUpdates(
   {
     check: checkForUpdate, download: () => downloadUpdate(), install: installAndRestart,
     // OTA: a signed package of the app's code. Phones cannot restart an app, so there it runs from the next launch.
-    packages: { check: checkForPackage, download: () => downloadPackage(), restart: platform.os === "ios" || platform.os === "android" ? null : restartToPackage },
+    packages: { check: checkForPackage, download: () => downloadPackage(), restart: platform.os === "ios" || platform.os === "android" ? null : restartToPackage, running: runningPackage },
   },
   (state) => appUpdate.set(state),
 );
