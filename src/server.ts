@@ -16,11 +16,12 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
-import { type Cfg, DATA, P, allowedClis, hostName, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
+import { type Cfg, DATA, P, _commitPush, allowedClis, hostName, locked, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { timingSafeEqual } from "node:crypto";
 import { readable, validPath } from "../cloud/src/files";
-import { parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
+import { channelsView, parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
+import { updateChannel } from "./channels";
 import { localStore } from "./brain";
 import { ensureWebClient } from "./webclient";
 
@@ -473,6 +474,12 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
         const { id, done } = (await req.json().catch(() => ({}))) as { id?: string; done?: boolean };
         if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
         return json({ ok: true, result: await cancelTask(id, done === true) });
+      }
+      if (url.pathname === "/api/channels" && req.method === "GET") return json(channelsView(taskStore()));
+      if (url.pathname === "/api/channels" && req.method === "POST") {
+        const { slug, ...patch } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };
+        const r = await locked(async () => { const r = updateChannel(String(slug ?? ""), patch); if (typeof r !== "string") await _commitPush(`channel ${slug}`); return r; });
+        return typeof r === "string" ? json({ error: r }, 404) : json({ ok: true, channel: r });
       }
       if (url.pathname === "/api/fleet/update" && req.method === "POST") return json({ ok: true, result: await updateFleet() });
       if (url.pathname === "/api/media" && req.method === "POST") {

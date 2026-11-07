@@ -6,6 +6,7 @@ import {
   type Cfg, P, ROOT, agentActivity, agentName, precedents, readAll, readIf, recentJournal, signature,
 } from "./core";
 import { claudeDisallowed } from "./gates";
+import { channelPrompt } from "./channels";
 
 export type Result = {
   status: "done" | "needs_decision" | "failed" | "delegated" | "waiting";
@@ -19,6 +20,7 @@ export type Result = {
   recommendation?: string;
   lessons?: string[];
   attachments?: string[];
+  channels?: unknown[];
   followups?: { title: string; body?: string; agent?: string; priority?: string; repo?: string; requires?: string; host?: string }[];
 };
 
@@ -35,6 +37,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],
   "attachments": ["/abs/path/screenshot.png", "/abs/path/recording.mp4"],   // optional: shown to the owner with the message
+  "channels": ["existing-slug", {"name": "New topic", "goal": "what it is for"}],   // see # Channels; [] when none fits
   "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work", "requires": "os:macos when it needs macOS/iOS/Xcode (os:windows for Windows); omit otherwise"}]
 }
 Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
@@ -79,6 +82,8 @@ Outside the hub you are Noop: never use your agent name (${agentName(agent)}) or
 
 # Resource budget
 ${resourceNote}
+
+${channelPrompt()}
 
 # Task ${meta.id}: ${meta.title}
 Working directory: ${meta.repo || ROOT}   Scratch space (checkouts, worktrees, build targets): ~/.agent-hub/work — never inside the hub folder ${ROOT}, which syncs to the cloud   Host capabilities: ${meta.host_caps ?? ""}

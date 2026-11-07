@@ -18,7 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { b64dec, b64enc, handleFiles, handleReadFiles, initFilesSchema } from "./files";
 import { FREE, LEAN, SHED, TARGET, latestOnly } from "./budget";
-import { taskHistory, taskInfo } from "./tools";
+import { CHANNEL_SLUG, channelsView, taskHistory, taskInfo } from "./tools";
 import { CODE_RE, newCode, normCode } from "./authcode";
 import { newSecret, otpauthUri, totpMatch } from "./totp";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
@@ -683,6 +683,14 @@ export class Hub extends DurableObject<Env> {
       const { id, done } = (await req.json().catch(() => ({}))) as { id?: string; done?: boolean };
       if (!id || !/^T-[\w]*\d{4}$/.test(id)) return json({ error: "id required" }, 400);
       this.toInbox({ type: "cancel", id, done: done === true });
+      return json({ ok: true });
+    }
+    if (p === "/api/channels" && m === "GET") return json(channelsView(this.mcp.store()));
+    if (p === "/api/channels" && m === "POST") { // owner: edit a channel's goal / archive it; the primary writes the file
+      if (who === "machine") return json({ error: "forbidden" }, 403);
+      const { slug, goal, archived } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };
+      if (!slug || !CHANNEL_SLUG.test(slug)) return json({ error: "slug required" }, 400);
+      this.toInbox({ type: "channel", slug, ...(typeof goal === "string" ? { goal: goal.slice(0, 500) } : {}), ...(typeof archived === "boolean" ? { archived } : {}) });
       return json({ ok: true });
     }
     if (p === "/api/fleet/update" && m === "POST") { // owner: every machine updates to the latest code; the primary acts on it

@@ -9,6 +9,7 @@ import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { ipAllowed, parseAllowList } from "../cloud/src/ipallow";
 import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
+import { updateChannel } from "./channels";
 import { writeHubToml } from "./sync";
 import { ensureWebClient } from "./webclient";
 import { type Event, MEDIA, appendEvent, applyOp, handleOwnerMessage, saveSettings, setMirror, settingsView, status, cancelTask, updateFleet } from "./server";
@@ -103,6 +104,8 @@ export function startCloudBridge(cfg: Cfg) {
       await applyOp(it.op);
     } else if (it.type === "cancel" && typeof it.id === "string") {
       await cancelTask(it.id, it.done === true);
+    } else if (it.type === "channel" && typeof it.slug === "string") {
+      await locked(async () => { if (typeof updateChannel(it.slug, it) !== "string") await _commitPush(`channel ${it.slug}`); });
     } else if (it.type === "update") {
       await updateFleet();
     } else if (it.type === "settings") {

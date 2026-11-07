@@ -30,6 +30,7 @@ import { adoptCloudUrl, readHubToml } from "./sync";
 import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
+import { resolveChannels, updateChannel } from "./channels";
 
 // ------------------------------------------------------------------ routines (scheduled task generators)
 const STATE = P("logs", "routine-state.json");
@@ -191,13 +192,14 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   const ownerWork = meta.origin === "owner" || /^owner/.test(meta.source ?? "");
   const delegated = res.status === "delegated" && (res.followups?.length ?? 0) > 0;
   const children: string[] = [];
+  const chans = [...new Set([...(meta.channels ?? "").split(",").filter(Boolean), ...resolveChannels(res.channels)])].join(",") || undefined;
   for (const f of (res.followups ?? []).slice(0, depth > maxDepth ? 0 : 8)) {
     const id = newTask(f.title, f.body ?? "", { agent: f.agent ?? agent, priority: f.priority ?? meta.priority, repo: f.repo, requires: f.requires, host: f.host,
-      source: `followup:${meta.id}`, extra: { depth: String(depth), ...((f as any).difficulty === "hard" ? { difficulty: "hard" } : {}), ...(ownerWork ? { origin: "owner" } : {}), ...(delegated ? { parent: meta.id } : {}) } });
+      source: `followup:${meta.id}`, extra: { depth: String(depth), ...((f as any).difficulty === "hard" ? { difficulty: "hard" } : {}), ...(ownerWork ? { origin: "owner" } : {}), ...(delegated ? { parent: meta.id } : {}), ...(chans ? { channels: chans } : {}) } });
     children.push(id);
     journal(host, `  ↳ ${id} → ${f.agent ?? agent}: ${f.title}`);
   }
-  const done = { ...meta, cli_used: cli, finished: now(), status: res.status, gate_override: undefined, requeue_note: undefined, stalls: undefined };
+  const done = { ...meta, channels: chans, cli_used: cli, finished: now(), status: res.status, gate_override: undefined, requeue_note: undefined, stalls: undefined };
   const runNote = `\n\n## Run ${now()} · ${host} · ${cli}\n**${res.status}** — ${res.summary}\n`;
   // the owner added to the request while it ran: run again with the additions instead of reporting a stale result
   const latest = existsSync(path) ? readDoc(path).body : body;
