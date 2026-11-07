@@ -46,10 +46,11 @@ import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
-import { type Channel, parseSeen, sortChannels, unreadIn, type SeenMap } from "./channels";
+import { type Channel, type ChatRead, parseSeen, sortChannels, unreadIn, type SeenMap } from "./channels";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
 import { createTimelineWindow } from "./timeline";
+import { isUnread, markAllRead, refUnread, parseMarked, readTo, toggleRead, unreadCount, type ReadState } from "./read";
 import { CHECK_EVERY_MS, createUpdates, shellLine, type ShellInfo, type UpdateState } from "./update";
 import {
   alpha,
@@ -138,7 +139,7 @@ const CODE_LEN = 8;
 
 type Config = { url: string; token: string };
 /** `token` holds the login session (sent as `Bearer`, and `?token=` on the WebSocket and media URLs). */
-const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", notifyOff: "hub.notifyOff", draft: "hub.draft" };
+const KEYS = { url: "hub.url", token: "hub.token", email: "hub.email", theme: "hub.theme", seen: "hub.lastSeen", unread: "hub.markedUnread", notifyOff: "hub.notifyOff", draft: "hub.draft" };
 const touch = !(platform.idiom === "desktop" || platform.idiom === "mac");
 /** iOS and Android draw the pages' headers (title, back, swipe back); the desktops and the web show the app's. */
 const systemHeader = platform.os === "ios" || platform.os === "android";
@@ -1026,7 +1027,7 @@ function askLine(text: string): string {
 
 /** A message's quick actions under it (like ChatGPT's): copy its text, reply to what it is about. Shown on hover
  * on a desktop, always on a phone (no hover there). */
-function MsgActions(props: { text: string; show: () => boolean; onReply?: () => void; align?: "flex-start" | "flex-end"; id: string }) {
+function MsgActions(props: { text: string; show: () => boolean; onReply?: () => void; align?: "flex-start" | "flex-end"; id: string; unread?: () => boolean; onToggleRead?: () => void }) {
   const copied = signal(false);
   let t: ReturnType<typeof setTimeout> | undefined;
   cleanup(() => clearTimeout(t));
@@ -1046,6 +1047,11 @@ function MsgActions(props: { text: string; show: () => boolean; onReply?: () => 
       <If when={props.onReply}>
         <View role="button" testID={`reply-${props.id}`} accessibilityLabel={L("Reply", "回复")} onPress={() => props.onReply?.()} hoverStyle={hovered()} style={btn()}>
           <Icon name="reply" size={18} tint={colors.muted} />
+        </View>
+      </If>
+      <If when={props.onToggleRead}>
+        <View role="button" testID={`toggle-read-${props.id}`} accessibilityLabel={props.unread?.() ? L("Mark as read", "标为已读") : L("Mark as unread", "标为未读")} onPress={() => props.onToggleRead?.()} hoverStyle={hovered()} style={{ ...btn(), width: undefined, paddingHorizontal: 8 }}>
+          <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.muted }}>{props.unread?.() ? L("Mark read", "标为已读") : L("Mark unread", "标为未读")}</Text>
         </View>
       </If>
     </View>
@@ -1154,6 +1160,9 @@ function Message(props: {
   onReply: (ref: string, note?: string) => void;
   onQuote?: (markdown: string, ref?: string) => void;
   selection?: Map<string, Signal<Set<string>>>;
+  /** Unread on this device; the dot by the name and the action under the message. */
+  unread?: () => boolean;
+  onToggleRead?: () => void;
 }) {
   const e = props.event;
   const selection = props.selection ?? new Map<string, Signal<Set<string>>>();
@@ -1199,6 +1208,7 @@ function Message(props: {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
           <If when={!wide()}><Avatar testID={`avatar-inline-${e.id}`} from={e.from} small /></If>
           <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>{displayName(e.from)}</Text>
+          <If when={props.unread?.()}><View testID={`unread-dot-${e.id}`} accessibilityLabel={L("Unread", "未读")} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accentFill }} /></If>
           <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
           {tag && !ask ? <Badge label={tag} /> : null}
         </View>
@@ -1260,7 +1270,7 @@ function Message(props: {
           body
         )}
         <If when={e.text.trim()}>
-          <MsgActions id={e.id} text={e.text} show={() => touch || over()} onReply={e.ref && !(ask && !done()) ? () => props.onReply(e.ref!, replyable ? firstLine(e.text) : undefined) : undefined} />
+          <MsgActions id={e.id} text={e.text} show={() => touch || over() || !!props.unread?.()} unread={props.unread} onToggleRead={props.onToggleRead} onReply={e.ref && !(ask && !done()) ? () => props.onReply(e.ref!, replyable ? firstLine(e.text) : undefined) : undefined} />
         </If>
       </View>
     </View>
@@ -1307,6 +1317,7 @@ function createChannels(hub: Hub) {
   const list = signal<Channel[]>([]);
   const seen = signal<SeenMap>({});
   const since = signal(new Date().toISOString());
+  const chat = signal<{ f?: ChatRead }>({});
   void (async () => {
     seen.set(parseSeen(await Storage.getItem(SEEN_KEY)));
     const s = await Storage.getItem(SINCE_KEY);
@@ -1321,8 +1332,12 @@ function createChannels(hub: Hub) {
   cleanup(() => clearInterval(timer));
   return {
     list, load,
-    unread: (c: Channel) => unreadIn(c, seen(), since()),
+    /** Share the main chat's read state, so reading there (or reading all) reads the channels too. */
+    link: (f: ChatRead) => chat.set({ f }),
+    unread: (c: Channel) => unreadIn(c, seen(), since(), chat().f),
     open: (slug: string) => { const next = { ...untracked(seen), [slug]: new Date().toISOString() }; seen.set(next); void Storage.setItem(SEEN_KEY, JSON.stringify(next)); },
+    /** Read every channel up to now (the main chat's "Mark all as read"). */
+    readAll: () => { const now = new Date().toISOString(); const next = { ...untracked(seen) }; for (const c of untracked(list)) next[c.slug] = now; seen.set(next); void Storage.setItem(SEEN_KEY, JSON.stringify(next)); },
     async save(slug: string, patch: { goal?: string; archived?: boolean }) {
       const r = await hub.api("POST", "/api/channels", { slug, ...patch });
       if (r.ok) list.set(sortChannels(untracked(list).map((c) => (c.slug === slug ? { ...c, ...(patch.goal !== undefined ? { goal: patch.goal } : {}), ...(patch.archived !== undefined ? { status: patch.archived ? "archived" : "active" } : {}) } : c))));
@@ -1885,6 +1900,9 @@ function Sidebar(props: {
   onCollapse?: () => void;
   home: () => boolean;
   onHome: () => void;
+  /** Unread messages in the channel on this device, and reading them all. */
+  unread: () => number;
+  onReadAll: () => void;
   onRestart: () => void;
 }) {
   const s = () => props.hub.status();
@@ -1935,13 +1953,24 @@ function Sidebar(props: {
         {/* Keep intrinsic text widths from expanding the scrollable content. */}
         <View style={{ width: "100%", minWidth: 0, overflow: "hidden", paddingBottom: 16, gap: 1 }}>
           <View style={{ paddingTop: 8 }}>
+            <ContextMenu margin={8} popupStyle={menuStyle()} trigger={
             <SideRow onPress={props.onHome} selected={props.home()} title={L("Channel", "主会话")}>
               <Icon name="chat" size={17} tint={props.home() ? colors.text : colors.muted} />
               <Text style={{ ...rowText(), fontWeight: "600" }}>{L("Channel", "主会话")}</Text>
-              <If when={waits().length}>
+              <If when={waits().length && !props.unread()}>
                 <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{L(`${waits().length} to decide`, `${waits().length} 待决定`)}</Text>
               </If>
+              <If when={props.unread()}>
+                <View testID="channel-unread" accessibilityLabel={L(`${props.unread()} unread`, `${props.unread()} 条未读`)} style={{ minWidth: 20, height: 20, paddingHorizontal: 6, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.accentFill }}>
+                  <Text style={{ fontSize: 12, fontWeight: "600", color: colors.onAccent, fontVariant: ["tabular-nums"] }}>{props.unread() > 99 ? "99+" : String(props.unread())}</Text>
+                </View>
+              </If>
             </SideRow>
+            }>
+              <MenuItem testID="read-all" disabled={!props.unread()} onSelect={props.onReadAll} hoverStyle={hovered()} style={{ height: touch ? 44 : 32, justifyContent: "center", paddingHorizontal: 10, borderRadius: 6 }}>
+                <Text style={{ fontSize: 14, color: props.unread() ? colors.text : colors.faint }}>{L("Mark all as read", "全部标为已读")}</Text>
+              </MenuItem>
+            </ContextMenu>
             <SideRow onPress={props.onRules} selected={props.rules()} title={L("Memory", "记忆")}>
               <Icon name="scroll" size={17} tint={props.rules() ? colors.text : colors.muted} />
               <Text style={rowText()}>{L("Memory", "记忆")}</Text>
@@ -3744,6 +3773,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // "以下为新消息": above the first event from others after what this device last saw.
   const seen = signal<string | null | undefined>(undefined);
   Storage.getItem(KEYS.seen).then((v) => seen.set(v ?? null));
+  // Per-message read state on this device: read up to a time, plus what was marked unread by hand.
+  const read = signal<ReadState | undefined>(undefined);
+  void Promise.all([Storage.getItem(KEYS.seen), Storage.getItem(KEYS.unread)]).then(([upTo, marked]) => read.set({ upTo: upTo ?? null, marked: parseMarked(marked) }));
+  const saveRead = (next: ReadState) => {
+    read.set(next);
+    if (next.upTo) Storage.setItem(KEYS.seen, next.upTo);
+    Storage.setItem(KEYS.unread, JSON.stringify(next.marked));
+  };
+  const unread = computed(() => { const r = read(); return r && hub.loaded() ? unreadCount(shown(), r) : 0; });
+  const readAll = () => { const r = untracked(read); if (r) saveRead(markAllRead(untracked(shown), r)); channels.readAll(); };
+  channels.link((ref, after) => { const r = read(); return r && hub.loaded() ? refUnread(shown(), r, ref, after) : undefined; });
   const divider = signal<string | null | undefined>(undefined);
   effect(() => {
     if (untracked(divider) !== undefined || !hub.loaded() || seen() === undefined) return;
@@ -4155,8 +4195,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // This device has seen what reached the bottom.
   effect(() => {
     const evs = shown();
-    if (!atEnd() || !evs.length || divider() === undefined) return;
-    Storage.setItem(KEYS.seen, evs[evs.length - 1].ts);
+    const r = read();
+    if (!atEnd() || !evs.length || divider() === undefined || !r) return;
+    const next = readTo(evs[evs.length - 1].ts, r);
+    if (next !== r) saveRead(next);
   });
   // A new decision while the app is open: a quiet toast and a short vibration.
   const toast = signal<{ ref: string; text: string } | null>(null);
@@ -4272,6 +4314,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       chrome={!inDrawer}
       onCollapse={inDrawer ? undefined : () => setSidebarOpen(false)}
       home={onChannel}
+      unread={unread}
+      onReadAll={readAll}
       onHome={() => { drawer.set(false); nav.popToRoot(); }}
     />
   );
@@ -4380,6 +4424,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                           onReply={reply}
                           onQuote={(text, ref) => excerpt.set({ text, ref })}
                           selection={proposalSelection}
+                          unread={() => { const r = read(); return !!r && isUnread(row.event, r); }}
+                          onToggleRead={() => { const r = untracked(read); if (r) saveRead(toggleRead(row.event, r)); }}
                         />
                       </View>
                     );

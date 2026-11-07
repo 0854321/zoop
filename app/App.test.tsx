@@ -1080,6 +1080,25 @@ describe("notifications", () => {
     await app.waitUntil(() => app.host.calls().some((c) => c.name === "clearNotifications" && (c.data as { ref: string }).ref === "D-0001"));
   });
 
+  test("mark a message unread, the channel's unread count, and mark all as read", async () => {
+    const app = await open("./App.tsx", {
+      storage: { ...STORAGE, "hub.lastSeen": events[0].ts, "hub.notifyAsked": "1" },
+      network: hub([]),
+      width: 1200, height: 800, platform: "macos",
+    });
+    await app.waitFor("New messages");
+    await app.press("id:toggle-read-e6");
+    await app.waitUntil(() => app.count("id:unread-dot-e6") > 0 && app.count("id:channel-unread") > 0);
+    await app.press("id:toggle-read-e6");
+    await app.waitUntil(() => app.count("id:unread-dot-e6") === 0);
+    await app.press("id:toggle-read-e6");
+    await app.waitUntil(() => app.count("id:channel-unread") > 0);
+    await app.rightClick("id:channel-unread");
+    await app.press("id:read-all");
+    await app.waitUntil(() => app.count("id:channel-unread") === 0 && app.count("id:unread-dot-e6") === 0);
+    expect(app.storage()["hub.markedUnread"]).toBe("[]");
+  });
+
   test("the unread divider skips an event the channel hides", async () => {
     const app = await open("./App.tsx", {
       storage: { ...STORAGE, "hub.lastSeen": events[3].ts, "hub.notifyAsked": "1" },
