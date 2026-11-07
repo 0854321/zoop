@@ -528,7 +528,7 @@ const inQuietHours = (cfg: Cfg) => {
   return a < b ? cur >= a && cur < b : cur >= a || cur < b;
 };
 
-function maybeProposeNext(cfg: Cfg, host: string, state: Record<string, string>) {
+export function maybeProposeNext(cfg: Cfg, host: string, state: Record<string, string>) {
   if (cfg.idle?.enabled === false || inQuietHours(cfg)) return;
   const busy = ["inbox", "active"].some((f) => list(P("tasks", f), /^T-.*\.md$/)
     .some((p) => !readDoc(p).meta.parked));
@@ -536,8 +536,10 @@ function maybeProposeNext(cfg: Cfg, host: string, state: Record<string, string>)
   state.idle_since ??= new Date().toISOString();
   const idleMin = (Date.now() - Date.parse(state.idle_since)) / 60_000;
   if (idleMin < (cfg.idle?.after_minutes ?? 20)) return;
-  // one menu at a time; re-offer after cooldown even if unanswered
-  const pendingMenu = list(P("decisions", "open")).map((p) => readDoc(p).meta).find((m) => m.kind === "menu");
+  // Re-offer after the latest unanswered menu's cooldown, regardless of filename order.
+  const pendingMenu = list(P("decisions", "open")).map((p) => readDoc(p).meta)
+    .filter((m) => m.kind === "menu")
+    .sort((a, b) => Date.parse(b.created) - Date.parse(a.created))[0];
   const cooldown = (cfg.idle?.cooldown_minutes ?? 180) * 60_000;
   if (pendingMenu && Date.now() - Date.parse(pendingMenu.created) < cooldown) return;
   if (state.last_menu && Date.now() - Date.parse(state.last_menu) < 15 * 60_000) return;
