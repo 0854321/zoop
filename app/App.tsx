@@ -739,12 +739,11 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
 /** Selection actions belong to the floating composer, outside the scrolling messages. */
 function QuotePreview(props: { text: string; onQuote: () => void; onCancel: () => void }) {
   return <If when={props.text}>
-    <View testID="quote-preview" style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.inset, backgroundColor: colors.surface }}>
+    <View testID="quote-preview" style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 4, ...composerGlass(), borderRadius: radius.inset }}>
       <Button testID="quote-selection" accessibilityLabel={L("Quote selection", "引用片段")} onPress={() => { selectionGeneration++; props.onQuote(); }}
-        style={{ minHeight: touch ? 44 : 32, paddingHorizontal: 8, borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
-        <Text style={{ fontSize: size.small, color: colors.text }}>{L("Quote selection", "引用片段")}</Text>
+        style={{ flex: 1, minWidth: 0, minHeight: touch ? 44 : 32, justifyContent: "center", borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
+        <Text style={{ numberOfLines: 1, fontSize: size.small, color: colors.text }}>{props.text.replace(/\s+/g, " ").trim()}</Text>
       </Button>
-      <Text style={{ numberOfLines: 1, flex: 1, fontSize: size.small, color: colors.muted }}>{props.text.replace(/\s+/g, " ")}</Text>
       <Button testID="cancel-quote" accessibilityLabel={L("Cancel quote", "取消引用片段")} onPress={() => { selectionGeneration++; props.onCancel(); }}
         style={{ width: touch ? 44 : 32, height: touch ? 44 : 32, alignItems: "center", justifyContent: "center", borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
         <Icon name="close" size={14} tint={colors.muted} />
@@ -1249,7 +1248,7 @@ function Message(props: {
           body
         )}
         <If when={e.text.trim()}>
-          <MsgActions id={e.id} text={e.text} show={() => touch || over()} onReply={e.ref && !(ask && !done()) ? () => props.onReply(e.ref!, replyable ? `${displayName(e.from)}${L(": ", "：")}${firstLine(e.text)}` : undefined) : undefined} />
+          <MsgActions id={e.id} text={e.text} show={() => touch || over()} onReply={e.ref && !(ask && !done()) ? () => props.onReply(e.ref!, replyable ? firstLine(e.text) : undefined) : undefined} />
         </If>
       </View>
     </View>
@@ -4304,7 +4303,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 <If when={replyTo()}>
                   {(ref) => (
                     <View testID="reply-chip" style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", maxWidth: "100%", height: 30, paddingLeft: 10, paddingRight: 4, borderRadius: 8, backgroundColor: tints.accent }}>
-                      <Text style={{ ...chipText, flexShrink: 1, numberOfLines: 1, fontSize: 14, fontWeight: "500", color: colors.accent }}>{replyNote() ? L(`Reply to ${replyNote()}`, `回复 ${replyNote()}`) : L(`Reply to ${ref()}`, `回复 ${ref()}`)}</Text>
+                      <Text style={{ ...chipText, flexShrink: 1, numberOfLines: 1, fontSize: 14, fontWeight: "500", color: colors.accent }}>{firstLine(replyNote() ?? shown().findLast((e) => e.ref === ref())?.text ?? ref()).replace(/\s+/g, " ").trim()}</Text>
                       <View
                         onPress={() => replyTo.set(null)}
                         role="button"
