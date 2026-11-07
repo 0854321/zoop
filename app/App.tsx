@@ -39,6 +39,7 @@ import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage } from "nsh/updater";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { avatarOf } from "./avatars";
+import { CheckMark } from "./ui/icons";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
 import { createTimelineWindow } from "./timeline";
@@ -824,7 +825,7 @@ function Media(props: { hub: Hub; path: string }) {
 
 // ---------------------------------------------------------------- timeline
 
-/** Messages the hub just confirmed: their bubble shows a check that pops in, then fades. */
+/** Messages the hub just confirmed: a quiet check beside their timestamp fades away. */
 const justSent = signal<Set<string>>(new Set());
 const SENT_CHECK_MS = 1600;
 function markSent(id: string | undefined) {
@@ -833,22 +834,20 @@ function markSent(id: string | undefined) {
   setTimeout(() => justSent.update((s) => { const n = new Set(s); n.delete(id); return n; }), SENT_CHECK_MS);
 }
 
-/** The check beside a just-delivered message: pops in, holds, fades out. */
+/** Delivery feedback shares the timestamp’s visual weight, without a badge or bounce. */
 function SentCheck() {
   const still = reduceMotion();
-  const v = createAnimatedValue(still ? 1 : 0);
-  const fade = createAnimatedValue(1);
-  if (!still) v.timing(1, { duration: 280, easing: "easeOut" });
+  const fade = createAnimatedValue(still ? 1 : 0);
+  if (!still) fade.timing(1, { duration: 150, easing: "easeOut" });
   const t = setTimeout(() => fade.timing(0, { duration: still ? 0 : 300, easing: "easeOut" }), SENT_CHECK_MS - 320);
   cleanup(() => clearTimeout(t));
   return (
     <View
       testID="sent-check"
       accessibilityLabel={L("Sent", "已发送")}
-      style={{ width: 16, height: 16, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: colors.up,
-        opacity: fade.mul(v), scale: v.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.3, 1.2, 1] }) }}
+      style={{ width: 14, height: 16, alignItems: "center", justifyContent: "center", opacity: fade }}
     >
-      <Icon name="check" size={11} tint={colors.onAccent} />
+      <CheckMark size={14} weight={1.8} tint={colors.muted} />
     </View>
   );
 }
@@ -1113,7 +1112,10 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
                   <Text style={{ fontSize: size.tiny, fontWeight: "600", color: colors.muted }}>{L("Undo", "撤回")}</Text>
                 </View>
               </If>
-              <If when={justSent().has(e.id)}><SentCheck /></If>
+              {/* Reserve the mark’s space so delivery feedback never moves the footer. */}
+              <View style={{ width: 14, height: 16 }}>
+                <If when={justSent().has(e.id)}><SentCheck /></If>
+              </View>
               <Text style={{ fontSize: size.tiny, color: colors.faint }}>{timeOf(e.ts)}</Text>
             </View>
           }
