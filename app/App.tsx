@@ -3,6 +3,9 @@
 // gallery's), its shared UI layer (nsh-gallery-ui: palette, icons, tooltips, scroll bars), its
 // sidebar + toolbar layout; sized up for reading a chat all day (16 pt text, 40 pt controls).
 import { L, lang, LANG_KEY, LANGS } from "./i18n";
+
+/** A sender's name in the current language (agents localized, others without the @host). */
+const displayName = (from: string): string => agentDisplayName(from, lang() === "zh");
 import {
   cleanup,
   createAnimatedValue,
@@ -39,7 +42,7 @@ import { isAvailable as hasWindow, titleBar, Window } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
 import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
-import { avatarOf } from "./avatars";
+import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
@@ -66,7 +69,6 @@ import {
   choiceLabel,
   choicesOf,
   dayLabel,
-  displayName,
   greeting,
   type HubEvent,
   initials,
@@ -2529,8 +2531,8 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
                         <Avatar from={a().id} />
                         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                           <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
-                            <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{a().title ?? a().id}</Text>
-                            <If when={a().title && a().title !== a().id}>
+                            <Text style={{ fontSize: 15.5, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{displayName(a().id)}</Text>
+                            <If when={displayName(a().id) !== a().id}>
                               <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint, numberOfLines: 1 }}>{a().id}</Text>
                             </If>
                           </View>
@@ -3087,7 +3089,7 @@ function PhoneSettings(props: { hub: Hub; push: Push; settings: Settings; onOpen
                     first={i() === 0}
                     inset={58}
                     leading={<Avatar from={a().id} />}
-                    label={a().id}
+                    label={displayName(a().id)}
                     detail={`${cliLabel(a().clis)} · ${autonomyLabel(a().autonomy)}`}
                     chevron
                     onPress={() => props.onOpen({ name: "member", id: a().id })}
@@ -4443,7 +4445,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "tasks": return L("All tasks", "全部任务");
       case "host": return L(`Machine ${r.host}`, `机器 ${r.host}`);
       case "notify": return L("Notifications", "通知");
-      case "member": return r.id;
+      case "member": return displayName(r.id);
       case "routine": return r.routine;
       case "rules": return L("Memory", "记忆");
       case "doc": return r.path.split("/").pop()!.replace(/\.md$/i, "");

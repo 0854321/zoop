@@ -170,6 +170,8 @@ describe("login", () => {
     await app.press("id:menu-lang-zh");
     expect(app.storage()["hub.lang"]).toBe("zh");
     await app.waitFor("主会话");
+    await app.waitFor("唐僧");
+    expect(app.shows("Tripitaka")).toBe(false);
     await app.press("id:user-menu");
     await app.press("id:settings");
     await app.waitFor("id:settings-tab-account");
@@ -425,14 +427,14 @@ describe("channel", () => {
     await app.hover("text:/主要修的是文字排版/");
     await app.press("id:reply-e9");
     await app.waitFor("id:reply-chip");
-    expect(app.shows("text:Reply to Kai: nsh #812 主要修的是文字排版")).toBe(true);
+    expect(app.shows("text:Reply to Tripitaka: nsh #812 主要修的是文字排版")).toBe(true);
     await app.type("id:composer", "为何我看图片不清晰呢");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1, { timeout: 10_000 });
     expect(posts[0]).toEqual({ text: "为何我看图片不清晰呢", reply_to: "T-0125" });
     expect(app.shows("id:reply-chip")).toBe(false);
     await app.waitFor("id:reply-to-T-0125");
-    expect(app.shows("text:/Kai: nsh #812 主要修的是文字排版/")).toBe(true);
+    expect(app.shows("text:/Tripitaka: nsh #812 主要修的是文字排版/")).toBe(true);
   });
 
   test("a question can be ignored from its card or from the sidebar", async () => {
@@ -495,7 +497,7 @@ describe("channel", () => {
     // an open question answers through its card, so it has no reply action
     expect(app.shows("id:reply-e2")).toBe(false);
     await app.press("id:reply-e8");
-    await app.waitFor("Reply to lead: T-0009 已完成，PR 已开");
+    await app.waitFor("Reply to Tripitaka: T-0009 已完成，PR 已开");
     await app.type("id:composer", "再加个截图");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
