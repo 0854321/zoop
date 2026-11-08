@@ -26,7 +26,9 @@ trap 'rm -rf "$WORK"' EXIT
 echo "Downloading $ASSET"
 curl -fsSL "$BASE/$ASSET" -o "$WORK/$ASSET"
 curl -fsSL "$BASE/sha256sums" -o "$WORK/sha256sums"
-EXPECTED="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*" asset { print $1 }' "$WORK/sha256sums")"
+# GitHub serves release downloads case-insensitively, and the manifest may spell the name either way
+# (the 2026-11 lowercase rename shipped before a release carried the new names): match case-insensitively.
+EXPECTED="$(awk -v asset="$ASSET" 'tolower($2) == tolower(asset) || tolower($2) == "*" tolower(asset) { print $1 }' "$WORK/sha256sums")"
 [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$(sha256 "$WORK/$ASSET")" ] || fail "the checksum of $ASSET does not match"
 
 if [ "$(uname -s)" = Darwin ]; then
