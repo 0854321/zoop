@@ -112,6 +112,14 @@ p{color:GrayText;font-size:14px}</style></head><body><main><h1>这个网络还�
 
 const isMcpPath = (p: string) => p === "/mcp" || p.startsWith("/oauth/") || p.startsWith("/.well-known/oauth-") || p === "/.well-known/openid-configuration";
 
+/** Per-route counters: [requests, rowsRead, rowsWritten]. */
+type Usage = { day: string; requests: number; rowsRead: number; rowsWritten: number; routes: Record<string, [number, number, number]> };
+/** "POST /api/files/commit": the route without ids, so a day's breakdown stays a few dozen keys. */
+export const routeKey = (req: Request) => {
+  const p = new URL(req.url).pathname.replace(/\/(T|D)-[\w-]+/g, "/:id").replace(/^\/media\/.*/, "/media/:id");
+  return `${req.method} ${p.length > 40 ? p.slice(0, 40) : p}`;
+};
+
 type Ev = { id: string; ts: string; from: string; kind: string; text: string; ref?: string; [k: string]: unknown };
 
 export class Hub extends DurableObject<Env> {
@@ -119,8 +127,10 @@ export class Hub extends DurableObject<Env> {
   mcp: Mcp;
   /** Every cursor since the last settle(): their rowsRead / rowsWritten are what Cloudflare bills. */
   cursors: SqlStorageCursor<Record<string, SqlStorageValue>>[] = [];
-  usage = { day: "", requests: 0, rowsRead: 0, rowsWritten: 0 };
+  usage: Usage = { day: "", requests: 0, rowsRead: 0, rowsWritten: 0, routes: {} };
   usageSaved = 0;
+  /** Rows written since the counters were last persisted: a busy burst is saved before an eviction can drop it. */
+  unsaved = 0;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     const raw = ctx.storage.sql, cursors = this.cursors;
@@ -252,17 +262,26 @@ export class Hub extends DurableObject<Env> {
   flushed = new Map<string, number>();
   today() {
     const day = new Date().toISOString().slice(0, 10);
-    if (this.usage.day !== day) this.usage = { day, requests: 0, rowsRead: 0, rowsWritten: 0 };
+    if (this.usage.day !== day) this.usage = { day, requests: 0, rowsRead: 0, rowsWritten: 0, routes: {} };
+    this.usage.routes ??= {};
     return this.usage;
   }
-  /** Count the rows of every query since the last call; persist the counters every few minutes. */
-  settle(requests = 1) {
+  /** Count the rows of every query since the last call, per route (what `/api/usage` shows so the biggest consumer is
+   *  visible), and persist the counters every minute while busy or after a few hundred unsaved rows: an evicted object
+   *  used to lose up to five minutes of counts on every wake, so the app read far below Cloudflare's own figures. */
+  settle(requests = 1, route = "other") {
     const u = this.today();
     u.requests += requests;
-    for (const c of this.cursors.splice(0)) { u.rowsRead += c.rowsRead; u.rowsWritten += c.rowsWritten; }
-    if (Date.now() - this.usageSaved > 5 * 60_000) {
-      this.usageSaved = Date.now();
-      this.ctx.storage.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES ('usage', ?)", JSON.stringify(u)); // unmetered: a few hundred rows a day
+    let r = 0, w = 0;
+    for (const c of this.cursors.splice(0)) { r += c.rowsRead; w += c.rowsWritten; }
+    u.rowsRead += r; u.rowsWritten += w; this.unsaved += w + r / 50;
+    const k = u.routes[route] ??= [0, 0, 0];
+    k[0] += requests; k[1] += r; k[2] += w;
+    const since = Date.now() - this.usageSaved;
+    if (since > 5 * 60_000 || (since > 60_000 && this.unsaved > 50) || this.unsaved > 300) {
+      this.usageSaved = Date.now(); this.unsaved = 0;
+      u.rowsWritten += 2; // this save: the kv row and its primary key (unmetered cursor, counted by hand)
+      this.ctx.storage.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES ('usage', ?)", JSON.stringify(u));
     }
   }
   /** The tightest of today's allowances, as a fraction of the free plan. */
@@ -505,7 +524,7 @@ export class Hub extends DurableObject<Env> {
   }
 
   async fetch(req: Request): Promise<Response> {
-    try { return await this.handle(req); } finally { this.settle(); }
+    try { return await this.handle(req); } finally { this.settle(1, routeKey(req)); }
   }
 
   async handle(req: Request): Promise<Response> {
@@ -797,13 +816,13 @@ export class Hub extends DurableObject<Env> {
     return json({ error: "not found" }, 404);
   }
 
-  webSocketMessage() { this.settle(1 / 20); } // incoming frames bill as 1/20 of a request (pings are auto-answered)
+  webSocketMessage() { this.settle(1 / 20, "ws"); } // incoming frames bill as 1/20 of a request (pings are auto-answered)
   webSocketClose(ws: WebSocket) {
     try { ws.close(); } catch {}
     const tags = this.ctx.getTags(ws);
     if (tags.includes("host")) { this.touchHost(); this.pushStatus(); }
     if (tags.includes("owner")) this.tellWatchers();
-    this.settle(0);
+    this.settle(0, "ws");
   }
 }
 
