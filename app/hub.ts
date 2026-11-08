@@ -29,7 +29,7 @@ export type HostInfo = {
   os?: string;
   arch?: string;
   clis?: string[];
-  accounts?: { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string }[];
+  accounts?: { cli: string; name: string; state: "ok" | "cooldown" | "login"; until?: string; model?: string }[];
   running?: { id: string; title: string; agent: string; started?: string; activity?: Activity }[];
   recent?: { id: string; title: string; state?: string; finished?: string }[];
   /** The code the machine runs: its git commit, and that commit on GitHub. */
@@ -40,7 +40,7 @@ export type HostInfo = {
 };
 
 /** A running agent's latest sign of life, and (Claude) the step it took. */
-export type Activity = { at: string; step?: string; steps?: number };
+export type Activity = { at: string; step?: string; steps?: number; model?: string };
 
 /** "最近：Bash · gh pr checks 814 · 2 分钟前"; quiet for 10+ minutes reads as such (the fleet stops it at 20 and runs it again). */
 export function activityLine(a: Activity | undefined, now = Date.now()): { text: string; quiet: boolean } | null {

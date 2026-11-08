@@ -133,6 +133,15 @@ export function cliCommand(cli: string, cfg: Cfg, gateOverride = false): string[
   throw new Error(`unknown cli ${cli}`);
 }
 
+/** The model a CLI is started with: an explicit `--model`/`-m`, else Codex's own config default. */
+export function startModel(cli: string, cmd: string[], codexHome?: string): string | undefined {
+  codexHome ??= process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const i = cmd.findIndex((c) => c === "--model" || c === "-m");
+  if (i >= 0 && cmd[i + 1]) return cmd[i + 1];
+  if (cli === "codex") return readIf(join(codexHome, "config.toml"), 100000).match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1];
+  return undefined;
+}
+
 /** Running agent processes by task id (so the owner can cancel one). */
 export const agentProcs = new Map<string, { kill: (sig?: number | NodeJS.Signals) => void }>();
 
@@ -164,18 +173,20 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
 
   // what the agent is doing: every chunk of output is a sign of life; Claude's stream also names each step
   const json = cmd.includes("stream-json");
-  const act = { at: Date.now(), step: undefined as string | undefined, steps: 0 };
+  const act = { at: Date.now(), step: undefined as string | undefined, steps: 0, model: startModel(cli, cmd, extraEnv.CODEX_HOME) };
   const inFlight = new Map<string, string>(); // tool_use id → tool name, until its result comes back
   let resultText: string | undefined, assistantText = "";
   const touch = () => {
     act.at = Date.now();
-    if (tid) agentActivity.set(tid, { at: new Date(act.at).toISOString(), step: act.step, steps: act.steps });
+    if (tid) agentActivity.set(tid, { at: new Date(act.at).toISOString(), step: act.step, steps: act.steps, model: act.model });
   };
   touch();
   const onLine = (line: string) => {
     let e: any;
     try { e = JSON.parse(line); } catch { return; }
+    if (e.type === "system" && e.subtype === "init" && e.model) act.model = String(e.model);
     if (e.type === "assistant") {
+      if (e.message?.model && !e.parent_tool_use_id) act.model = String(e.message.model);
       for (const c of e.message?.content ?? []) {
         if (c.type === "tool_use") { inFlight.set(c.id, c.name); act.step = toolStep(c.name, c.input); act.steps++; }
         else if (c.type === "text" && !e.parent_tool_use_id) assistantText += c.text;

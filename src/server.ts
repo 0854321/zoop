@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
+import { cliCommand, startModel } from "./runner";
 import { type Cfg, DATA, P, _commitPush, allowedClis, hostName, locked, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { timingSafeEqual } from "node:crypto";
@@ -171,7 +172,7 @@ function hostViews(active: TaskView[], finished: TaskView[]) {
     os: h.caps.find((c) => c.startsWith("os:"))?.slice(3),
     arch: h.caps.find((c) => c.startsWith("arch:"))?.slice(5),
     clis: h.caps.filter((c) => c.startsWith("cli:")).map((c) => c.slice(4)),
-    accounts: cfg && h.host === me ? (() => { try { return accountsInfo(cfg!); } catch { return undefined; } })() : undefined,
+    accounts: cfg && h.host === me ? (() => { try { return accountsInfo(cfg!).map((a) => ({ ...a, model: startModel(a.cli, cliCommand(a.cli, cfg!)) })); } catch { return undefined; } })() : undefined,
     running: active.filter((t) => t.host === h.host).map((t) => ({ id: t.id, title: t.title, agent: t.agent, started: t.started, activity: h.activity?.[t.id] })),
     recent: finished.filter((t) => ran(t, h.host)).slice(0, 8).map((t) => ({ id: t.id, title: t.title, state: t.state, finished: t.finished ?? t.updated })),
   }));
