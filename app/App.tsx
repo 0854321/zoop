@@ -2824,12 +2824,6 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
                 <Each of={e().routines} key={(r) => r.name}>
                   {(r, i) => (
                     <View style={{ ...row(), flexDirection: "row", alignItems: "center", gap: 12, borderTopWidth: i() === 0 ? 0 : 0.5 }}>
-                      <Toggle
-                        testID={`routine-${r().name}`}
-                        label={r().name}
-                        value={r().enabled}
-                        onChange={(on) => save(patches.routine(r().name, { enabled: on }))}
-                      />
                       <View style={{ flex: 1, gap: 3 }}>
                         <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
                           <Text style={{ fontSize: 15.5, fontWeight: "500", color: r().enabled ? colors.text : colors.faint }}>{r().name}</Text>
@@ -2848,6 +2842,12 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
                         options={intervalsWith(r().every).map((iv) => ({ id: iv, label: everyLabel(iv), testID: `every-${r().name}-${iv}` }))}
                         selected={r().every}
                         onPick={(iv) => save(patches.routine(r().name, { every: iv }))}
+                      />
+                      <Toggle
+                        testID={`routine-${r().name}`}
+                        label={r().name}
+                        value={r().enabled}
+                        onChange={(on) => save(patches.routine(r().name, { enabled: on }))}
                       />
                     </View>
                   )}
