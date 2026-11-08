@@ -20,7 +20,7 @@ import { type Cfg, DATA, P, _commitPush, allowedClis, hostName, locked, list, lo
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { timingSafeEqual } from "node:crypto";
 import { readable, validPath } from "../cloud/src/files";
-import { channelsView, parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
+import { channelDigest, channelsView, parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
 import { channels, updateChannel } from "./channels";
 import { localStore } from "./brain";
 import { ensureWebClient } from "./webclient";
@@ -477,6 +477,10 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
         return json({ ok: true, result: await cancelTask(id, done === true) });
       }
       if (url.pathname === "/api/channels" && req.method === "GET") return json(channelsView(taskStore()));
+      if (url.pathname === "/api/channels/feed" && req.method === "GET") {
+        const c = channelsView(taskStore()).channels.find((c) => c.slug === url.searchParams.get("slug"));
+        return c ? json({ events: channelDigest(feed("", 5000), c.refs ?? []) }) : json({ error: "not found" }, 404);
+      }
       if (url.pathname === "/api/channels" && req.method === "POST") {
         const { slug, ...patch } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };
         const r = await locked(async () => { const r = updateChannel(String(slug ?? ""), patch); if (typeof r !== "string") await _commitPush(`channel ${slug}`); return r; });

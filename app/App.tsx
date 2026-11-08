@@ -46,7 +46,7 @@ import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
-import { type Channel, sortChannels } from "./channels";
+import { type Channel, channelDigest, sortChannels } from "./channels";
 import { isRead, markRead, unreadEvents, toggleMessageRead, type MessageReadState as ReadState } from "./read";
 import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
@@ -1376,11 +1376,23 @@ function createChannels(hub: Hub, reads: MessageReads) {
 type Channels = ReturnType<typeof createChannels>;
 
 /** One channel: its goal (editable), archive, and the tasks and cards that belong to it, newest first. */
-function ChannelPage(props: { channels: Channels; slug: string; wide: boolean; onTask: (id: string) => void; onPick: (ref: string) => void; onDoc: (path: string) => void }) {
+function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: boolean; onTask: (id: string) => void; onPick: (ref: string) => void; onDoc: (path: string) => void }) {
   const ch = () => props.channels.list().find((c) => c.slug === props.slug);
   const editing = signal(false);
   const goal = signal("");
   const busy = signal(false);
+
+  // the channel reads like the main chat narrowed to its topic: results and decisions, newest last; no task plumbing
+  const fetched = signal<HubEvent[]>([]);
+  const loaded = signal(false);
+  const load = async () => {
+    const r = await props.hub.api("GET", `/api/channels/feed?slug=${encodeURIComponent(props.slug)}`).catch(() => null);
+    if (r?.ok && Array.isArray(r.data.events)) fetched.set(r.data.events as HubEvent[]);
+    loaded.set(true);
+  };
+  effect(() => { ch()?.last_activity; void load(); });
+  const digest = computed(() => channelDigest(merge(fetched(), props.hub.events()), ch()?.refs ?? ch()?.items.filter((i) => i.kind !== "report").map((i) => i.id) ?? []));
+  const settled = computed(() => answeredIds(digest()));
 
   const saveGoal = async () => {
     busy.set(true);
@@ -1427,26 +1439,27 @@ function ChannelPage(props: { channels: Channels; slug: string; wide: boolean; o
               </View>
             </If>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4, paddingBottom: 6 }}>{L(`Items (${ch()!.count})`, `内容（${ch()!.count}）`)}</Text>
-            <If when={!ch()!.items.length}><Text style={{ fontSize: 14, color: colors.faint }}>{L("Nothing here yet", "还没有内容")}</Text></If>
-            <List each={ch()!.items} keyExtractor={(i) => `${i.kind}:${i.id}`} estimatedItemSize={44} style={{ flex: 1 }}>
-              {(i) => (
-                <View
-                  role="button"
-                  testID={`channel-item-${i().id}`}
-                  accessibilityLabel={`${i().id} ${i().title}`}
-                  onPress={() => { props.channels.reads.ref(i().kind === "report" ? i().task ?? i().id : i().id); if (i().kind === "report") props.onDoc(i().id); else if (i().kind === "decision" && i().state === "open") props.onPick(i().id); else props.onTask(i().task ?? i().id); }}
-                  hoverStyle={hovered()}
-                  style={{ minHeight: size.row, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, marginHorizontal: -10, borderRadius: 7 }}
-                >
-                  <Dot tone={i().kind === "decision" ? (i().state === "open" ? "wait" : "on") : TONE[i().state] ?? "off"} />
-                  <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{i().id}</Text>
-                  <Text style={{ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{i().title}</Text>
-                  <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{clock(i().updated)}</Text>
-                </View>
-              )}
-            </List>
+          <View testID="channel-digest" style={{ gap: 16, paddingTop: 4 }}>
+            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{L("Updates", "进展")}</Text>
+            <If when={digest().length} else={<Text style={{ fontSize: 14, color: colors.faint }}>{loaded() ? L("No results or decisions yet", "还没有结果或决策") : L("Loading…", "读取中…")}</Text>}>
+              <Each of={digest()} key={(e) => e.id}>
+                {(e) => isAsk(e()) ? (
+                  <Message hub={props.hub} event={e()} answered={settled} target={() => null}
+                    onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true)}
+                    onReply={(ref) => props.onTask(ref)} />
+                ) : (
+                  <View style={{ gap: 3 }}>
+                    <View role="button" testID={`channel-msg-${e().id}`} accessibilityLabel={e().ref} onPress={() => { props.channels.reads.ref(e().ref!); props.onTask(e().ref!); }}>
+                      <Text style={{ fontSize: 13, color: colors.faint }}>
+                        <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? L("You", "你") : displayName(e().from)}</Text>
+                        {`  ${timeOf(e().ts)}`}
+                      </Text>
+                    </View>
+                    <Rich text={e().text} />
+                  </View>
+                )}
+              </Each>
+            </If>
           </View>
         </If>
       </View>
@@ -4801,7 +4814,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       case "channel": return channelPage();
       case "task": return <TaskDetail hub={hub} id={r.id} wide={wide()} />;
       case "tasks": return <TaskHistory hub={hub} wide={wide()} onTask={openTask} />;
-      case "topic": return <ChannelPage channels={channels} slug={r.slug} wide={wide()} onTask={openTask} onPick={pick} onDoc={(path) => nav.push({ name: "doc", path })} />;
+      case "topic": return <ChannelPage hub={hub} channels={channels} slug={r.slug} wide={wide()} onTask={openTask} onPick={pick} onDoc={(path) => nav.push({ name: "doc", path })} />;
       case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
       case "team":
         return (

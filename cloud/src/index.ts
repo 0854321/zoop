@@ -18,7 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { b64dec, b64enc, handleFiles, handleReadFiles, initFilesSchema } from "./files";
 import { FREE, LEAN, SHED, TARGET, latestOnly } from "./budget";
-import { CHANNEL_SLUG, channelsView, taskHistory, taskInfo } from "./tools";
+import { CHANNEL_SLUG, channelDigest, channelsView, taskHistory, taskInfo } from "./tools";
 import { CODE_RE, newCode, normCode } from "./authcode";
 import { newSecret, otpauthUri, totpMatch } from "./totp";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
@@ -694,6 +694,12 @@ export class Hub extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (p === "/api/channels" && m === "GET") return json(channelsView(this.mcp.store()));
+    if (p === "/api/channels/feed" && m === "GET") { // the channel's digest, however far back the app's feed doesn't reach
+      const c = channelsView(this.mcp.store()).channels.find((c) => c.slug === url.searchParams.get("slug"));
+      if (!c) return json({ error: "not found" }, 404);
+      const rows = this.sql.exec("SELECT json FROM events WHERE ref IS NOT NULL ORDER BY seq DESC LIMIT 5000").toArray().reverse();
+      return json({ events: channelDigest(rows.map((r) => JSON.parse(r.json as string)), c.refs ?? []) });
+    }
     if (p === "/api/channels" && m === "POST") { // owner: edit a channel's goal / archive it; the primary writes the file
       if (who === "machine") return json({ error: "forbidden" }, 403);
       const { slug, goal, archived } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };

@@ -1595,11 +1595,15 @@ test("channels share per-message read state with main chat, and Menu can mark al
     ...hub([], [older, ...later]),
     [`GET ${URL}/api/channels`]: { body: { channels: [c, { ...c, slug: "mail-perf", name: "Mail performance" }] } },
     [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0700", title: "Review mail", agent: "lead", state: "done", request: "Review mail", runs: [], steps: [], events: [older] } },
+    [`GET ${URL}/api/channels/feed?*`]: { body: { events: [older, { id: "step", ts: ts(-299), from: "agent", kind: "notice", text: "Running cargo test", ref: "T-0700", thread: true }, { id: "ack", ts: ts(-298), from: "hub", kind: "notice", text: "收到 D-1", ref: "T-0700" }] } },
   } });
   await app.waitFor("id:side-channel-unread-omamail");
   await app.waitFor("id:side-channel-unread-mail-perf");
   await app.press("id:side-channel-omamail");
-  await app.press("id:channel-item-T-0700");
+  await app.waitFor("text:Shared channel result");
+  expect(app.shows("text:Running cargo test")).toBe(false); // task-thread steps stay on the task page
+  expect(app.shows("text:收到 D-1")).toBe(false);
+  await app.press("id:channel-msg-shared-old");
   await app.waitUntil(() => {
     const raw = app.storage()[`hub.read:${URL}`];
     return !!raw && JSON.parse(raw).ids.includes("shared-old");
