@@ -25,7 +25,7 @@ concurrency:
 env:
   # NSH main with OTA updates through signed packages (longbridge/nsh#1189), the Android bindgen fix for NDK 27, and
   # checkForUpdate leaving the whole app alone while a package of its release runs (longbridge/nsh#1207), the Linux tray painting an SVG icon as a template (longbridge/nsh#1209), and shellInfo() for the installed app's version and NSH runtime (longbridge/nsh#1226).
-  NSH_REF: a45c403e08d59453a259943deb77acbd96dcdbe9
+  NSH_REF: cb84edab7e14061524d9b15d3b3791ffd698c6f8
 
 defaults:
   run:
