@@ -4444,11 +4444,14 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       onHome={() => { drawer.set(false); nav.popToRoot(); }}
     />
   );
+  // Only a touchscreen swipes the sidebar in: a pan handler takes every mouse press on the web,
+  // so dragging over a message would select nothing.
+  const swipeDrawer = () => touch && !wide() && !drawer();
   /** The channel: the timeline and the composer. */
   const channelPage = () => (
-      <View testID="channel-swipe" pan={!wide() && !drawer() ? { x: drawerX } : undefined}
-        onPanStart={() => { if (!wide() && !drawer()) drawerDragging.set(true); }}
-        onPanEnd={finishDrawerPan}
+      <View testID="channel-swipe" pan={swipeDrawer() ? { x: drawerX } : undefined}
+        onPanStart={swipeDrawer() ? () => drawerDragging.set(true) : undefined}
+        onPanEnd={swipeDrawer() ? finishDrawerPan : undefined}
         style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height, transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
           {/* Files dropped on the timeline or the composer attach their images. */}
           <View
