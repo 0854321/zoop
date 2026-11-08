@@ -645,16 +645,30 @@ function linkRepoRefs(text: string, context = ""): string {
     if (slug) named.add(slug);
   }
   const only = named.size === 1 ? [...named][0] : null;
+  // where each known repository is named in the text ("NSH：", "GPUI Kit", "nsh#1", a link): a bare "#N" belongs to the
+  // closest one before it, so a per-project summary links each line's refs to its own project
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const names = [...known.keys()].sort((a, b) => b.length - a.length);
+  const mention = new RegExp(`(?<![\\w-])(${names.map((k) => esc(k).replace(/[-_]/g, "[-_ ]?")).join("|")})(?![\\w-])`, "gi");
+  const marks: [number, string][] = [];
+  for (const m of text.matchAll(mention)) {
+    const flat = (k: string) => k.toLowerCase().replace(/[-_ ]/g, "");
+    const slug = [...known].find(([k]) => flat(k) === flat(m[1]))?.[1];
+    if (slug) marks.push([m.index!, slug]);
+  }
+  const near = (at: number) => { let s: string | null = null; for (const [i, slug] of marks) { if (i >= at) break; s = slug; } return s; };
   const url = (slug: string, n: string) => `https://github.com/${slug}/issues/${n}`;
-  return text.split(/(`[^`\n]*`)/).map((part, i) => (i % 2 ? part : part.replace(
+  let base = 0;
+  return text.split(/(`[^`\n]*`)/).map((part, i) => { const off = base; base += part.length; return i % 2 ? part : part.replace(
     REF,
-    (all, pre: string, name: string | undefined, sp: string, n: string) => {
+    (all, pre: string, name: string | undefined, sp: string, n: string, at: number) => {
       const slug = name && known.get(name.toLowerCase());
       if (slug) return `${pre}[${name}${sp}#${n}](${url(slug, n)})`;
-      if (!only || (name && !sp && !/^(pr|issue)s?$/i.test(name))) return all;
-      return `${pre}${name ? name + sp : ""}[#${n}](${url(only, n)})`;
+      const repo = near(off + at + pre.length) ?? only;
+      if (!repo || (name && !sp && !/^(pr|issue)s?$/i.test(name))) return all;
+      return `${pre}${name ? name + sp : ""}[#${n}](${url(repo, n)})`;
     },
-  ))).join("");
+  ); }).join("");
 }
 
 /** Hub text keeps its line breaks: single newlines become hard breaks, outside code fences. */
