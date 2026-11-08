@@ -25,7 +25,9 @@ let W = "", t: sync.Transport;
 const saved = { ...sync.syncTiming };
 beforeAll(async () => {
   W = mkdtempSync(join(tmpdir(), "noop-budget-"));
-  t = await sync.fakeTransport(join(W, "worker.sqlite"), "budget");
+  // All hosts share this transport in one process; durability is irrelevant to billing.
+  // Avoid thousands of disk fsyncs on macOS while exercising the same Worker SQL.
+  t = await sync.fakeTransport(":memory:", "budget");
 });
 afterAll(() => { Object.assign(sync.syncTiming, saved); try { rmSync(W, { recursive: true, force: true }); } catch {} });
 
