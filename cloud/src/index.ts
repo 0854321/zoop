@@ -143,6 +143,8 @@ export class Hub extends DurableObject<Env> {
     // events.ref, indexed: a task's conversation is read by ref, never by scanning every event's JSON (rows_read is billed per row)
     try { this.sql.exec("ALTER TABLE events ADD COLUMN ref TEXT"); } catch { /* exists */ }
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_ref ON events (ref)");
+    // Indexed receipt lookup: one row per retry, no event scan or polling.
+    this.sql.exec("CREATE INDEX IF NOT EXISTS events_client_id ON events (json_extract(json, '$.client_id')) WHERE json_extract(json, '$.client_id') IS NOT NULL");
     if (this.sql.exec("SELECT v FROM kv WHERE k = 'events_ref_filled'").toArray().length === 0) {
       this.sql.exec("UPDATE events SET ref = json_extract(json, '$.ref') WHERE ref IS NULL");
       this.sql.exec("INSERT OR REPLACE INTO kv (k, v) VALUES ('events_ref_filled', '1')");
@@ -325,8 +327,12 @@ export class Hub extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets("host")) try { ws.send('{"type":"inbox"}'); } catch {}
   }
 
-  ownerMessage(text: string, ref?: string, attachments?: string[], thread = false): Ev {
-    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(attachments?.length ? { attachments } : {}), ...(thread ? { thread } : {}) });
+  ownerMessage(text: string, ref?: string, attachments?: string[], thread = false, clientId?: string): Ev {
+    if (clientId) {
+      const previous = this.sql.exec("SELECT json FROM events WHERE json_extract(json, '$.client_id') = ? LIMIT 1", clientId).toArray()[0];
+      if (previous) return JSON.parse(previous.json as string) as Ev;
+    }
+    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(clientId ? { client_id: clientId } : {}), ...(attachments?.length ? { attachments } : {}), ...(thread ? { thread } : {}) });
     this.toInbox({ type: "message", event: ev });
     if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id });
     return ev;
@@ -641,13 +647,15 @@ export class Hub extends DurableObject<Env> {
     }
 
     if (p === "/api/messages" && m === "POST") {
-      const { text = "", reply_to, attachments, thread } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown };
+      const { text = "", reply_to, attachments, thread, client_id } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown };
+      if (client_id !== undefined && (typeof client_id !== "string" || !/^[\w:-]{1,100}$/.test(client_id)))
+        return json({ error: "bad client_id" }, 400);
       const files = ownerAttachments(attachments);
       if (files === null) return json({ error: "bad attachments" }, 400);
       if (files.some((f) => !this.sql.exec("SELECT 1 FROM media WHERE id = ? LIMIT 1", f.slice(7)).toArray().length))
         return json({ error: "attachment not found" }, 400);
       if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
-      return json(this.ownerMessage(text, reply_to, files, thread === true && /^T-/.test(reply_to ?? "")));
+      return json(this.ownerMessage(text, reply_to, files, thread === true && /^T-/.test(reply_to ?? ""), client_id as string | undefined));
     }
 
     // The owner's images for a message (paste / drop / pick in the app): images only, ≤ 10 MB, kept with the media.

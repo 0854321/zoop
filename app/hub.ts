@@ -5,6 +5,7 @@ export type Kind = "notice" | "decision" | "menu" | "proposals" | "login" | "own
 
 export type HubEvent = {
   id: string;
+  client_id?: string;
   ts: string;
   from: string;
   kind: Kind;

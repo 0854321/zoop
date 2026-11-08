@@ -27,7 +27,7 @@ import { ensureWebClient } from "./webclient";
 
 export type Event = {
   id: string; ts: string; from: string; kind: "notice" | "decision" | "menu" | "proposals" | "login" | "owner" | "system";
-  text: string; ref?: string; options?: string[]; attachments?: string[];
+  text: string; ref?: string; client_id?: string; options?: string[]; attachments?: string[];
   /** Said inside a task's own conversation: shown on the task page, not in the main channel. */
   thread?: boolean;
 };
@@ -505,13 +505,19 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
       }
       if (url.pathname === "/api/events" && req.method === "POST") return json(appendEvent(await req.json() as Event));
       if (url.pathname === "/api/messages" && req.method === "POST") {
-        const { text = "", reply_to, attachments, thread: inThread } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown };
+        const { text = "", reply_to, attachments, thread: inThread, client_id } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown };
+        if (client_id !== undefined && (typeof client_id !== "string" || !/^[\w:-]{1,100}$/.test(client_id)))
+          return json({ error: "bad client_id" }, 400);
+        if (client_id) {
+          const previous = feed("", Infinity).find((e) => e.kind === "owner" && e.client_id === client_id);
+          if (previous) return json(previous);
+        }
         const files = ownerAttachments(attachments);
         if (files === null) return json({ error: "bad attachments" }, 400);
         if (files.some((p) => !existsSync(join(MEDIA, basename(p))))) return json({ error: "attachment not found" }, 400);
         if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
         const thread = inThread === true && /^T-/.test(reply_to ?? "");
-        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to, ...(files.length ? { attachments: files } : {}), ...(thread ? { thread } : {}) });
+        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to, ...(client_id ? { client_id: client_id as string } : {}), ...(files.length ? { attachments: files } : {}), ...(thread ? { thread } : {}) });
         await handleOwnerMessage(text, reply_to, false, { paths: files, key: ev.id, thread });
         return json(ev);
       }

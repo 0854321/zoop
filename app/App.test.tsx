@@ -48,7 +48,7 @@ function hub(posts: { text: string; reply_to?: string }[], extra: unknown[] = []
     [`POST ${URL}/api/messages`]: (r: { body?: string | null }) => {
       const m = JSON.parse(r.body!);
       posts.push(m);
-      return { body: { id: `o${posts.length}`, ts: new Date().toISOString(), from: "owner", kind: "owner", text: m.text, ref: m.reply_to } };
+      return { body: { id: `o${posts.length}`, ts: new Date().toISOString(), from: "owner", kind: "owner", text: m.text, ref: m.reply_to, client_id: m.client_id } };
     },
   };
 }
@@ -436,7 +436,7 @@ describe("channel", () => {
     await app.waitFor("id:opt-D-0001-B");
     await app.press("id:opt-D-0001-B");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "D-0001 B" });
+    expect(posts[0]).toMatchObject({ text: "D-0001 B" });
     // the sidebar drops it at once, before the hub's status catches up
     expect(app.shows("text:要不要升级依赖？")).toBe(true);
     await app.waitUntil(() => !app.shows("text:要不要升级依赖？"));
@@ -456,7 +456,7 @@ describe("channel", () => {
     await app.type("id:composer", "为何我看图片不清晰呢");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1, { timeout: 10_000 });
-    expect(posts[0]).toEqual({ text: "为何我看图片不清晰呢", reply_to: "T-0125" });
+    expect(posts[0]).toMatchObject({ text: "为何我看图片不清晰呢", reply_to: "T-0125" });
     expect(app.shows("id:reply-chip")).toBe(false);
     await app.waitFor("id:reply-to-T-0125");
     expect(app.shows("text:/Tripitaka: nsh #812 +主要修的是文字排版/")).toBe(true);
@@ -468,7 +468,7 @@ describe("channel", () => {
     await app.waitFor("id:ignore-D-H0003");
     await app.press("id:ignore-D-H0003");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "D-H0003 忽略" });
+    expect(posts[0]).toMatchObject({ text: "D-H0003 忽略" });
     await app.waitFor("text:/^Ignored$/");
     await app.rightClick("text:要不要升级依赖？ >> nth=0");
     await app.press("id:side-ignore-D-0001");
@@ -506,7 +506,7 @@ describe("channel", () => {
     await app.type("id:composer", "先等一周");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "先等一周", reply_to: "D-0001" });
+    expect(posts[0]).toMatchObject({ text: "先等一周", reply_to: "D-0001" });
     expect(app.value("id:composer")).toBe("");
   });
 
@@ -526,7 +526,7 @@ describe("channel", () => {
     await app.type("id:composer", "再加个截图");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "再加个截图", reply_to: "T-0009" });
+    expect(posts[0]).toMatchObject({ text: "再加个截图", reply_to: "T-0009" });
   });
 
   test("a machine in the sidebar opens its page, and its tasks open theirs", async () => {
@@ -686,7 +686,7 @@ describe("channel", () => {
     await app.type("id:composer", "截图检查\n两个平台");
     await app.press("id:send");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "截图检查\n两个平台" });
+    expect(posts[0]).toMatchObject({ text: "截图检查\n两个平台" });
   });
 });
 
@@ -720,7 +720,7 @@ describe("images", () => {
     expect(app.shows("id:owner-images")).toBe(true); // the held bubble shows the image
     await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
     expect(uploads.length).toBe(1);
-    expect(posts[0]).toEqual({ text: "看这个报错", attachments: ["/media/shot-1.png"] });
+    expect(posts[0]).toMatchObject({ text: "看这个报错", attachments: ["/media/shot-1.png"] });
   });
 
   test("undo brings the image back to the composer; nothing is uploaded", async () => {
@@ -752,7 +752,7 @@ describe("images", () => {
     expect(app.count("id:attachment")).toBe(1);
     await app.submit("id:composer");
     await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
-    expect(posts[0]).toEqual({ text: "", attachments: ["/media/shot-1.png"] });
+    expect(posts[0]).toMatchObject({ text: "", attachments: ["/media/shot-1.png"] });
   });
 
   test("an image file dropped on the composer attaches", async () => {
@@ -769,10 +769,11 @@ describe("keyboard", () => {
 
   test("a sent message looks sent right away; only a failure shows, and retry sends at once", async () => {
     let fail = true;
+    const attempts: string[] = [];
     const posts: { text: string }[] = [];
     const ok = hub(posts);
     const network = { ...ok, [`POST ${URL}/api/messages`]: (r: { body?: string | null }) =>
-      fail ? { status: 500, body: {} } : (ok as any)[`POST ${URL}/api/messages`](r) };
+      { attempts.push(JSON.parse(r.body!).client_id); return fail ? { status: 500, body: {} } : (ok as any)[`POST ${URL}/api/messages`](r); } };
     const app = await open("./App.tsx", { ...desk, network });
     await app.waitFor("id:composer");
     await app.type("id:composer", "看一下日志");
@@ -785,6 +786,30 @@ describe("keyboard", () => {
     await app.press("label:Retry sending");
     await app.waitUntil(() => posts.length === 1, { timeout: 1000 }); // no second undo window
     await app.waitUntil(() => !app.shows("Couldn’t send"));
+    expect(attempts.length).toBe(2);
+    expect(attempts[0]).toBe(attempts[1]);
+    expect(attempts[0].startsWith("local:")).toBe(true);
+  });
+
+  for (const delay of [0, 4000]) test(`a delivery receipt clears the local bubble when the lost response takes ${delay}ms`, async () => {
+    let receipt: any = null;
+    const app = await open("./App.tsx", { ...desk, network: {
+      ...hub([]),
+      [`GET ${URL}/api/feed?*`]: () => ({ body: { events: receipt ? [receipt] : [] } }),
+      [`POST ${URL}/api/messages`]: (r: { body?: string | null }) => {
+        const m = JSON.parse(r.body!);
+        receipt = { id: "accepted", client_id: m.client_id, ts: new Date().toISOString(), from: "owner", kind: "owner", text: m.text };
+        return { error: "response lost", delay };
+      },
+    } });
+    await app.waitFor("id:composer");
+    await app.type("id:composer", "receipt regression");
+    await app.submit("id:composer");
+    await app.waitUntil(() => receipt !== null, { timeout: 8000 });
+    await app.wait(7500); // covers feed replay both before and after the POST failure
+    expect(app.shows("Couldn’t send")).toBe(false);
+    expect(app.count("text:receipt regression")).toBe(1);
+    expect(app.requests().filter((r) => r.method === "POST" && r.url.endsWith("/api/messages")).length).toBe(1);
   });
 
   test("a just-sent message can be recalled by its button: the words return and nothing is posted", async () => {
@@ -830,7 +855,7 @@ describe("keyboard", () => {
     await app.type("id:composer", "看一下日志");
     await app.submit("id:composer");
     await app.waitUntil(() => posts.length === 1, { timeout: 8000 }); // sent after the 5 s undo window
-    expect(posts[0]).toEqual({ text: "看一下日志" });
+    expect(posts[0]).toMatchObject({ text: "看一下日志" });
     expect(app.value("id:composer")).toBe("");
   });
 
@@ -841,7 +866,7 @@ describe("keyboard", () => {
     // P-0002 is answered (e4), so D-0001 is the pending one.
     await app.keyboard.press("2");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "D-0001 B" });
+    expect(posts[0]).toMatchObject({ text: "D-0001 B" });
   });
 
   test("Alt+number answers while the cursor is in the composer", async () => {
@@ -851,7 +876,7 @@ describe("keyboard", () => {
     await app.type("id:composer", "");
     await app.keyboard.press("alt+2");
     await app.waitUntil(() => posts.length === 1, { timeout: 8000 });
-    expect(posts[0]).toEqual({ text: "D-0001 B" });
+    expect(posts[0]).toMatchObject({ text: "D-0001 B" });
   });
 
   test("r replies, Escape cancels the reply, ? shows the shortcuts", async () => {
@@ -1493,7 +1518,7 @@ describe("commands", () => {
     await app.waitUntil(() => !app.shows("id:command-builtin:update-fleet"));
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "把今天各项目的进展整理成日报发给我" });
+    expect(posts[0]).toMatchObject({ text: "把今天各项目的进展整理成日报发给我" });
     expect(app.value("id:composer")).toBe("");
     expect(app.shows("id:commands")).toBe(false);
 
@@ -1518,7 +1543,7 @@ describe("commands", () => {
     await app.keyboard.press("down");
     await app.keyboard.press("mod+enter");
     await app.waitUntil(() => posts.length === 1);
-    expect(posts[0]).toEqual({ text: "把今天各项目的进展整理成日报发给我" });
+    expect(posts[0]).toMatchObject({ text: "把今天各项目的进展整理成日报发给我" });
     expect(updates.n).toBe(0);
   });
 

@@ -290,13 +290,13 @@ function createHub(cfg: Config) {
     return ((await r.json()) as { url: string }).url;
   }
 
-  async function send(text: string, replyTo: string | null, files: Attachment[] = [], thread = false) {
+  async function send(text: string, replyTo: string | null, files: Attachment[] = [], thread = false, clientId?: string) {
     const attachments: string[] = [];
     for (const f of files) attachments.push(await upload(f));
     const r = await fetch(`${cfg.url}/api/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ text, ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}), ...(thread ? { thread } : {}) }),
+      body: JSON.stringify({ text, ...(clientId ? { client_id: clientId } : {}), ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}), ...(thread ? { thread } : {}) }),
     });
     if (r.status === 401) conn.set("unauthorized");
     if (!r.ok) throw new Error(L(`Send failed (${r.status})`, `发送失败（${r.status}）`));
@@ -3790,7 +3790,15 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const atEnd = signal(true);
   const unseen = signal(0);
   const chosen = signal<string | null>(null);
-  let seq = 0;
+
+  // The server can accept a message even when the POST response is lost (e.g. iOS
+  // suspends the app). A streamed/replayed event is also a delivery receipt.
+  effect(() => {
+    const receipts = new Set(hub.events().filter((e) => e.kind === "owner").map((e) => e.client_id));
+    const pending = untracked(outbox);
+    const remaining = pending.filter((o) => !receipts.has(o.id));
+    if (remaining.length !== pending.length) outbox.set(remaining);
+  });
 
   /** The timeline: the hub's events and the messages on their way. */
   const shown = computed(() =>
@@ -3889,7 +3897,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // A message reads as sent at once but leaves a few seconds later, so 撤回 (or Mod+Z) can still take it back.
   const UNDO_MS = 5000;
   const holds = new Map<string, ReturnType<typeof setTimeout>>();
-  function send(text: string, ref: string | null, id = `local:${++seq}`, files: Attachment[] = []) {
+  function send(text: string, ref: string | null, id = `local:${crypto.randomUUID()}`, files: Attachment[] = []) {
     const ts = new Date().toISOString();
     outbox.update((o) => [...o.filter((x) => x.id !== id), { id, ts, text, ref, files, state: "held" }]);
     jumpToEnd();
@@ -3935,11 +3943,11 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   }
   async function deliver(id: string) {
     const o = outbox().find((x) => x.id === id);
-    if (!o) return;
+    if (!o || o.state === "sending") return;
     const { text, ref, files } = o;
     outbox.update((l) => l.map((x) => (x.id === id ? { ...x, state: "sending" } : x)));
     try {
-      markSent(await hub.send(text, ref, files));
+      markSent(await hub.send(text, ref, files, false, id));
       outbox.update((o) => o.filter((x) => x.id !== id));
     } catch {
       outbox.update((o) => o.map((x) => (x.id === id ? { ...x, state: "failed" } : x)));

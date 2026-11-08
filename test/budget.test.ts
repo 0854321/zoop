@@ -17,7 +17,9 @@ const INDEX_FACTOR = 3;
  *  owner app's status fetch on each reconnect. Each costs about two rows written where it writes at all. */
 const CHANNEL_REQUESTS = (HOSTS.length * TASKS_PER_HOST * 2 + 1) * 3; // three owner clients, pushed membership changes only
 const OTHER_REQUESTS = CHANNEL_REQUESTS + (HOSTS.length * TASKS_PER_HOST * 2 + 96) + 50 * 3 + Math.ceil(DAY_MIN / 20) + 50;
-const OTHER_ROWS = (HOSTS.length * TASKS_PER_HOST * 2 + 96) * 2 + 50 * 6 + 2_000; // + events the fleet reports
+// The receipt index only includes owner sends with client_id; fleet events add no index rows.
+const RECEIPT_ROWS = 50;
+const OTHER_ROWS = RECEIPT_ROWS + (HOSTS.length * TASKS_PER_HOST * 2 + 96) * 2 + 50 * 6 + 2_000; // + events the fleet reports
 
 let W = "", t: sync.Transport;
 const saved = { ...sync.syncTiming };
