@@ -2171,7 +2171,7 @@ function Sidebar(props: {
             <Each of={props.channels.list()} key={(c) => c.slug}>
               {(c) => (
                 <SideRow onPress={() => props.onChannel(c().slug)} selected={props.channel() === c().slug} title={c().goal || c().name}>
-                  <Text style={{ width: 17, textAlign: "center", fontSize: 15, color: colors.faint }}>#</Text>
+                  <Text style={{ width: 17, textAlign: "right", fontSize: 15, color: colors.faint }}>#</Text>
                   <Text testID={`side-channel-${c().slug}`} style={{ ...rowText(), color: c().status === "archived" || c().stale ? colors.faint : props.channels.unread(c()) ? colors.text : colors.muted, fontWeight: props.channels.unread(c()) ? "600" : "400" }}>{c().name}</Text>
                   <If when={props.channels.unread(c())} else={
                     <If when={c().status === "archived" || c().stale}>
