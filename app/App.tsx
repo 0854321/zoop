@@ -1204,12 +1204,11 @@ function Message(props: {
     );
   return (
     <View style={{ flexDirection: "row", gap: 14, paddingVertical: 10 }} onMouseEnter={() => over.set(true)} onMouseLeave={() => over.set(false)}>
-      <If when={wide()}><Avatar testID={`avatar-column-${e.id}`} from={e.from} /></If>
+      <If when={wide()}><View style={{ position: "relative", alignSelf: "flex-start" }}><Avatar testID={`avatar-column-${e.id}`} from={e.from} /><If when={props.unread?.()}><View testID={`unread-dot-${e.id}`} accessibilityLabel={L("Unread", "未读")} style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: colors.background, backgroundColor: colors.info }} /></If></View></If>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 22 }}>
-          <If when={!wide()}><Avatar testID={`avatar-inline-${e.id}`} from={e.from} small /></If>
+          <If when={!wide()}><View style={{ position: "relative" }}><Avatar testID={`avatar-inline-${e.id}`} from={e.from} small /><If when={props.unread?.()}><View testID={`unread-dot-${e.id}`} accessibilityLabel={L("Unread", "未读")} style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: colors.background, backgroundColor: colors.info }} /></If></View></If>
           <Text style={{ fontSize: 15, fontWeight: "600", color: colors.text }}>{displayName(e.from)}</Text>
-          <If when={props.unread?.()}><View testID={`unread-dot-${e.id}`} accessibilityLabel={L("Unread", "未读")} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accentFill }} /></If>
           <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
           {tag && !ask ? <Badge label={tag} /> : null}
         </View>
@@ -1230,7 +1229,10 @@ function Message(props: {
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{e.ref}</Text>
               <View style={{ flex: 1 }} />
               <If when={done()}>
-                <Text style={{ fontSize: 13, color: colors.up }}>{L("✓ Replied", "✓ 已回复")}</Text>
+                <View testID={`replied-${e.ref}`} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Icon name="check" size={14} tint={colors.up} />
+                  <Text style={{ fontSize: 13, color: colors.up }}>{L("Replied", "已回复")}</Text>
+                </View>
               </If>
             </View>
             {e.kind === "proposals" && proposalsOf(e.text).length ? (
