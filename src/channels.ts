@@ -17,7 +17,7 @@ export function createChannel(name: string, goal = ""): ChannelRow {
   return parseChannel(`channels/${slug}.md`, readFileSync(file(slug), "utf8"))!;
 }
 
-/** The owner's edits: a new goal, archive / unarchive. */
+/** The owner's edits: rename, a new goal, archive / unarchive. The slug never changes, so refs stay valid. */
 export function updateChannel(slug: string, patch: { goal?: unknown; archived?: unknown; name?: unknown }): ChannelRow | string {
   if (!CHANNEL_SLUG.test(slug) || !existsSync(file(slug))) return `channel ${slug} not found`;
   const { meta, body } = readDoc(file(slug));

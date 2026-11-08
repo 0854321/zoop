@@ -1370,10 +1370,10 @@ function createChannels(hub: Hub, reads: MessageReads) {
       const refs = new Set(c.refs ?? c.items.filter((i) => i.kind !== "report").map((i) => i.id));
       return reads.unread().filter((e) => (e.channel ? e.channel === c.slug : !!e.ref && refs.has(e.ref))).length;
     },
-    async save(slug: string, patch: { goal?: string; archived?: boolean }) {
+    async save(slug: string, patch: { name?: string; goal?: string; archived?: boolean }) {
       generation++;
       const r = await hub.api("POST", "/api/channels", { slug, ...patch });
-      if (r.ok) list.set(sortChannels(untracked(list).map((c) => (c.slug === slug ? { ...c, ...(patch.goal !== undefined ? { goal: patch.goal } : {}), ...(patch.archived !== undefined ? { status: patch.archived ? "archived" : "active" } : {}) } : c))));
+      if (r.ok) list.set(sortChannels(untracked(list).map((c) => (c.slug === slug ? { ...c, ...(patch.name ? { name: patch.name } : {}), ...(patch.goal !== undefined ? { goal: patch.goal } : {}), ...(patch.archived !== undefined ? { status: patch.archived ? "archived" : "active" } : {}) } : c))));
       return r.ok;
     },
   };
@@ -1385,6 +1385,7 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
   const ch = () => props.channels.list().find((c) => c.slug === props.slug);
   const editing = signal(false);
   const goal = signal("");
+  const name = signal("");
   const busy = signal(false);
 
   // the channel reads like the main chat narrowed to its topic: results and decisions, newest last; no task plumbing
@@ -1419,7 +1420,9 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
 
   const saveGoal = async () => {
     busy.set(true);
-    if (await props.channels.save(props.slug, { goal: untracked(goal).trim() })) editing.set(false);
+    const n = untracked(name).trim(), g = untracked(goal).trim(), c = ch()!;
+    const patch = { ...(n && n !== c.name ? { name: n } : {}), ...(g !== c.goal ? { goal: g } : {}) };
+    if (!Object.keys(patch).length || (await props.channels.save(props.slug, patch))) editing.set(false);
     busy.set(false);
   };
   return (
@@ -1443,6 +1446,15 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
               }>
                 <View style={{ gap: 8, paddingTop: 4 }}>
                   <Input
+                    testID="channel-name-input"
+                    value={name()}
+                    onChange={({ value }) => name.set(value)}
+                    onSubmit={() => void saveGoal()}
+                    placeholder={L("Channel name", "Channel 名称")}
+                    class="placeholder:text-faint"
+                    style={{ height: 38, paddingHorizontal: 12, fontSize: 15, fontWeight: "600", color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
+                  />
+                  <Input
                     testID="channel-goal-input"
                     value={goal()}
                     onChange={({ value }) => goal.set(value)}
@@ -1460,7 +1472,7 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
             </View>
             <View style={{ flexDirection: "row", gap: 4 }}>
               <If when={!editing()}>
-                <Btn testID="channel-edit-goal" kind="ghost" label={L("Edit goal", "编辑目标")} onPress={() => { goal.set(ch()!.goal); editing.set(true); }} />
+                <Btn testID="channel-edit-goal" kind="ghost" label={L("Edit", "编辑")} onPress={() => { name.set(ch()!.name); goal.set(ch()!.goal); editing.set(true); }} />
               </If>
               <Btn testID="channel-archive" kind="ghost" label={ch()!.status === "archived" ? L("Unarchive", "取消归档") : L("Archive", "归档")}
                 onPress={() => void props.channels.save(props.slug, { archived: ch()!.status !== "archived" })} />

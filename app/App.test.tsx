@@ -593,12 +593,14 @@ describe("channel", () => {
     await app.waitFor("omamail 的 PR 与 issue");
     await app.press("id:channel-edit-goal");
     await app.waitFor("id:channel-goal-input");
+    await app.type("id:channel-name-input", " 邮件");
     await app.type("id:channel-goal-input", "，以及发布");
     await app.press("id:channel-save-goal");
     await app.waitFor("omamail 的 PR 与 issue，以及发布");
+    await app.waitFor("Omamail 邮件");
     await app.press("id:channel-archive");
     await app.waitFor("id:channel-archived");
-    expect(posts).toEqual([{ slug: "omamail", goal: "omamail 的 PR 与 issue，以及发布" }, { slug: "omamail", archived: true }]);
+    expect(posts).toEqual([{ slug: "omamail", name: "Omamail 邮件", goal: "omamail 的 PR 与 issue，以及发布" }, { slug: "omamail", archived: true }]);
   });
 
   test("a channel is its own room: messages sent there carry the channel, and its talk stays out of the main chat", async () => {

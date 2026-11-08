@@ -486,7 +486,7 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
         return c ? json({ events: channelDigest(feed("", 5000), c.refs ?? [], c.slug) }) : json({ error: "not found" }, 404);
       }
       if (url.pathname === "/api/channels" && req.method === "POST") {
-        const { slug, ...patch } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };
+        const { slug, ...patch } = (await req.json().catch(() => ({}))) as { slug?: string; name?: unknown; goal?: unknown; archived?: unknown };
         const r = await locked(async () => { const r = updateChannel(String(slug ?? ""), patch); if (typeof r !== "string") await _commitPush(`channel ${slug}`); return r; });
         return typeof r === "string" ? json({ error: r }, 404) : json({ ok: true, channel: r });
       }
