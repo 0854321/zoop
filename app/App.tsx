@@ -37,7 +37,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline, type TextViewRef } from "nsh/base";
+import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, currentWindow } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
 // shellInfo through the namespace: runtimes older than it lack the export, and a missing named import would fail to link
@@ -48,7 +48,6 @@ import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
 import { type Channel, channelDigest, sortChannels } from "./channels";
 import { isRead, markRead, unreadEvents, toggleMessageRead, type MessageReadState as ReadState } from "./read";
-import { appendQuote } from "./quote";
 import { setupTray, type TrayChat } from "./tray";
 import { createTimelineWindow } from "./timeline";
 import { CHECK_EVERY_MS, createUpdates, shellLine, type ShellInfo, type UpdateState } from "./update";
@@ -703,26 +702,8 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
   );
 }
 
-// Invalidates pending Markdown reads when another selection or composer action wins.
-let selectionGeneration = 0;
-
-/** Selectable message Markdown; selection previews are owned by the composer. */
-function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string; onQuote?: (markdown: string) => void }) {
-  let documentRef: TextViewRef | undefined;
-  let selectionVersion = 0;
-  const captureSelection = async ({ text }: { text: string }) => {
-    if (!props.onQuote || !text.trim()) return;
-    const version = ++selectionVersion;
-    const generation = ++selectionGeneration;
-    // Publish immediately so a selection in another message replaces the preview.
-    props.onQuote(text);
-    try {
-      const markdown = await documentRef?.selectedText({ format: "markdown" });
-      if (version === selectionVersion && generation === selectionGeneration && markdown?.trim()) props.onQuote(markdown.trim());
-    } catch { /* The plain-text selection remains available. */ }
-  };
-  cleanup(() => { selectionVersion++; });
-  effect(() => { props.text; selectionVersion++; });
+/** Selectable message Markdown. */
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string}) {
   const small = !!(props.muted || props.quiet);
   const fontSize = props.quiet ? 14 : props.muted ? size.small : size.text;
   const lineHeight = small ? 21 : size.line;
@@ -733,8 +714,6 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
   return (
     <View style={{ gap: 6 }}>
       <TextView
-        ref={(ref) => { documentRef = ref; }}
-        onSelectionChange={captureSelection}
         document={doc()}
         selectable
         onLinkPress={({ url }) => { if (/^(https?|mailto):/i.test(url)) void openUrl(url).catch(() => {}); }}
@@ -748,22 +727,6 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
       />
     </View>
   );
-}
-
-/** Selection actions belong to the floating composer, outside the scrolling messages. */
-function QuotePreview(props: { text: string; onQuote: () => void; onCancel: () => void }) {
-  return <If when={props.text}>
-    <View testID="quote-preview" style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 4, ...composerGlass(), borderRadius: radius.inset }}>
-      <Button testID="quote-selection" accessibilityLabel={L("Quote selection", "引用片段")} onPress={() => { selectionGeneration++; props.onQuote(); }}
-        style={{ flex: 1, minWidth: 0, minHeight: touch ? 44 : 32, justifyContent: "center", borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
-        <Text style={{ numberOfLines: 1, fontSize: size.small, color: colors.text }}>{props.text.replace(/\s+/g, " ").trim()}</Text>
-      </Button>
-      <Button testID="cancel-quote" accessibilityLabel={L("Cancel quote", "取消引用片段")} onPress={() => { selectionGeneration++; props.onCancel(); }}
-        style={{ width: touch ? 44 : 32, height: touch ? 44 : 32, alignItems: "center", justifyContent: "center", borderRadius: radius.control }} hoverStyle={hovered()} focusStyle={focusRing()}>
-        <Icon name="close" size={14} tint={colors.muted} />
-      </Button>
-    </View>
-  </If>;
 }
 
 /** Puts an image (by URL) on the system clipboard as an image, not as its link. */
@@ -1159,7 +1122,6 @@ function Message(props: {
   target: () => string | null;
   onAnswer: (ref: string, choice: string) => void;
   onReply: (ref: string, note?: string) => void;
-  onQuote?: (markdown: string, ref?: string) => void;
   selection?: Map<string, Signal<Set<string>>>;
   /** Unread on this device; the dot by the name and the action under the message. */
   unread?: () => boolean;
@@ -1181,7 +1143,7 @@ function Message(props: {
   };
   const body = (
     <View style={{ gap: 10 }}>
-      <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system" && isHub(e.from)} context={about()} onQuote={props.onQuote ? (markdown) => props.onQuote?.(markdown, e.ref) : undefined} />
+      <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system" && isHub(e.from)} context={about()} />
       <If when={e.attachments?.length}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
@@ -1557,22 +1519,12 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   });
   const settled = computed(() => answeredIds(talk()));
   const text = signal("");
-  const taskExcerpt = signal("");
-  let taskComposer: InputRef | undefined;
-  const quote = (markdown: string) => {
-    taskExcerpt.set("");
-    text.update((draft) => appendQuote(draft, markdown));
-    taskComposer?.focus();
-    taskComposer?.setSelection(text().length);
-  };
   const note = signal("");
   const hint = signal("");
   let said = 0;
   async function say() {
     const v = text().trim();
     if (!v) return;
-    selectionGeneration++;
-    taskExcerpt.set("");
     // reads as sent at once; only a failure brings the words back to the box, with the reason
     const id = `local:${++said}`;
     saying.update((l) => [...l, { id, ts: new Date().toISOString(), from: "owner", kind: "owner", ref: props.id, thread: true, text: v }]);
@@ -1636,7 +1588,6 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                 {(e) => isAsk(e()) ? (
                   <Message hub={props.hub} event={e()} answered={settled} target={() => null}
                     onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true).catch((err) => note.set(String((err as Error)?.message ?? err)))}
-                    onQuote={(markdown) => taskExcerpt.set(markdown)}
                     onReply={() => hint.set(L("Write your instructions in the box below; they’ll be sent as the answer to this card.", "在下面的输入框写你的指示，会作为这张卡片的回答。"))} />
                 ) : (
                   <View style={{ gap: 3 }}>
@@ -1644,7 +1595,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                       <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? L("You", "你") : displayName(e().from)}</Text>
                       {`  ${timeOf(e().ts)}`}
                     </Text>
-                    <Rich text={e().text} onQuote={e().from !== "owner" ? (markdown) => taskExcerpt.set(markdown) : undefined} />
+                    <Rich text={e().text} />
                     <If when={e().attachments?.length}>
                       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 8 }}>
                         <Each of={e().attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
@@ -1692,7 +1643,6 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         onLayout={({ bounds }) => composerHeight.set(bounds.size.height)}
         style={{ position: "absolute", bottom: 0, width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 10, paddingTop: 4, paddingBottom: 12, pointerEvents: "box-none" }}
       >
-        <QuotePreview text={taskExcerpt()} onQuote={() => quote(taskExcerpt())} onCancel={() => taskExcerpt.set("")} />
         <If when={note()}>
           <Text style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>
         </If>
@@ -1702,7 +1652,6 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 16, paddingRight: 8, paddingVertical: 8, ...composerGlass() }}>
           <Input
             testID="task-composer"
-            ref={(ref) => { taskComposer = ref; }}
             multiline
             value={text()}
             onChange={({ value }) => text.set(value)}
@@ -3829,7 +3778,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // Entering the channel (first load, back from a task or settings) shows the latest messages.
   effect(() => { if (onChannel() && !jumping) { atEnd.set(true); unseen.set(0); toEnd(); } });
   const draft = signal("");
-  const excerpt = signal<{ text: string; ref?: string } | null>(null);
   const replyTo = signal<string | null>(null);
   /** What the reply answers, for the chip ("Kai：nsh #812 主要修的是…"); none for a decision (its id says it). */
   const replyNote = signal<string | null>(null);
@@ -4077,8 +4025,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const r = replyTo() ?? (!files.length && /^([1-9](\s*[,，]\s*[1-9])*|[A-Za-z]|全部|都不要)$/.test(v) ? target() : null);
     draft.set("");
     replyTo.set(null);
-    selectionGeneration++;
-    excerpt.set(null);
     attachments.set([]);
     attachNote.set(null);
     inputHeight.set(28);
@@ -4580,7 +4526,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                           target={target}
                           onAnswer={answer}
                           onReply={reply}
-                          onQuote={(text, ref) => excerpt.set({ text, ref })}
                           selection={proposalSelection}
                           unread={() => reads.loaded() && !isRead(row.event, reads.state())}
                           onToggleRead={() => reads.toggle(row.event)}
@@ -4664,16 +4609,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   </If>
                 </View>
               </If>
-              <QuotePreview text={excerpt()?.text ?? ""} onCancel={() => excerpt.set(null)} onQuote={() => {
-                const selected = excerpt();
-                if (!selected) return;
-                excerpt.set(null);
-                draft.update((value) => appendQuote(value, selected.text));
-                replyNote.set(null);
-                replyTo.set(selected.ref ?? null);
-                composer?.focus();
-                composer?.setSelection(draft().length);
-              }} />
               <If when={slash() != null}>
                 <CommandList
                   items={commands()}
