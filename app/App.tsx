@@ -2132,15 +2132,23 @@ function Sidebar(props: {
           flexDirection: "row",
           alignItems: "center",
           gap: 4,
-          paddingLeft: 18,
-          paddingRight: 10,
+          paddingHorizontal: 10,
           paddingBottom: touch ? safeArea().bottom : 0,
         }}
       >
-        <UserMenu hub={props.hub} onSettings={props.onSettings} reads={props.channels.reads} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <UserMenu hub={props.hub} onSettings={props.onSettings} reads={props.channels.reads} />
+        </View>
       </View>
     </View>
   );
+}
+
+/** A fixed colour per initial, so the same account always gets the same avatar colour. */
+function initialColor(ch: string): string {
+  const c = ch.toUpperCase().charCodeAt(0);
+  const index = c >= 65 && c <= 90 ? (c - 65) % 10 + 1 : 10;
+  return token(`avatar-${index}` as "avatar-1");
 }
 
 /** The sidebar account, opening the user menu (settings, appearance, language). */
@@ -2166,8 +2174,8 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
   const sep = () => <MenuSeparator style={{ height: 1, marginVertical: touch ? 6 : 4, marginHorizontal: m.sepX, backgroundColor: alpha(colors.text, 0.07) }} />;
   const initial = () => (account().slice(0, 1) || "?").toUpperCase();
   const avatar = (box: number) => (
-    <View style={{ width: box, height: box, borderRadius: box / 2, flexShrink: 0, alignItems: "center", justifyContent: "center", backgroundColor: alpha(colors.text, 0.08) }}>
-      <Text style={{ fontSize: Math.round(box * 0.44), fontWeight: "600", color: colors.text }}>{initial()}</Text>
+    <View style={{ width: box, height: box, borderRadius: box / 2, flexShrink: 0, alignItems: "center", justifyContent: "center", backgroundColor: initialColor(initial()) }}>
+      <Text style={{ fontSize: Math.round(box * 0.44), fontWeight: "600", color: token("avatar-foreground") }}>{initial()}</Text>
     </View>
   );
   /** One of the two appearances, as a segment whose raised thumb marks the current one. */
@@ -2205,11 +2213,10 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
           testID="user-menu"
           accessibilityLabel={L("Account menu", "用户菜单")}
           hoverStyle={hovered()}
-          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: touch ? 44 : 40, paddingLeft: 6, paddingRight: 8, marginLeft: -6, borderRadius: radius.control, borderCurve: "continuous" }}
+          style={{ width: "100%", flexDirection: "row", alignItems: "center", gap: 8, minHeight: touch ? 44 : 40, paddingLeft: 8, paddingRight: 10, borderRadius: radius.control, borderCurve: "continuous" }}
         >
           {avatar(24)}
           <Text testID="user-account" style={{ flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
-          <If when={props.reads.main().length}><Text testID="menu-unread-count" style={{ fontSize: 12, color: colors.accent }}>{String(props.reads.main().length)}</Text></If>
           <Icon name="chevron-up" size={12} tint={colors.faint} />
         </View>
       }
