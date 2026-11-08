@@ -619,11 +619,13 @@ describe("channel", () => {
     await app.waitFor("id:side-channel-nsh-i18n");
     await app.press("id:side-channel-nsh-i18n");
     await app.waitFor("日文已完成 80%，剩下 API 文档");
-    await app.type("id:channel-composer", "韩文也一起补上");
-    await app.press("id:channel-send");
-    await app.waitUntil(() => posts.length === 1);
+    await app.type("id:composer", "韩文也一起补上");
+    await app.press("id:send");
+    await app.waitUntil(() => posts.length === 1, { timeout: 10_000 });
     expect(posts[0]).toMatchObject({ text: "韩文也一起补上", channel: "nsh-i18n" });
     await app.waitFor("韩文也一起补上");
+    await app.press("text:Channel");
+    await app.waitUntil(() => !app.shows("韩文也一起补上"));
   });
 
   test("a dropped connection stays quiet until reconnecting keeps failing", async () => {
@@ -1631,7 +1633,6 @@ test("channels share per-message read state with main chat, and Menu can mark al
   await app.waitFor("text:Shared channel result");
   expect(app.shows("text:Running cargo test")).toBe(false); // task-thread steps stay on the task page
   expect(app.shows("text:收到 D-1")).toBe(false);
-  await app.press("id:channel-msg-shared-old");
   await app.waitUntil(() => {
     const raw = app.storage()[`hub.read:${URL}`];
     return !!raw && JSON.parse(raw).ids.includes("shared-old");
