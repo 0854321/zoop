@@ -1668,3 +1668,33 @@ test("channels share per-message read state with main chat, and Menu can mark al
   await app.waitUntil(() => { const raw = app.storage()[`hub.read:${URL}`]; return !!raw && !!JSON.parse(raw).through; });
   expect(app.shows("id:menu-unread-count")).toBe(false);
 });
+
+
+describe("decision notification", () => {
+  for (const platform of ["ios", "android", "macos", "web"] as const) {
+    test(`${platform}: a long decision can be dismissed or opened on a narrow screen`, async () => {
+      let next: unknown[] = [];
+      const app = await open("./App.tsx", {
+        storage: STORAGE, platform, width: 320, height: 740,
+        safeArea: { top: 59, bottom: 34, left: 0, right: 0 },
+        network: {
+          ...hub([]),
+          [`GET ${URL}/api/feed?*`]: () => ({ body: { events: next } }),
+        },
+      });
+      await app.waitFor("id:composer");
+      expect(app.shows("id:decision-notification")).toBe(false);
+      next = [{ ...prDecision, id: "toast-1", ref: "D-0203", ts: new Date().toISOString(),
+        text: "https://github.com/longbridge/gpui-kit/pull/3848 需要你点合并：按需给窗口加圆角，所有检查已通过" }];
+      await app.waitFor("id:decision-notification", { timeout: 10000 });
+      expect(app.shows("text:gpui-kit#3848 需要你点合并：按需给窗口加圆角，所有检查已通过")).toBe(true);
+      await app.press("id:dismiss-decision-notification");
+      expect(app.shows("id:decision-notification")).toBe(false);
+      next = [{ ...prDecision, id: "toast-2", ref: "D-0204", ts: new Date().toISOString() }];
+      await app.waitFor("id:decision-notification", { timeout: 10000 });
+      await app.press("id:toast");
+      expect(app.shows("id:decision-notification")).toBe(false);
+      await app.waitFor("id:opt-D-0204-A");
+    });
+  }
+});

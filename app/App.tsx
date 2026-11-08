@@ -15,6 +15,7 @@ import {
   effect,
   host,
   Image,
+  Overlay,
   keymap,
   lifecycle,
   locale,
@@ -37,7 +38,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, Toast, ToastStack, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, currentWindow } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
 // shellInfo through the namespace: runtimes older than it lack the export, and a missing named import would fail to link
@@ -900,7 +901,12 @@ function optionText(e: HubEvent, c: string): string {
   if (c === "all" || c === "none") return choiceLabel(c);
   const full = (e.options ?? []).find((o) => new RegExp(`^\\s*${c}\\s*([:：.、)]|\\s)`).test(o));
   // a button can't hold a link: a GitHub PR / issue URL reads as "nsh#747"
-  return full ? full.trim().replace(/https:\/\/github\.com\/[\w.-]+\/([\w.-]+)\/(?:pull|issues)\/(\d+)\/?/g, "$1#$2") : choiceLabel(c);
+  return full ? shortGitHubRefs(full.trim()) : choiceLabel(c);
+}
+
+/** Plain text that can't hold a link (buttons, notifications): a GitHub PR / issue URL reads as "nsh#747". */
+function shortGitHubRefs(text: string): string {
+  return text.replace(/https:\/\/github\.com\/[\w.-]+\/([\w.-]+)\/(?:pull|issues)\/(\d+)\/?/g, "$1#$2");
 }
 
 type Proposal = { n: string; title: string; agent: string; note: string };
@@ -4944,37 +4950,40 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       <SettingsToast state={settings.toast} />
       <If when={toast()}>
         {(t) => (
-          <View style={{ position: "absolute", top: size.bar + 10, left: 0, right: 0, alignItems: "center", paddingHorizontal: 12, pointerEvents: "box-none" }}>
-            <View
-              role="button"
-              testID="toast"
-              accessibilityLabel={L(`View ${t().ref}`, `查看 ${t().ref}`)}
-              onPress={() => {
-                const ref = t().ref; // read before clearing: the toast's accessor is null after set(null)
-                toast.set(null);
-                pick(ref);
-              }}
-              style={{
-                maxWidth: 520,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 10,
-                paddingVertical: 10,
-                paddingHorizontal: 14,
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: colors.border,
-                backgroundColor: colors.surface,
-                boxShadow: "0 10px 30px rgba(0,0,0,0.16)",
-              }}
-            >
-              <Dot tone="wait" />
-              <Text style={{ flexShrink: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>
-                <Text style={{ fontWeight: "600" }}>{L(`New decision ${t().ref}`, `新决策 ${t().ref}`)}</Text> · {t().text}
-              </Text>
-              <Text style={{ fontSize: 14, fontWeight: "600", color: colors.accent }}>{L("View", "查看")}</Text>
-            </View>
-          </View>
+          <Overlay style={{ top: touch ? safeArea().top + 8 : size.bar + 10, left: 0, right: 0, alignItems: "center", paddingHorizontal: 12, pointerEvents: "box-none" }}>
+            <ToastStack placement="topCenter" onCancel={() => toast.set(null)}
+              motion={reduceMotion() ? { duration: 0 } : undefined}
+              style={{ width: "100%", maxWidth: 520 }}>
+              <Toast testID="decision-notification" transitionStatus="present" swipeDirection="up"
+                accessibilityLabel={L(`New decision ${t().ref}: ${t().text}`, `新决策 ${t().ref}：${t().text}`)}
+                onDismissRequest={() => toast.set(null)}
+                style={{ width: "100%", flexDirection: "row", alignItems: "flex-start", borderRadius: radius.card,
+                  borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.12)" }}>
+                <Button testID="toast" accessibilityLabel={L(`View ${t().ref}`, `查看 ${t().ref}`)}
+                  class="focus-visible:ring-2 focus-visible:ring-ring active:opacity-70"
+                  onPress={() => {
+                    const ref = t().ref;
+                    toast.set(null);
+                    pick(ref);
+                  }}
+                  style={{ flex: 1, minWidth: 0, minHeight: 44, padding: 12, alignItems: "stretch", gap: 4 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Dot tone="wait" />
+                    <Text style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: "600", color: colors.muted, numberOfLines: 1 }}>
+                      {L(`New decision ${t().ref}`, `新决策 ${t().ref}`)}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 16, color: colors.text, numberOfLines: 2 }}>{shortGitHubRefs(t().text)}</Text>
+                </Button>
+                <Button testID="dismiss-decision-notification" accessibilityLabel={L("Dismiss notification", "关闭通知")}
+                  onPress={() => toast.set(null)} class="focus-visible:ring-2 focus-visible:ring-ring active:opacity-70"
+                  style={{ width: 44, height: 44, flexShrink: 0, alignItems: "center", justifyContent: "center" }}>
+                  <Icon name="close" size={16} tint={colors.muted} />
+                </Button>
+              </Toast>
+            </ToastStack>
+          </Overlay>
         )}
       </If>
 
