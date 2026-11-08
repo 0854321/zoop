@@ -34,7 +34,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.nsh-dist
-        key: nsh-dist-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ inputs.ref }}${{ steps.apple-sdk.outputs.key }}${{ inputs.target == 'macos' && format('-{0}', inputs.rust-target || 'native') || '' }}
+        key: nsh-dist-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ inputs.ref }}${{ steps.apple-sdk.outputs.key }}${{ inputs.target == 'macos' && format('-{0}', inputs.rust-target || 'native') || '' }}${{ inputs.target == 'linux' && '-crypto-v1' || '' }}
 
     # The x86_64 CLI also generates x86_64 OTA archive names. It needs Rosetta even on cache hits.
     - if: runner.os == 'macOS' && runner.arch == 'ARM64' && inputs.rust-target == 'x86_64-apple-darwin'
@@ -109,7 +109,7 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y clang llvm libclang-dev pkg-config
-        [ "$TARGET" != linux ] || sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+        [ "$TARGET" != linux ] || sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev xvfb xauth
     - if: steps.cache.outputs.cache-hit != 'true' && (steps.nightly.outputs.used != 'true' || inputs.target == 'linux') && runner.os == 'Windows'
       shell: bash
       run: |
@@ -143,7 +143,8 @@ runs:
         case "$TARGET" in
           linux)
             # noop shows no web views, so the app needs only GTK 4 and not WebKitGTK.
-            cargo build --release --locked -p nsh-linux-app --no-default-features --features js
+            # Sending uses crypto.randomUUID() for optimistic message IDs. `js` alone omits Web Crypto.
+            cargo build --release --locked -p nsh-linux-app --no-default-features --features js,crypto
             rm -rf "$out/runtime/linux"; install -d "$out/runtime/linux"; cp target/release/nsh-linux-app "$out/runtime/linux/" ;;
           windows)
             cargo build --release --locked -p nsh-windows-app
@@ -184,6 +185,13 @@ runs:
     - if: inputs.target == 'ios'
       shell: bash
       run: bash "$GITHUB_WORKSPACE/scripts/check-ios-sdk.sh" "$HOME/.nsh-dist/runtime/ios/iphoneos/nsh-ios-app"
+
+    # Test the actual release runner, including cache hits: development hosts enable all standard modules.
+    - if: inputs.target == 'linux'
+      shell: bash
+      run: |
+        TMPDIR="$RUNNER_TEMP" NSH="$HOME/.nsh-dist/bin/nsh" \
+          bash "$GITHUB_WORKSPACE/scripts/check-linux-runtime.sh" "$HOME/.nsh-dist/runtime/linux/nsh-linux-app"
 
     - shell: bash
       run: |
