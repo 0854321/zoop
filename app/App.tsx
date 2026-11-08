@@ -1095,7 +1095,7 @@ function OwnerBubble(props: { hub: Hub; event: HubEvent; out?: Outgoing; onRetry
           </View>
         </If>
         <If when={e.attachments?.length}>
-          <View testID="owner-images" style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6, opacity: props.out ? 0.65 : 1 }}>
+          <View testID="owner-images" style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "flex-end", gap: 6, opacity: props.out ? 0.65 : 1 }}>
             <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
           </View>
         </If>
@@ -1183,7 +1183,7 @@ function Message(props: {
     <View style={{ gap: 10 }}>
       <Rich text={ask ? e.text.replace(/\n*^建议：.*$/m, "").trimEnd() : e.text} muted={e.kind === "system" && isHub(e.from)} context={about()} onQuote={props.onQuote ? (markdown) => props.onQuote?.(markdown, e.ref) : undefined} />
       <If when={e.attachments?.length}>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 10 }}>
           <Each of={e.attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
         </View>
       </If>
@@ -1722,7 +1722,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
                     </Text>
                     <Rich text={e().text} onQuote={e().from !== "owner" ? (markdown) => taskExcerpt.set(markdown) : undefined} />
                     <If when={e().attachments?.length}>
-                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 8 }}>
                         <Each of={e().attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
                       </View>
                     </If>
