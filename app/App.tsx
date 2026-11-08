@@ -3648,7 +3648,7 @@ const SHORTCUTS = (): [string, string][] => [
   [`1 – 9  ·  ${keymap.label("alt+1")}…`, L("Pick an option on the current decision", "选择当前决策的选项")],
   [`J / K  ·  ${keymap.label("alt+j")} / ${keymap.label("alt+k")}`, L("Next / previous pending decision", "下一个 / 上一个待决策")],
   [`R  ·  ${keymap.label("alt+r")}`, L("Reply to the current decision (other instructions)", "回复当前决策（其他指示）")],
-  [`G  ·  ${keymap.label("alt+g")}`, L("Jump to the latest message", "跳到最新消息")],
+  [`G  ·  ${keymap.label("alt+g")}`, L("Back to bottom", "回到底部")],
   ["Esc", L("Cancel reply / leave the message box / close", "取消回复 / 离开输入框 / 关闭")],
   [keymap.label("mod+,"), L("Team settings", "团队设置")],
   [keymap.label("mod+b"), L("Show / hide sidebar", "显示 / 隐藏侧栏")],
@@ -3902,10 +3902,38 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   });
   /** What the floating composer covers at the bottom of the timeline. */
   const composerHeight = signal(0);
+  // Keep every explicit timeline jump short, including off-screen decision cards.
+  // Stage the target one viewport away, let recycled rows lay out, then use the
+  // platform's smooth scroll for the final screen instead of traversing the history.
+  let firstVisibleRow = -1;
+  let lastVisibleRow = -1;
+  let timelineHeight = 600;
+  let jumpVersion = 0;
+  const cancelJump = () => { jumpVersion++; };
+  cleanup(cancelJump);
+  function scrollTimeline(index: number, end = false) {
+    const list = scroller;
+    if (!list || index < 0) return;
+    const version = ++jumpVersion;
+    const animated = !reduceMotion();
+    const finish = () => {
+      if (version !== jumpVersion || scroller !== list) return;
+      if (end) list.scrollToEnd({ animated });
+      else list.scrollToIndex({ index, viewOffset: 24, animated });
+    };
+    const far = firstVisibleRow >= 0 && (index < firstVisibleRow - 1 || index > lastVisibleRow + 1);
+    if (!animated || !far) { finish(); return; }
+    const direction = index > lastVisibleRow ? 1 : -1;
+    list.scrollToIndex({
+      index, viewPosition: end ? 1 : 0,
+      viewOffset: (end ? 0 : 24) + direction * timelineHeight,
+      animated: false,
+    });
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  }
   const jumpToEnd = () => {
     unseen.set(0);
-    atEnd.set(true);
-    toEnd(true);
+    scrollTimeline(untracked(timeline).length - 1, true);
   };
   // another channel is another conversation: its own window, its own page of history, opened at its latest
   let windowScope: string | null = null;
@@ -4188,7 +4216,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     if (at >= 0 && shown().length - at > untracked(limit)) limit.set(shown().length - at); // older than the page: show it
     const index = timeline().findIndex((row) => "event" in row && row.event.ref === ref && isAsk(row.event));
     if (index >= 0 && scroller) {
-      scroller.scrollToIndex({ index, animated: true, viewOffset: 24 });
+      scrollTimeline(index);
       if (jumping === ref) jumping = null;
     } else if (tries > 0 && !scroller) {
       setTimeout(() => toCard(ref, tries - 1), 80);
@@ -4409,14 +4437,19 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               testID="timeline"
               each={timeline()}
               viewabilityConfig={{ minimumViewTime: 300 }}
-              onViewableItemsChange={({ viewableItems }) => visibleMessages.set(viewableItems.flatMap((t) => "event" in t.item ? [t.item.event] : []))}
+              onViewableItemsChange={({ viewableItems }) => {
+                firstVisibleRow = viewableItems.reduce((m, t) => Math.min(m, t.index ?? Infinity), Infinity);
+                lastVisibleRow = viewableItems.reduce((m, t) => Math.max(m, t.index ?? -1), -1);
+                visibleMessages.set(viewableItems.flatMap((t) => "event" in t.item ? [t.item.event] : []));
+              }}
               alignment="bottom"
               maintainVisibleContentPosition={{ autoscrollToBottomThreshold: AT_END }}
               estimatedItemSize={120}
               contentStyle={{ paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}
               keyExtractor={(row) => row.key}
               ref={(r) => { scroller = r; }}
-              onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }}
+              onLayout={({ bounds }) => { timelineHeight = Math.max(1, bounds.size.height); }}
+              onTouchStartCapture={() => { cancelJump(); if (platform.os === "macos" && focused()) composer?.blur(); }}
               style={{ flex: 1 }}
               scrollEventThrottle={100}
               keyboardShouldPersistTaps="handled"
@@ -4526,7 +4559,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
               <View style={{ position: "absolute", left: 0, right: 0, bottom: composerHeight() + 4, paddingVertical: 4, alignItems: "center", pointerEvents: "box-none" }}>
                 <View
                   role="button"
-                  accessibilityLabel={L("Jump to latest", "跳到最新")}
+                  accessibilityLabel={L("Back to bottom", "回到底部")}
                   onPress={jumpToEnd}
                   hoverStyle={{ opacity: 0.92 }}
                   style={{
@@ -4545,7 +4578,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 >
                   <Icon name="arrow-down" size={15} tint={unseen() ? colors.onAccent : colors.text} />
                   <Text style={{ fontSize: 14, fontWeight: "600", color: unseen() ? colors.onAccent : colors.text }}>
-                    {unseen() ? L(`${unseen()} new messages`, `${unseen()} 条新消息`) : L("Jump to latest", "跳到最新")}
+                    {unseen() ? L(`${unseen()} new messages`, `${unseen()} 条新消息`) : L("Back to bottom", "回到底部")}
                   </Text>
                   <If when={!touch}>
                     <Text style={{ fontSize: 12, color: unseen() ? alpha(colors.onAccent, 0.7) : colors.faint }}>G</Text>
