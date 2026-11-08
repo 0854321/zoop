@@ -54,3 +54,20 @@ export function channelPrompt(): string {
 ${lines || "(none yet)"}
 In the result JSON, set "channels" to the topics this task's work belongs to: existing slugs from the list, or {"name": "...", "goal": "one sentence: what this channel is for"} to open a new one when no goal fits. A channel is a topic like a team in a company (e.g. "NSH i18n", "Omamail", "GPUI Kit releases"), not one per repo. Zero to three; [] for fleet-internal chores. When a run covers several projects (PR review, CI sweeps), write the summary as one short line per project, each starting with the project name, so nothing is buried.`;
 }
+
+const TASK_DIRS = ["inbox", "active", "waiting", "blocked", "proposed", "done", "failed", "rejected"];
+const DEC_DIRS = ["open", "closed"];
+
+/** The channel a task (or a decision card about one) was started from, if the owner asked for it inside a channel:
+ *  its results and cards go back there, not to the main chat. Follow-ups carry it on (`origin_channel`). */
+export function originChannel(ref: string): string | undefined {
+  let tid = ref;
+  if (/^[DLP]-/.test(ref)) {
+    const f = DEC_DIRS.map((d) => P("decisions", d, `${ref}.md`)).find(existsSync);
+    tid = f ? String(readDoc(f).meta.task ?? "") : "";
+  }
+  if (!/^T-/.test(tid)) return undefined;
+  const f = TASK_DIRS.map((d) => P("tasks", d, `${tid}.md`)).find(existsSync);
+  const c = f ? String(readDoc(f).meta.origin_channel ?? "") : "";
+  return CHANNEL_SLUG.test(c) ? c : undefined;
+}

@@ -30,3 +30,24 @@ test("cloud retries return one event and queue one task; identical new messages 
     expect(JSON.stringify(db.query("EXPLAIN QUERY PLAN SELECT json FROM events WHERE json_extract(json, '$.client_id') = ? LIMIT 1").all("local:one"))).toContain("USING INDEX events_client_id");
   } finally { db.close(); }
 });
+
+test("cloud channel feeds use indexed channel and reference lookups", async () => {
+  const source = await Bun.file(new URL("../cloud/src/index.ts", import.meta.url)).text();
+  const index = source.match(/CREATE INDEX IF NOT EXISTS events_channel[^"\n]+/)![0];
+  const query = source.match(/SELECT json FROM events WHERE ref IN \(SELECT value[^"\n]+/)![0];
+  const db = new Database(":memory:");
+  try {
+    db.run("CREATE TABLE events (seq INTEGER PRIMARY KEY, ref TEXT, json TEXT)");
+    db.run("CREATE INDEX events_ref ON events (ref)");
+    db.run(index);
+    const insert = db.query("INSERT INTO events VALUES (?, ?, ?)");
+    insert.run(1, "T-1", JSON.stringify({ id: "result", ref: "T-1" }));
+    insert.run(2, null, JSON.stringify({ id: "talk", channel: "nsh" }));
+    insert.run(3, "T-2", JSON.stringify({ id: "other", channel: "mail" }));
+    expect(db.query(query).all('["T-1"]', "nsh").map((r: any) => JSON.parse(r.json).id)).toEqual(["talk", "result"]);
+    const plan = JSON.stringify(db.query(`EXPLAIN QUERY PLAN ${query}`).all('["T-1"]', "nsh"));
+    expect(plan).toContain("USING INDEX events_ref");
+    expect(plan).toContain("USING INDEX events_channel");
+    expect(plan).not.toContain("SCAN events");
+  } finally { db.close(); }
+});

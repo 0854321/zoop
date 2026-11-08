@@ -21,7 +21,7 @@ import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } f
 import { timingSafeEqual } from "node:crypto";
 import { readable, validPath } from "../cloud/src/files";
 import { channelDigest, channelsView, parseTaskBody, taskHistory, taskInfo } from "../cloud/src/tools";
-import { channels, updateChannel } from "./channels";
+import { channels, originChannel, updateChannel } from "./channels";
 import { localStore } from "./brain";
 import { ensureWebClient } from "./webclient";
 
@@ -30,6 +30,8 @@ export type Event = {
   text: string; ref?: string; client_id?: string; options?: string[]; attachments?: string[];
   /** Said inside a task's own conversation: shown on the task page, not in the main channel. */
   thread?: boolean;
+  /** Said in a channel (its slug): shown in that channel only, never in the main chat. */
+  channel?: string;
 };
 
 export const MEDIA = join(DATA, "..", "media");
@@ -41,7 +43,7 @@ const inbound: Inbound[] = [];
 /** A chat message goes to the chat brain (src/brain.ts), which replies and acts through noop's tools. `reply`: the task
  * whose message the owner replied to ("T-0125"), or whose page they wrote on; `answered`: the decision the owner answered
  * moments ago (the message may change that answer); `sentAt`: when the owner sent it (for latency). */
-type OwnerTask = (text: string, o: { reply?: string; answered?: string; sentAt?: string; thread?: boolean }) => Promise<void>;
+type OwnerTask = (text: string, o: { reply?: string; answered?: string; sentAt?: string; thread?: boolean; channel?: string }) => Promise<void>;
 let ownerTask: OwnerTask | null = null;
 
 const today = () => new Date().toLocaleDateString("sv-SE");
@@ -52,6 +54,8 @@ export const setMirror = (fn: (e: Event) => void) => { mirror = fn; };
 export function appendEvent(e: Omit<Event, "id" | "ts"> & Partial<Pick<Event, "id" | "ts">>, opts: { mirror?: boolean } = {}): Event {
   mkdirSync(FEED_DIR, { recursive: true });
   const ev: Event = { id: crypto.randomUUID(), ts: new Date().toISOString(), ...e };
+  // results and cards of work started in a channel stay in that channel
+  if (!ev.channel && ev.ref) { const c = originChannel(ev.ref); if (c) ev.channel = c; }
   if (opts.mirror !== false) mirror?.(ev);
   appendFileSync(join(FEED_DIR, `${today()}.jsonl`), JSON.stringify(ev) + "\n");
   for (const ws of sockets) ws.send(JSON.stringify(ev));
@@ -67,9 +71,9 @@ export function feed(since?: string, limit = 300): Event[] {
 
 /** The channel's last few hours as plain lines, oldest first: what a new chat message ("不行", "这个细节记下来") refers to.
  * The message being handled (the owner's last event, `text`) is left out. */
-export function recentChat(text = "", opts: { limit?: number; hours?: number } = {}): string[] {
+export function recentChat(text = "", opts: { limit?: number; hours?: number; channel?: string } = {}): string[] {
   const since = new Date(Date.now() - (opts.hours ?? 6) * 3600_000).toISOString();
-  let evs = feed(since, 200).filter((e) => e.kind !== "login" && e.text?.trim());
+  let evs = feed(since, 2000).filter((e) => e.kind !== "login" && e.text?.trim() && (e.channel ?? "") === (opts.channel ?? "")).slice(-200);
   const last = evs.at(-1);
   if (last?.from === "owner" && last.text.trim() === text.trim()) evs = evs.slice(0, -1);
   return evs.slice(-(opts.limit ?? 12)).map((e) => {
@@ -363,7 +367,7 @@ export function withAttachments(text: string, files: string[], missing = 0): str
 
 export async function handleOwnerMessage(
   text: string, reply_to?: string, noAmend = false,
-  att: { paths?: string[]; key?: string; fetch?: FetchAttachment; sentAt?: string; thread?: boolean } = {},
+  att: { paths?: string[]; key?: string; fetch?: FetchAttachment; sentAt?: string; thread?: boolean; channel?: string } = {},
 ) {
   if (att.paths?.length) {
     const files = await saveAttachments(att.key ?? crypto.randomUUID(), att.paths, att.fetch);
@@ -379,7 +383,7 @@ export async function handleOwnerMessage(
   } else if (ownerTask) {
     // everything else goes to the chat brain: it answers, looks things up, and creates or adjusts work through the tools
     const answered = !noAmend && !replyTask && lastAnswer && Date.now() - lastAnswer.at < AMEND_MS ? lastAnswer.id : undefined;
-    await ownerTask(text, { reply: replyTask, answered, sentAt: att.sentAt, thread: !!(att.thread && replyTask) });
+    await ownerTask(text, { reply: replyTask, answered, sentAt: att.sentAt, thread: !!(att.thread && replyTask), ...(att.channel ? { channel: att.channel } : {}) });
   }
 }
 
@@ -479,7 +483,7 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
       if (url.pathname === "/api/channels" && req.method === "GET") return json(channelsView(taskStore()));
       if (url.pathname === "/api/channels/feed" && req.method === "GET") {
         const c = channelsView(taskStore()).channels.find((c) => c.slug === url.searchParams.get("slug"));
-        return c ? json({ events: channelDigest(feed("", 5000), c.refs ?? []) }) : json({ error: "not found" }, 404);
+        return c ? json({ events: channelDigest(feed("", 5000), c.refs ?? [], c.slug) }) : json({ error: "not found" }, 404);
       }
       if (url.pathname === "/api/channels" && req.method === "POST") {
         const { slug, ...patch } = (await req.json().catch(() => ({}))) as { slug?: string; goal?: unknown; archived?: unknown };
@@ -509,7 +513,9 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
       }
       if (url.pathname === "/api/events" && req.method === "POST") return json(appendEvent(await req.json() as Event));
       if (url.pathname === "/api/messages" && req.method === "POST") {
-        const { text = "", reply_to, attachments, thread: inThread, client_id } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown };
+        const { text = "", reply_to, attachments, thread: inThread, client_id, channel: inChannel } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown; channel?: unknown };
+        const channel = typeof inChannel === "string" && inChannel ? channels().find((c) => c.slug === inChannel)?.slug : undefined;
+        if (inChannel !== undefined && inChannel !== "" && !channel) return json({ error: "channel not found" }, 400);
         if (client_id !== undefined && (typeof client_id !== "string" || !/^[\w:-]{1,100}$/.test(client_id)))
           return json({ error: "bad client_id" }, 400);
         if (client_id) {
@@ -521,8 +527,8 @@ export function startServer(cfg: Cfg, onOwnerTask: OwnerTask) {
         if (files.some((p) => !existsSync(join(MEDIA, basename(p))))) return json({ error: "attachment not found" }, 400);
         if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
         const thread = inThread === true && /^T-/.test(reply_to ?? "");
-        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to, ...(client_id ? { client_id: client_id as string } : {}), ...(files.length ? { attachments: files } : {}), ...(thread ? { thread } : {}) });
-        await handleOwnerMessage(text, reply_to, false, { paths: files, key: ev.id, thread });
+        const ev = appendEvent({ from: "owner", kind: "owner", text, ref: reply_to, ...(client_id ? { client_id: client_id as string } : {}), ...(files.length ? { attachments: files } : {}), ...(thread ? { thread } : {}), ...(channel ? { channel } : {}) });
+        await handleOwnerMessage(text, reply_to, false, { paths: files, key: ev.id, thread, channel: ev.channel });
         return json(ev);
       }
       return json({ error: "not found" }, 404);

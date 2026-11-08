@@ -14,6 +14,8 @@ export type HubEvent = {
   priority?: string;
   /** Said inside a task's own conversation: on the task page, not in the main channel. */
   thread?: boolean;
+  /** Said in a channel (its slug): shown there only, never in the main chat. */
+  channel?: string;
   options?: string[];
   attachments?: string[];
 };

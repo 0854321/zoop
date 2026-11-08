@@ -73,6 +73,7 @@ import {
   choiceLabel,
   choicesOf,
   dayLabel,
+  dayKey,
   greeting,
   type HubEvent,
   initials,
@@ -290,13 +291,13 @@ function createHub(cfg: Config) {
     return ((await r.json()) as { url: string }).url;
   }
 
-  async function send(text: string, replyTo: string | null, files: Attachment[] = [], thread = false, clientId?: string) {
+  async function send(text: string, replyTo: string | null, files: Attachment[] = [], thread = false, clientId?: string, channel?: string) {
     const attachments: string[] = [];
     for (const f of files) attachments.push(await upload(f));
     const r = await fetch(`${cfg.url}/api/messages`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ text, ...(clientId ? { client_id: clientId } : {}), ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}), ...(thread ? { thread } : {}) }),
+      body: JSON.stringify({ text, ...(clientId ? { client_id: clientId } : {}), ...(replyTo ? { reply_to: replyTo } : {}), ...(attachments.length ? { attachments } : {}), ...(thread ? { thread } : {}), ...(channel ? { channel } : {}) }),
     });
     if (r.status === 401) conn.set("unauthorized");
     if (!r.ok) throw new Error(L(`Send failed (${r.status})`, `发送失败（${r.status}）`));
@@ -1332,7 +1333,9 @@ function createMessageReads(hub: Hub) {
     if (next !== old) persist(next);
   };
   const unread = computed(() => loaded() ? unreadEvents(hub.events(), state()) : []);
-  return { loaded, state, read, unread,
+  // the main chat's own: what was said inside a channel is counted on that channel only
+  const main = computed(() => unread().filter((e) => !e.channel));
+  return { loaded, state, read, unread, main,
     ref: (id: string) => read(untracked(hub.events).filter((e) => e.ref === id), true),
     toggle: (e: HubEvent) => persist(toggleMessageRead(untracked(state), e)),
     all: () => persist({ through: untracked(hub.events).reduce((ts, e) => e.ts > ts ? e.ts : ts, untracked(state).through), ids: [], marked: [] }),
@@ -1363,7 +1366,7 @@ function createChannels(hub: Hub, reads: MessageReads) {
     list, load, reads,
     unread: (c: Channel) => {
       const refs = new Set(c.refs ?? c.items.filter((i) => i.kind !== "report").map((i) => i.id));
-      return reads.unread().filter((e) => !!e.ref && refs.has(e.ref)).length;
+      return reads.unread().filter((e) => (e.channel ? e.channel === c.slug : !!e.ref && refs.has(e.ref))).length;
     },
     async save(slug: string, patch: { goal?: string; archived?: boolean }) {
       generation++;
@@ -1391,7 +1394,25 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
     loaded.set(true);
   };
   effect(() => { ch()?.last_activity; void load(); });
-  const digest = computed(() => channelDigest(merge(fetched(), props.hub.events()), ch()?.refs ?? ch()?.items.filter((i) => i.kind !== "report").map((i) => i.id) ?? []));
+  const saying = signal<HubEvent[]>([]);
+  const digest = computed(() => channelDigest(merge(merge(fetched(), props.hub.events()), saying()), ch()?.refs ?? ch()?.items.filter((i) => i.kind !== "report").map((i) => i.id) ?? [], props.slug));
+  // seen while open: the channel's messages are read
+  effect(() => { const d = digest(); if (d.length) props.channels.reads.read(d); });
+  // a Slack-like room: what is said here is handled in the channel's context and answered here, not in the main chat
+  const text = signal("");
+  const note = signal("");
+  const composerHeight = signal(0);
+  let said = 0;
+  async function say() {
+    const v = untracked(text).trim();
+    if (!v) return;
+    const id = `local:channel:${++said}`;
+    saying.update((l) => [...l, { id, ts: new Date().toISOString(), from: "owner", kind: "owner", channel: props.slug, text: v }]);
+    text.set(""); note.set("");
+    try { await props.hub.send(v, null, [], false, undefined, props.slug); }
+    catch (e) { text.update((now) => (now.trim() ? `${v}\n${now}` : v)); note.set(String((e as Error)?.message ?? e)); }
+    saying.update((l) => l.filter((x) => x.id !== id));
+  }
   const settled = computed(() => answeredIds(digest()));
 
   const saveGoal = async () => {
@@ -1401,61 +1422,73 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
   };
   return (
     <View testID="channel-page" style={{ flex: 1 }}>
-      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", flex: 1, gap: 14, paddingHorizontal: props.wide ? 32 : 16, paddingVertical: 20 }}>
+    <Scroll style={{ flex: 1 }}>
+      <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 14, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 20, paddingBottom: composerHeight() + 24 }}>
         <If when={ch()} else={<Text style={{ fontSize: 14, color: colors.faint }}>{L("Loading…", "读取中…")}</Text>}>
-          <View style={{ gap: 6 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Text style={{ flex: 1, fontSize: 20, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{`# ${ch()!.name}`}</Text>
+          {/* header: a channel reads like a room, name and purpose together, actions out of the way */}
+          <View testID="channel-header" style={{ flexDirection: "row", alignItems: "flex-start", gap: 14, paddingBottom: 8 }}>
+            <View style={{ width: 44, height: 44, borderRadius: radius.card, alignItems: "center", justifyContent: "center", backgroundColor: alpha(colors.accent, 0.12) }}>
+              <Text style={{ fontSize: 22, fontWeight: "700", color: colors.accent }}>#</Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={{ flexShrink: 1, fontSize: 20, fontWeight: "700", color: colors.text, numberOfLines: 1 }}>{ch()!.name}</Text>
+                <If when={ch()!.status === "archived"}><View testID="channel-archived"><Badge label={L("Archived", "已归档")} tone="warn" /></View></If>
+                <If when={ch()!.status === "active" && ch()!.stale}><View testID="channel-stale"><Badge label={L("Quiet 7 days", "7 天无动静")} /></View></If>
+              </View>
+              <If when={editing()} else={
+                <Text testID="channel-goal" style={{ fontSize: 14.5, lineHeight: 21, color: ch()!.goal ? colors.muted : colors.faint, userSelect: "text" }}>{ch()!.goal || L("No goal yet", "还没有目标")}</Text>
+              }>
+                <View style={{ gap: 8, paddingTop: 4 }}>
+                  <Input
+                    testID="channel-goal-input"
+                    value={goal()}
+                    onChange={({ value }) => goal.set(value)}
+                    onSubmit={() => void saveGoal()}
+                    placeholder={L("What this channel is for: the team assigns work by it", "这个 channel 是做什么的，团队按它归类工作")}
+                    class="placeholder:text-faint"
+                    style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
+                  />
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    <Btn testID="channel-save-goal" kind="primary" label={L("Save", "保存")} disabled={busy()} onPress={() => void saveGoal()} />
+                    <Btn testID="channel-cancel-goal" kind="ghost" label={L("Cancel", "取消")} onPress={() => editing.set(false)} />
+                  </View>
+                </View>
+              </If>
+            </View>
+            <View style={{ flexDirection: "row", gap: 4 }}>
+              <If when={!editing()}>
+                <Btn testID="channel-edit-goal" kind="ghost" label={L("Edit goal", "编辑目标")} onPress={() => { goal.set(ch()!.goal); editing.set(true); }} />
+              </If>
               <Btn testID="channel-archive" kind="ghost" label={ch()!.status === "archived" ? L("Unarchive", "取消归档") : L("Archive", "归档")}
                 onPress={() => void props.channels.save(props.slug, { archived: ch()!.status !== "archived" })} />
             </View>
-            <If when={ch()!.status === "archived"}>
-              <Text testID="channel-archived" style={{ fontSize: 13.5, color: colors.warn }}>{L("Archived: the team no longer adds work here.", "已归档：团队不再往这里归类新的工作。")}</Text>
-            </If>
-            <If when={ch()!.status === "active" && ch()!.stale}>
-              <Text testID="channel-stale" style={{ fontSize: 13.5, color: colors.muted }}>{L("No activity in 7 days", "7 天没有动静")}</Text>
-            </If>
           </View>
-          <View style={{ gap: 8 }}>
-            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{L("Goal", "目标")}</Text>
-            <If when={editing()} else={
-              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-                <Text testID="channel-goal" style={{ flex: 1, fontSize: 14.5, lineHeight: 21, color: ch()!.goal ? colors.text : colors.faint, userSelect: "text" }}>{ch()!.goal || L("No goal yet", "还没有目标")}</Text>
-                <Btn testID="channel-edit-goal" kind="secondary" label={L("Edit", "编辑")} onPress={() => { goal.set(ch()!.goal); editing.set(true); }} />
+          <View testID="channel-digest" style={{ gap: 2 }}>
+            <If when={digest().length} else={
+              <View testID="channel-empty" style={{ alignItems: "flex-start", gap: 6, paddingVertical: 24 }}>
+                <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text }}>{loaded() ? L(`This is the start of #${ch()!.name}`, `这里是 #${ch()!.name} 的开始`) : L("Loading…", "读取中…")}</Text>
+                <If when={loaded()}><Text style={{ fontSize: 14, lineHeight: 21, color: colors.muted }}>{L("Results and decisions for this topic land here. What you say here stays here, out of the main chat.", "这个话题的结果和决策会出现在这里。在这里说的话只留在这里，不进主会话。")}</Text></If>
               </View>
             }>
-              <Input
-                testID="channel-goal-input"
-                value={goal()}
-                onChange={({ value }) => goal.set(value)}
-                onSubmit={() => void saveGoal()}
-                placeholder={L("What this channel is for: the team assigns work by it", "这个 channel 是做什么的，团队按它归类工作")}
-                class="placeholder:text-faint"
-                style={{ height: 38, paddingHorizontal: 12, fontSize: 15, color: colors.text, borderRadius: radius.control, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.surface }}
-              />
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <Btn testID="channel-save-goal" kind="primary" label={L("Save", "保存")} disabled={busy()} onPress={() => void saveGoal()} />
-                <Btn testID="channel-cancel-goal" kind="ghost" label={L("Cancel", "取消")} onPress={() => editing.set(false)} />
-              </View>
-            </If>
-          </View>
-          <View testID="channel-digest" style={{ gap: 16, paddingTop: 4 }}>
-            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{L("Updates", "进展")}</Text>
-            <If when={digest().length} else={<Text style={{ fontSize: 14, color: colors.faint }}>{loaded() ? L("No results or decisions yet", "还没有结果或决策") : L("Loading…", "读取中…")}</Text>}>
               <Each of={digest()} key={(e) => e.id}>
-                {(e) => isAsk(e()) ? (
-                  <Message hub={props.hub} event={e()} answered={settled} target={() => null}
-                    onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true)}
-                    onReply={(ref) => props.onTask(ref)} />
-                ) : (
-                  <View style={{ gap: 3 }}>
-                    <View role="button" testID={`channel-msg-${e().id}`} accessibilityLabel={e().ref} onPress={() => { props.channels.reads.ref(e().ref!); props.onTask(e().ref!); }}>
-                      <Text style={{ fontSize: 13, color: colors.faint }}>
-                        <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? L("You", "你") : displayName(e().from)}</Text>
-                        {`  ${timeOf(e().ts)}`}
-                      </Text>
-                    </View>
-                    <Rich text={e().text} />
+                {(e, i) => (
+                  <View testID={`channel-msg-${e().id}`} accessibilityLabel={e().ref}
+                    onPress={isAsk(e()) || e().kind === "owner" ? undefined : () => { const ref = e().ref; if (!ref || !/^T-/.test(ref)) return; props.channels.reads.ref(ref); props.onTask(ref); }}>
+                    <If when={i() === 0 || dayKey(digest()[i() - 1].ts) !== dayKey(e().ts)}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginTop: i() === 0 ? 4 : 20, marginBottom: 4 }}>
+                        <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+                        <Text style={{ fontSize: 13, fontWeight: "500", color: colors.faint }}>{dayLabel(dayKey(e().ts))}</Text>
+                        <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+                      </View>
+                    </If>
+                    {e().kind === "owner" ? (
+                      <OwnerBubble hub={props.hub} event={e()} onRef={props.onPick} />
+                    ) : (
+                      <Message hub={props.hub} event={e()} answered={settled} target={() => null}
+                        onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true)}
+                        onReply={(ref) => { props.channels.reads.ref(ref); props.onTask(ref); }} />
+                    )}
                   </View>
                 )}
               </Each>
@@ -1463,6 +1496,31 @@ function ChannelPage(props: { hub: Hub; channels: Channels; slug: string; wide: 
           </View>
         </If>
       </View>
+    </Scroll>
+    <If when={ch()?.status === "active"}>
+      <View
+        onLayout={({ bounds }) => composerHeight.set(bounds.size.height)}
+        style={{ position: "absolute", bottom: 0, width: "100%", maxWidth: size.column, alignSelf: "center", gap: 6, paddingHorizontal: props.wide ? 32 : 10, paddingTop: 4, paddingBottom: 12, pointerEvents: "box-none" }}
+      >
+        <If when={note()}>
+          <Text style={{ fontSize: 13, color: colors.danger }}>{note()}</Text>
+        </If>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, paddingLeft: 16, paddingRight: 8, paddingVertical: 8, ...composerGlass() }}>
+          <Input
+            testID="channel-composer"
+            multiline
+            value={text()}
+            onChange={({ value }) => text.set(value)}
+            submitBehavior={touch ? "newline" : "submit"}
+            onSubmit={() => void say()}
+            placeholder={L(`Message #${ch()?.name ?? props.slug}`, `在 #${ch()?.name ?? props.slug} 里讨论…`)}
+            class="placeholder:text-faint"
+            style={{ flex: 1, minHeight: 36, maxHeight: 160, paddingVertical: 8, fontSize: 15, lineHeight: 21, color: colors.text, borderWidth: 0, backgroundColor: "transparent" }}
+          />
+          <SendButton testID="channel-send" disabled={!text().trim()} onPress={() => void say()} />
+        </View>
+      </View>
+    </If>
     </View>
   );
 }
@@ -2225,7 +2283,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
         >
           {avatar(24)}
           <Text testID="user-account" style={{ flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
-          <If when={props.reads.unread().length}><Text testID="menu-unread-count" style={{ fontSize: 12, color: colors.accent }}>{String(props.reads.unread().length)}</Text></If>
+          <If when={props.reads.main().length}><Text testID="menu-unread-count" style={{ fontSize: 12, color: colors.accent }}>{String(props.reads.main().length)}</Text></If>
           <Icon name="chevron-up" size={12} tint={colors.faint} />
         </View>
       }
@@ -2241,7 +2299,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
       </View>
       <If when={!touch}>{sep()}</If>
       <View style={touch ? { backgroundColor: colors.surface, borderRadius: 12, borderCurve: "continuous" } : {}}>
-        <MenuItem testID="mark-all-read" disabled={!props.reads.unread().length} onSelect={props.reads.all} hoverStyle={hovered()} activeStyle={hovered()} disabledStyle={{ opacity: 0.4 }} style={row()}>
+        <MenuItem testID="mark-all-read" disabled={!props.reads.main().length} onSelect={props.reads.all} hoverStyle={hovered()} activeStyle={hovered()} disabledStyle={{ opacity: 0.4 }} style={row()}>
           {lead("check")}{label(L("Mark all as read", "全部已读"))}
         </MenuItem>
         <MenuItem testID="settings" onSelect={props.onSettings} hoverStyle={hovered()} activeStyle={hovered()} style={row()}>
@@ -3821,7 +3879,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   /** The timeline: the hub's events and the messages on their way. */
   const shown = computed(() =>
     merge(
-      hub.events().filter((e) => !e.thread && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))),
+      hub.events().filter((e) => !e.thread && !e.channel && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))),
       outbox().map((o) => ({
         id: o.id, ts: o.ts, from: "owner", kind: "owner" as const, text: o.text, ref: o.ref ?? undefined,
         attachments: o.files.length ? o.files.map((f) => f.preview) : undefined,
@@ -4367,7 +4425,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       chrome={!inDrawer}
       onCollapse={inDrawer ? undefined : () => setSidebarOpen(false)}
       home={onChannel}
-      unread={() => reads.unread().length}
+      unread={() => reads.main().length}
       onReadAll={reads.all}
       onHome={() => { drawer.set(false); nav.popToRoot(); }}
     />

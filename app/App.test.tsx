@@ -48,7 +48,7 @@ function hub(posts: { text: string; reply_to?: string }[], extra: unknown[] = []
     [`POST ${URL}/api/messages`]: (r: { body?: string | null }) => {
       const m = JSON.parse(r.body!);
       posts.push(m);
-      return { body: { id: `o${posts.length}`, ts: new Date().toISOString(), from: "owner", kind: "owner", text: m.text, ref: m.reply_to, client_id: m.client_id } };
+      return { body: { id: `o${posts.length}`, ts: new Date().toISOString(), from: "owner", kind: "owner", text: m.text, ref: m.reply_to, client_id: m.client_id, ...(m.channel ? { channel: m.channel } : {}) } };
     },
   };
 }
@@ -478,7 +478,7 @@ describe("channel", () => {
     await app.rightClick("text:要不要升级依赖？ >> nth=0");
     await app.press("id:side-ignore-D-0001");
     await app.waitUntil(() => posts.length === 2);
-    expect(posts[1]).toEqual({ text: "D-0001 忽略" });
+    expect(posts[1]).toMatchObject({ text: "D-0001 忽略" });
     await app.waitUntil(() => !app.shows("id:ignore-D-0001"));
   });
 
@@ -591,8 +591,6 @@ describe("channel", () => {
     await app.waitFor("Quiet 7d");
     await app.press("id:side-channel-omamail");
     await app.waitFor("omamail 的 PR 与 issue");
-    await app.waitFor("omamail #460 审查");
-    await app.waitFor("合并 omamail #460 吗？");
     await app.press("id:channel-edit-goal");
     await app.waitFor("id:channel-goal-input");
     await app.type("id:channel-goal-input", "，以及发布");
@@ -601,6 +599,29 @@ describe("channel", () => {
     await app.press("id:channel-archive");
     await app.waitFor("id:channel-archived");
     expect(posts).toEqual([{ slug: "omamail", goal: "omamail 的 PR 与 issue，以及发布" }, { slug: "omamail", archived: true }]);
+  });
+
+  test("a channel is its own room: messages sent there carry the channel, and its talk stays out of the main chat", async () => {
+    const posts: any[] = [];
+    const chans = [{ slug: "nsh-i18n", name: "NSH i18n", goal: "NSH 多语言", status: "active", created: ts(-900), last_activity: ts(5), stale: false, count: 0, refs: [], items: [] }];
+    const talk = [
+      { id: "c1", ts: ts(3), from: "owner", kind: "owner", text: "日文翻译进度如何？", channel: "nsh-i18n" },
+      { id: "c2", ts: ts(4), from: "lead@primary", kind: "notice", text: "日文已完成 80%，剩下 API 文档", channel: "nsh-i18n" },
+    ];
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1200, height: 800, platform: "macos",
+      network: { ...hub(posts, talk), [`GET ${URL}/api/channels`]: { body: { channels: chans } }, [`GET ${URL}/api/channels/feed?*`]: { body: { events: talk } } },
+    });
+    await app.waitFor("id:composer");
+    expect(app.shows("日文已完成 80%，剩下 API 文档")).toBe(false);
+    await app.waitFor("id:side-channel-nsh-i18n");
+    await app.press("id:side-channel-nsh-i18n");
+    await app.waitFor("日文已完成 80%，剩下 API 文档");
+    await app.type("id:channel-composer", "韩文也一起补上");
+    await app.press("id:channel-send");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toMatchObject({ text: "韩文也一起补上", channel: "nsh-i18n" });
+    await app.waitFor("韩文也一起补上");
   });
 
   test("a dropped connection stays quiet until reconnecting keeps failing", async () => {

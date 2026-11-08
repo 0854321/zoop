@@ -143,6 +143,8 @@ export class Hub extends DurableObject<Env> {
     // events.ref, indexed: a task's conversation is read by ref, never by scanning every event's JSON (rows_read is billed per row)
     try { this.sql.exec("ALTER TABLE events ADD COLUMN ref TEXT"); } catch { /* exists */ }
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_ref ON events (ref)");
+    // Channel feeds use indexed room/ref lookups; opening a room never scans unrelated history.
+    this.sql.exec("CREATE INDEX IF NOT EXISTS events_channel ON events (json_extract(json, '$.channel')) WHERE json_extract(json, '$.channel') IS NOT NULL");
     // Indexed receipt lookup: one row per retry, no event scan or polling.
     this.sql.exec("CREATE INDEX IF NOT EXISTS events_client_id ON events (json_extract(json, '$.client_id')) WHERE json_extract(json, '$.client_id') IS NOT NULL");
     if (this.sql.exec("SELECT v FROM kv WHERE k = 'events_ref_filled'").toArray().length === 0) {
@@ -327,14 +329,14 @@ export class Hub extends DurableObject<Env> {
     for (const ws of this.ctx.getWebSockets("host")) try { ws.send('{"type":"inbox"}'); } catch {}
   }
 
-  ownerMessage(text: string, ref?: string, attachments?: string[], thread = false, clientId?: string): Ev {
+  ownerMessage(text: string, ref?: string, attachments?: string[], thread = false, clientId?: string, channel?: string): Ev {
     if (clientId) {
       const previous = this.sql.exec("SELECT json FROM events WHERE json_extract(json, '$.client_id') = ? LIMIT 1", clientId).toArray()[0];
       if (previous) return JSON.parse(previous.json as string) as Ev;
     }
-    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(clientId ? { client_id: clientId } : {}), ...(attachments?.length ? { attachments } : {}), ...(thread ? { thread } : {}) });
+    const ev = this.append({ from: "owner", kind: "owner", text, ref, ...(clientId ? { client_id: clientId } : {}), ...(attachments?.length ? { attachments } : {}), ...(thread ? { thread } : {}), ...(channel ? { channel } : {}) });
     this.toInbox({ type: "message", event: ev });
-    if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id });
+    if (!this.hostOnline()) this.append({ from: "hub", kind: "system", text: "收到。团队的电脑暂时都不在线，上线后会马上处理。", ref: ev.id, ...(channel ? { channel } : {}) });
     return ev;
   }
 
@@ -647,7 +649,9 @@ export class Hub extends DurableObject<Env> {
     }
 
     if (p === "/api/messages" && m === "POST") {
-      const { text = "", reply_to, attachments, thread, client_id } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown };
+      const { text = "", reply_to, attachments, thread, client_id, channel } = (await req.json()) as { text?: string; reply_to?: string; attachments?: unknown; thread?: unknown; client_id?: unknown; channel?: unknown };
+      const room = typeof channel === "string" && channel ? channelsView(this.mcp.store()).channels.find((c) => c.slug === channel)?.slug : undefined;
+      if (channel !== undefined && channel !== "" && !room) return json({ error: "channel not found" }, 400);
       if (client_id !== undefined && (typeof client_id !== "string" || !/^[\w:-]{1,100}$/.test(client_id)))
         return json({ error: "bad client_id" }, 400);
       const files = ownerAttachments(attachments);
@@ -655,7 +659,7 @@ export class Hub extends DurableObject<Env> {
       if (files.some((f) => !this.sql.exec("SELECT 1 FROM media WHERE id = ? LIMIT 1", f.slice(7)).toArray().length))
         return json({ error: "attachment not found" }, 400);
       if (!text.trim() && !files.length) return json({ error: "text required" }, 400);
-      return json(this.ownerMessage(text, reply_to, files, thread === true && /^T-/.test(reply_to ?? ""), client_id as string | undefined));
+      return json(this.ownerMessage(text, reply_to, files, thread === true && /^T-/.test(reply_to ?? ""), client_id as string | undefined, room));
     }
 
     // The owner's images for a message (paste / drop / pick in the app): images only, ≤ 10 MB, kept with the media.
@@ -697,8 +701,8 @@ export class Hub extends DurableObject<Env> {
     if (p === "/api/channels/feed" && m === "GET") { // the channel's digest, however far back the app's feed doesn't reach
       const c = channelsView(this.mcp.store()).channels.find((c) => c.slug === url.searchParams.get("slug"));
       if (!c) return json({ error: "not found" }, 404);
-      const rows = this.sql.exec("SELECT json FROM events WHERE ref IS NOT NULL ORDER BY seq DESC LIMIT 5000").toArray().reverse();
-      return json({ events: channelDigest(rows.map((r) => JSON.parse(r.json as string)), c.refs ?? []) });
+      const rows = this.sql.exec("SELECT json FROM events WHERE ref IN (SELECT value FROM json_each(?)) OR json_extract(json, '$.channel') = ? ORDER BY seq DESC LIMIT 5000", JSON.stringify(c.refs ?? []), c.slug).toArray().reverse();
+      return json({ events: channelDigest(rows.map((r) => JSON.parse(r.json as string)), c.refs ?? [], c.slug) });
     }
     if (p === "/api/channels" && m === "POST") { // owner: edit a channel's goal / archive it; the primary writes the file
       if (who === "machine") return json({ error: "forbidden" }, 403);
