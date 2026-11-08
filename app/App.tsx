@@ -112,7 +112,6 @@ import {
   notifyPatch,
   QUIET_PRESETS,
   quietKey,
-  firstUnread,
   type Row,
   type DataFile,
   type RuleGroup,
@@ -1330,7 +1329,8 @@ function createChannels(hub: Hub, reads: MessageReads) {
     list, load, reads,
     unread: (c: Channel) => {
       const refs = new Set(c.refs ?? c.items.filter((i) => i.kind !== "report").map((i) => i.id));
-      return reads.unread().filter((e) => (e.channel ? e.channel === c.slug : !!e.ref && refs.has(e.ref))).length;
+      // the same messages the channel shows, so opening it clears exactly what was counted
+      return channelDigest(reads.unread(), [...refs], c.slug, Infinity).length;
     },
     async save(slug: string, patch: { name?: string; goal?: string; archived?: boolean }) {
       generation++;
@@ -3812,9 +3812,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     return merge(hub.events().filter((e) => !e.thread && !e.channel && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))), outgoing);
   });
   const answered = computed(() => answeredIds(shown()));
-  // "以下为新消息": above the first event from others after what this device last saw.
-  const seen = signal<string | null | undefined>(undefined);
-  Storage.getItem(KEYS.seen).then((v) => seen.set(v ?? null));
   const visibleMessages = signal<HubEvent[]>([]);
   effect(() => {
     if (!reads.loaded() || lifecycle() !== "active") return;
@@ -3822,10 +3819,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     if (onChannel()) reads.read(visibleMessages());
     else if (route.name === "task") { hub.events(); reads.ref(route.id); }
   });
+  // "以下为新消息": above the first unread message when entering a view, from the one read record the
+  // main chat and every channel share; fixed for the visit so reading on doesn't move it.
   const divider = signal<string | null | undefined>(undefined);
+  let dividerScope: string | null | undefined;
   effect(() => {
-    if (untracked(divider) !== undefined || !hub.loaded() || seen() === undefined || !reads.loaded()) return;
-    divider.set(firstUnread(shown().filter((e) => !isRead(e, reads.state())), seen() ?? null));
+    const slug = scope();
+    if (!hub.loaded() || !reads.loaded()) return;
+    if (slug && !scoped()) return;
+    if (dividerScope === slug && untracked(divider) !== undefined) return;
+    dividerScope = slug;
+    divider.set(untracked(shown).find((e) => e.kind !== "owner" && !isRead(e, untracked(reads.state)))?.id ?? null);
   });
   // List diffs its items by identity: rebuilt rows would read as all replaced on every new message,
   // losing their measurements and the reader's place. Reuse each row while its event is the same.
@@ -3837,7 +3841,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   let timelineWindow = createTimelineWindow(PAGE);
   const UNREAD: TimelineRow = { key: "unread", unread: true };
   const timeline = computed((): TimelineRow[] => {
-    const d = scope() ? null : divider();
+    const d = divider();
     const next = new Map<string, TimelineRow>();
     const out: TimelineRow[] = [];
     const all = shown();
@@ -4275,12 +4279,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       for (const id of [...showing]) if (done.has(id)) closeNotification(id);
     });
   }
-  // This device has seen what reached the bottom.
-  effect(() => {
-    const evs = shown();
-    if (!atEnd() || !evs.length || divider() === undefined) return;
-    Storage.setItem(KEYS.seen, evs[evs.length - 1].ts);
-  });
   // A new decision while the app is open: a quiet toast and a short vibration.
   const toast = signal<{ ref: string; text: string } | null>(null);
   let known: Set<string> | null = null;
