@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { init, install, selfUpdate } from "./setup";
 import { computeMetrics } from "./metrics";
+import { writeUsageReport } from "./usage-report";
 import { supervise } from "./supervisor";
 import { collect, LEARN_PROMPT } from "./sessions";
 import { medic } from "./medic";
@@ -81,6 +82,15 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
       const id = newTask(`learn the CEO · ${host} · ${d.sessions} sessions`, LEARN_PROMPT(d.file),
         { agent: "apprentice", host, source: `routine:learn`, priority: "normal" });
       journal(host, `📚 learn: ${d.turns} owner turns from ${d.sessions} sessions → ${id}`);
+      continue;
+    }
+    if (r.kind === "usage-report") { // computed by code, posted to the main chat; no task, no model cost
+      state[r.name] = new Date().toISOString();
+      try {
+        const rep = writeUsageReport();
+        appendEvent({ from: "hub", kind: "notice", text: rep.markdown });
+        journal(host, `📊 usage report → ${rep.file}`);
+      } catch (e) { journal(host, `📊 usage report failed: ${(e as Error).message}`); }
       continue;
     }
     // scheduler "each": every machine runs its own copy, pinned to it (e.g. the weekly security check of this computer)
@@ -930,6 +940,7 @@ const HELP = `Noop — your own AI team
   noop status                 queue / decision / accounts / resources overview
   noop learn [--full] [--dry]  learn the CEO from local Claude/Codex sessions (digest stays local; principles go to memory)
   noop metrics [days]         per-agent success, judge vs owner decisions (feeds self-evolution)
+  noop usage                  weekly usage report (also posted every Monday by the built-in routine)
   noop agents                 list fleet members
   noop notify "text"          test Slack/Discord
   noop security [--json]      check this Noop deployment (2FA, sessions, OAuth clients, allow-lists) and this machine's Noop setup
@@ -1004,6 +1015,7 @@ async function main() {
       await commitPush(`[${host}] learn ${id}`);
       return console.log(id);
     }
+    case "usage": return void console.log(writeUsageReport().markdown);
     case "metrics": return void console.log(JSON.stringify(computeMetrics(Number(rest[0] ?? 7)), null, 2));
     case "agents":
       for (const p of list(P("agents"), /.*/)) {
