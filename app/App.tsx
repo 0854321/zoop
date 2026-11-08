@@ -1930,6 +1930,9 @@ function Sidebar(props: {
   onReadAll: () => void;
   onRestart: () => void;
 }) {
+  /** Archived channels stay folded under one row; the open one stays in place so the selection doesn't vanish. */
+  const showArchived = signal(false);
+  const archivedChannels = () => props.channels.list().filter((c) => c.status === "archived" && c.slug !== props.channel());
   const s = () => props.hub.status();
   // the hub closes a decision on its next tick: one the channel already shows answered leaves the list now
   const waits = computed(() => { const done = answeredIds(props.hub.events()); return waiting(s()).filter((d) => !done.has(d.id)); });
@@ -2080,14 +2083,14 @@ function Sidebar(props: {
 
           <If when={props.channels.list().length}>
             <SideHeading title={L("Channels", "Channels")} count={props.channels.list().reduce((n, c) => n + props.channels.unread(c), 0) || undefined} accent />
-            <Each of={props.channels.list()} key={(c) => c.slug}>
+            <Each of={props.channels.list().filter((c) => c.status !== "archived" || c.slug === props.channel())} key={(c) => c.slug}>
               {(c) => (
                 <SideRow onPress={() => props.onChannel(c().slug)} selected={props.channel() === c().slug} title={c().goal || c().name}>
                   <Text style={{ width: 17, textAlign: "right", fontSize: 15, color: colors.faint }}>#</Text>
                   <Text testID={`side-channel-${c().slug}`} style={{ ...rowText(), color: c().status === "archived" || c().stale ? colors.faint : props.channels.unread(c()) ? colors.text : colors.muted, fontWeight: props.channels.unread(c()) ? "600" : "400" }}>{c().name}</Text>
                   <If when={props.channels.unread(c())} else={
-                    <If when={c().status === "archived" || c().stale}>
-                      <Text style={{ fontSize: 12.5, color: colors.faint }}>{c().status === "archived" ? L("Archived", "已归档") : L("Quiet 7d", "7 天无动静")}</Text>
+                    <If when={c().status !== "archived" && c().stale}>
+                      <Text style={{ fontSize: 12.5, color: colors.faint }}>{L("Quiet 7d", "7 天无动静")}</Text>
                     </If>
                   }>
                     <Text testID={`side-channel-unread-${c().slug}`} style={{ fontSize: 12.5, fontWeight: "600", color: colors.accent, fontVariant: ["tabular-nums"] }}>{String(props.channels.unread(c()))}</Text>
@@ -2095,6 +2098,30 @@ function Sidebar(props: {
                 </SideRow>
               )}
             </Each>
+            <If when={archivedChannels().length}>
+              <SideRow onPress={() => showArchived.set(!showArchived())} title={L("Archived channels", "已归档的 Channel")}>
+                <View style={{ width: 17, alignItems: "flex-end" }}><Icon name={showArchived() ? "chevron-down" : "chevron"} size={12} tint={colors.faint} /></View>
+                <Text testID="side-channels-archived" style={{ ...rowText(), color: colors.faint }}>{L("Archived", "已归档")}</Text>
+                <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{String(archivedChannels().length)}</Text>
+              </SideRow>
+              <If when={showArchived()}>
+                <Each of={archivedChannels()} key={(c) => c.slug}>
+              {(c) => (
+                <SideRow onPress={() => props.onChannel(c().slug)} selected={props.channel() === c().slug} title={c().goal || c().name}>
+                  <Text style={{ width: 17, textAlign: "right", fontSize: 15, color: colors.faint }}>#</Text>
+                  <Text testID={`side-channel-${c().slug}`} style={{ ...rowText(), color: c().status === "archived" || c().stale ? colors.faint : props.channels.unread(c()) ? colors.text : colors.muted, fontWeight: props.channels.unread(c()) ? "600" : "400" }}>{c().name}</Text>
+                  <If when={props.channels.unread(c())} else={
+                    <If when={c().status !== "archived" && c().stale}>
+                      <Text style={{ fontSize: 12.5, color: colors.faint }}>{L("Quiet 7d", "7 天无动静")}</Text>
+                    </If>
+                  }>
+                    <Text testID={`side-channel-unread-${c().slug}`} style={{ fontSize: 12.5, fontWeight: "600", color: colors.accent, fontVariant: ["tabular-nums"] }}>{String(props.channels.unread(c()))}</Text>
+                  </If>
+                </SideRow>
+              )}
+                </Each>
+              </If>
+            </If>
           </If>
 
           <SideRow onPress={props.onTasks} selected={props.tasks()} title={L("All tasks", "全部任务")}>

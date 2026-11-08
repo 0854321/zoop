@@ -596,6 +596,7 @@ describe("channel", () => {
       { slug: "omamail", name: "Omamail", goal: "omamail 的 PR 与 issue", status: "active", created: ts(-900), last_activity: fresh, stale: false, count: 2,
         items: [{ id: "T-0700", kind: "task", title: "omamail #460 审查", state: "done", updated: fresh }, { id: "D-0700", kind: "decision", title: "合并 omamail #460 吗？", state: "closed", updated: ts(30), task: "T-0700" }] },
       { slug: "omasend", name: "Omasend", goal: "omasend", status: "active", created: ts(-20000), last_activity: ts(-20000), stale: true, count: 0, items: [] },
+      { slug: "old-ops", name: "Old ops", goal: "retired", status: "archived", created: ts(-30000), last_activity: ts(-30000), stale: true, count: 0, items: [] },
     ];
     const app = await open("./App.tsx", {
       storage: { ...STORAGE, "noop.channels.since": ts(-10000) }, width: 1200, height: 800, platform: "macos",
@@ -607,6 +608,11 @@ describe("channel", () => {
     });
     await app.waitFor("id:side-channel-omamail");
     await app.waitFor("Quiet 7d");
+    // archived channels are folded under one row until it is opened
+    expect(app.shows("id:side-channel-old-ops")).toBe(false);
+    await app.press("id:side-channels-archived");
+    await app.waitFor("id:side-channel-old-ops");
+    await app.press("id:side-channels-archived");
     await app.press("id:side-channel-omamail");
     await app.waitFor("omamail 的 PR 与 issue");
     await app.press("id:channel-edit-goal");
