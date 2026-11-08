@@ -176,6 +176,11 @@ describe("login", () => {
       await app.press("id:user-menu");
       await app.press("id:theme-dark");
       expect(app.storage()["hub.theme"]).toBe("dark");
+      await app.press("id:theme-light");
+      expect(app.storage()["hub.theme"]).toBe("light");
+      await app.press("id:menu-language");
+      await app.press("id:menu-language-back");
+      await app.waitFor("id:settings");
       await app.press("id:menu-language");
       await app.press("id:menu-lang-zh");
       expect(app.storage()["hub.lang"]).toBe("zh");
