@@ -3926,6 +3926,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
 
   let count = 0;
   const toEnd = (animated = false) => setTimeout(() => scroller?.scrollToEnd({ animated }), 40);
+  // Switching between the main chat and a channel (or channel to channel) is entering too: start at the latest message.
+  effect(() => { scope(); if (untracked(onChannel) && !jumping) { atEnd.set(true); unseen.set(0); toEnd(); } });
+  // A channel's history arrives after the switch; land on its end unless the reader has scrolled up meanwhile.
+  effect(() => { channelFeed(); if (untracked(atEnd) && !jumping) toEnd(); });
   // The list follows its end by itself (alignment="bottom"); scrolled further up than AT_END, it stays put and this counts what came below.
   const AT_END = 24;
   effect(() => {
