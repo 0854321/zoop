@@ -13,6 +13,7 @@
 //   POST /api/auth/start {email} → mail code · POST /api/auth/verify {email, code} → {session} · POST /api/auth/logout
 // Web Push (owner session): GET /api/push/vapid · POST /api/push/subscribe {subscription, device_label}
 //   · POST /api/push/unsubscribe {endpoint} · POST /api/push/test · POST /api/push/answer {ref, answer}
+// Guest workers (low-trust shared machines): /api/guest/* and /api/guests/* — see guests.ts.
 // MCP (Claude / ChatGPT connectors): /mcp + OAuth 2.1 at /oauth/* and /.well-known/oauth-* — see mcp.ts and docs/mcp.md.
 // Every other /api/* and /media/* needs Bearer <HUB_TOKEN|session> (or ?token= for WebSocket / <img>).
 import { DurableObject } from "cloudflare:workers";
@@ -24,6 +25,8 @@ import { newSecret, otpauthUri, totpMatch } from "./totp";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "./uploads";
 import { sendMail, type SmtpCfg } from "./smtp";
 import { EmailMessage } from "cloudflare:email";
+
+import { GUEST_TOKEN, guestApi, guestJoin, guestWho, guestsAdmin, initGuestSchema } from "./guests";
 
 const b64 = (t: string) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
 async function cfMail(binding: SendEmail, from: string, to: string, subject: string, text: string) {
@@ -147,6 +150,7 @@ export class Hub extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, email TEXT, created INTEGER, last_seen INTEGER, ua TEXT);
       CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, session TEXT, p256dh TEXT, auth TEXT, label TEXT, created INTEGER);`);
     initFilesSchema(this.sql);
+    initGuestSchema(this.sql);
     // scope: "owner" (app / browser) or "mcp" (an OAuth access token for a Claude / ChatGPT connector: /mcp only)
     try { this.sql.exec("ALTER TABLE sessions ADD COLUMN scope TEXT"); } catch { /* exists */ }
     try { Object.assign(this.usage, JSON.parse(String(raw.exec("SELECT v FROM kv WHERE k = 'usage'").toArray()[0]?.v ?? "{}"))); } catch { /* fresh */ }
@@ -532,12 +536,22 @@ export class Hub extends DurableObject<Env> {
     const p = url.pathname, m = req.method;
 
     if (p.startsWith("/api/auth/")) return this.auth(p, req);
+    // guest workers (guests.ts): a one-time code joins; a guest token reaches /api/guest/* and nothing else
+    if (p === "/api/guest/join" && m === "POST") return guestJoin(this.sql, req, (text) => this.append({ from: "hub", kind: "notice", text }));
+    const gt = this.credential(req, url);
+    if (GUEST_TOKEN.test(gt)) {
+      const g = await guestWho(this.sql, gt);
+      if (!g) return json({ error: "unauthorized" }, 401);
+      return guestApi(this.sql, req, url, g, (id, guest) => this.append({ from: "hub", kind: "notice", ref: id, text: `访客机器 ${guest} 交回了 ${id} 的结果（未经审查）。` }));
+    }
     if (isMcpPath(p)) return this.mcp.fetch(req, await this.who(req, url));
     const who = await this.who(req, url);
     if (!who) return json({ error: "unauthorized" }, 401);
     // a connector's OAuth token is for /mcp only: never the owner API (settings, machine key via /api/host/join, …)
     if (who !== "machine" && who.scope === "mcp") return json({ error: "forbidden" }, 403);
     if (p.startsWith("/api/push/")) return this.push(p, req, who);
+    const ga = await guestsAdmin(this.sql, req, url, who === "machine" ? "machine" : "owner");
+    if (ga) return ga;
     if ((p === "/api/files/list" || p === "/api/files/read") && m === "GET") { // owner (and machine) read of READABLE prefixes
       const r = handleReadFiles(this.sql, url);
       if (r) return r;

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // hub — CLI + daemon for the agent fleet.
+import { guestCmd } from "./guest";
 import { $ } from "bun";
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -948,11 +949,14 @@ const HELP = `Noop — your own AI team
   noop notify "text"          test Slack/Discord
   noop security [--json]      check this Noop deployment (2FA, sessions, OAuth clients, allow-lists) and this machine's Noop setup
   noop 2fa setup              bind (or re-bind) the authenticator app every sign-in requires; noop 2fa confirm <code> · noop 2fa status
+  noop guest join <url> <code> · noop guest run   low-trust guest worker for shared machines (no memory, no machine key)
+  noop guest invite <label> · list · assign <G-id> <T-id> · results [--ack] · revoke <G-id>   (primary side)
   noop revoke-sessions        security valve: sign out every phone, browser and MCP connector at once (machines keep working)
 `;
 
 async function main() {
   const [cmd, ...rest] = Bun.argv.slice(2);
+  if (cmd === "guest") return guestCmd(rest, loadConfig); // a guest machine has no hub config at all
   const cfg = loadConfig();
   setApprovalGate((src) => needsApproval(loadConfig(), src));
   setIdTag(idTagFor(cfg, hostName(cfg))); // every id minted on a non-primary host carries its tag (T-M0001)
