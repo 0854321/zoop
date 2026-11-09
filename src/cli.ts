@@ -889,7 +889,8 @@ async function daemon(cfg: Cfg) {
 
 async function status(cfg: Cfg, brief = false) {
   if (brief) { // what a person wants to see right after installing
-    const url = cfg.cloud?.url;
+    const url = readHubToml().cloud?.url ?? cfg.cloud?.url;
+    if (!url) return void console.log(`  ✗ ${hostName(cfg)} is not connected to your Noop yet. Run: noop init <noop-url>`);
     const hosts = onlineHosts(cfg).map((h) => h.host);
     console.log(`  ✓ ${hostName(cfg)} is part of your team${hosts.length > 1 ? ` (${hosts.length} machines online)` : ""}`);
     if (url) console.log(`\n  Open ${url}\n  and sign in with the code sent to your email.`);

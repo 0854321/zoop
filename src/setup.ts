@@ -35,7 +35,8 @@ async function joinViaLogin(url: string, host: string): Promise<string | null> {
   const s = await post("/api/auth/start", { email });
   if (!s.ok) { console.error(`login failed (${s.status}): ${s.json?.error ?? ""}`); return null; }
   const code = (prompt("code from the email:") ?? "").trim();
-  const v = await post("/api/auth/verify", { email, code });
+  const totp = (prompt("6-digit code from the authenticator app:") ?? "").replace(/\s/g, "");
+  const v = await post("/api/auth/verify", { email, code, totp });
   if (!v.ok || !v.json?.session) { console.error(`verification failed (${v.status}): ${v.json?.error ?? ""}`); return null; }
   const j = await post("/api/host/join", { host }, v.json.session);
   await post("/api/auth/logout", {}, v.json.session); // the session was only needed to mint the machine token
@@ -57,7 +58,7 @@ export async function init(opts: { worker?: string; token?: string; primary?: bo
     const url = (opts.worker || joined || (prompt("your noop URL (e.g. https://noop.example.com; set up the first machine with --primary):") ?? "")).trim().replace(/\/$/, "");
     if (!url) { console.error("no noop URL: run init <noop-url>, or init --primary on the machine that hosts it"); process.exitCode = 1; return; }
     const token = opts.token ?? (url === joined ? readHubToml().server?.token : undefined) ?? await joinViaLogin(url, me);
-    if (!token) return;
+    if (!token) { process.exitCode = 1; return; }
     writeHubToml({ cloud: { url }, server: { token } });
     if (!(await pull())) { console.error(`could not sync from ${url} (check the URL / token)`); process.exitCode = 1; return; }
     writeLocalConfig(me);

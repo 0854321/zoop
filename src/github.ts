@@ -18,6 +18,7 @@ export const GH_REST_GATES = [
 async function rate(): Promise<Rate | null> {
   const c: Rate | null = existsSync(CACHE) ? JSON.parse(readFileSync(CACHE, "utf8")) : null;
   if (c && Date.now() - c.checked < 5 * 60_000) return c;
+  if (!Bun.which("gh")) return c; // Bun.spawn throws on a missing binary, which would fail the whole tick
   const p = Bun.spawn(["gh", "api", "rate_limit"], { stdout: "pipe", stderr: "ignore" }); // free call
   const out = await new Response(p.stdout).text();
   if ((await p.exited) !== 0) return c;
