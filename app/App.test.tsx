@@ -776,6 +776,84 @@ describe("images", () => {
     };
   }
 
+  test("the newest Markdown report opens in the reader pane, which zooms, closes and reopens", async () => {
+    const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "推送通知梳理完成", attachments: ["/media/1762650000000-push-notifications.md"] };
+    const app = await open("./App.tsx", {
+      ...desk,
+      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: { body: "# Push notifications\n\nAPNs and **FCM** support." } },
+    });
+    await app.waitFor("id:doc-attachment");
+    expect(app.shows("text:push-notifications")).toBe(true);
+    // opened by itself, beside the chat on a wide window
+    await app.waitFor("id:doc-side");
+    await app.waitUntil(() => app.shows("text:Push notifications"));
+    expect(app.shows("text:Markdown · Reading")).toBe(true);
+    expect(app.shows("text:100%")).toBe(true);
+    await app.press("id:doc-zoom-in");
+    await app.waitUntil(() => app.shows("text:113%"));
+    await app.press("id:doc-zoom-out");
+    await app.press("id:doc-zoom-out");
+    await app.waitUntil(() => app.shows("text:88%"));
+    await app.press("id:doc-expand");
+    await app.press("id:doc-close");
+    await app.waitUntil(() => !app.shows("id:doc-reader"));
+    // closing doesn't bring it back; the header button and the card reopen it
+    await app.press("id:doc-reopen");
+    await app.waitFor("id:doc-reader");
+    await app.press("id:doc-close");
+    await app.waitUntil(() => !app.shows("id:doc-reader"));
+    await app.press("id:doc-attachment");
+    await app.waitFor("id:doc-reader");
+  });
+
+  test("a report on a task page opens in that page's reader and stays there", async () => {
+    const report = { id: "r9", ts: ts(9), from: "dev@linux-box", kind: "notice", ref: "T-0005", thread: true, text: "调研完成", attachments: ["/media/1762650000000-task-report.md"] };
+    const app = await open("./App.tsx", {
+      ...desk,
+      network: {
+        ...hub([], [{ id: "e1", ts: ts(1), from: "dev@linux-box", kind: "notice", text: "见 T-0005" }, report]),
+        [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0005", title: "调研", agent: "dev", state: "done", created: ts(1), request: "调研", runs: [] } },
+        [`GET ${URL}/media/*`]: { body: "# Task findings" },
+      },
+    });
+    await app.press("id:task-chip-T-0005 >> nth=0");
+    await app.waitFor("id:doc-attachment");
+    expect(app.shows("id:doc-reader")).toBe(false);
+    await app.press("id:doc-attachment");
+    await app.waitFor("id:doc-side");
+    await app.waitUntil(() => app.shows("text:Task findings"));
+    // back on the channel, the task's report is not shown in the channel's reader
+    await app.press("Channel >> nth=0");
+    await app.waitUntil(() => app.shows("text:开始处理 T-0007，很快完成"));
+    expect(app.shows("id:doc-reader")).toBe(false);
+  });
+
+  test("a report that fails to load offers Retry, which loads it", async () => {
+    let calls = 0;
+    const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "报告", attachments: ["/media/1762650000000-flaky.md"] };
+    const app = await open("./App.tsx", {
+      ...desk,
+      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: () => (++calls === 1 ? { status: 500, body: "" } : { body: "# Second try" }) },
+    });
+    await app.waitFor("id:doc-retry");
+    expect(app.shows("text:Couldn’t load (500)")).toBe(true);
+    await app.press("id:doc-retry");
+    await app.waitUntil(() => app.shows("text:Second try"));
+    expect(calls).toBe(2);
+  });
+
+  test("on a phone the report reader covers the chat as a sheet", async () => {
+    const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "报告", attachments: ["/media/1762650000000-report.md"] };
+    const app = await open("./App.tsx", {
+      ...desk, width: 390, height: 844,
+      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: { body: "# Report" } },
+    });
+    await app.waitFor("id:doc-sheet");
+    expect(app.shows("id:doc-expand")).toBe(false);
+    await app.press("id:doc-close");
+    await app.waitUntil(() => !app.shows("id:doc-sheet"));
+  });
+
   test("a picked image shows as a thumbnail, can be removed, and is sent with the text", async () => {
     const posts: { text: string; attachments?: string[] }[] = [];
     const uploads: string[] = [];

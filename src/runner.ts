@@ -36,7 +36,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],
-  "attachments": ["/abs/path/screenshot.png", "/abs/path/recording.mp4"],   // optional: shown to the owner with the message
+  "attachments": ["/abs/path/screenshot.png", "/abs/path/recording.mp4", "/abs/path/report.md"],   // optional: shown to the owner with the message; a long report goes as a .md file the owner opens in the chat, never as "see file"
   "channels": ["existing-slug", {"name": "New topic", "goal": "what it is for"}],   // see # Channels; [] when none fits
   "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work", "requires": "os:macos when it needs macOS/iOS/Xcode (os:windows for Windows); omit otherwise"}]
 }

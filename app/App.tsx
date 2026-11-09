@@ -47,6 +47,7 @@ import { CLIENT_VERSION } from "./version";
 import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
+import { attachmentName, isDoc } from "./files";
 import { type Channel, channelDigest, sortChannels } from "./channels";
 import { isRead, markRead, unreadEvents, toggleMessageRead, type MessageReadState as ReadState } from "./read";
 import { setupTray, type TrayChat } from "./tray";
@@ -717,10 +718,11 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
 }
 
 /** Selectable message Markdown. */
-function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string}) {
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string; scale?: number }) {
   const small = !!(props.muted || props.quiet);
-  const fontSize = props.quiet ? 14 : props.muted ? size.small : size.text;
-  const lineHeight = small ? 21 : size.line;
+  const k = () => props.scale ?? 1;
+  const fontSize = () => (props.quiet ? 14 : props.muted ? size.small : size.text) * k();
+  const lineHeight = () => (small ? 21 : size.line) * k();
   const doc = () => {
     const d = TextView.parse(hubMarkdown(linkRepoRefs(props.text, props.context)), { math: false, html: false }, EXTENSIONS);
     return { ...d, blocks: ghBlocks(d.blocks) };
@@ -733,8 +735,8 @@ function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?:
         onLinkPress={({ url }) => { if (/^(https?|mailto):/i.test(url)) void openUrl(url).catch(() => {}); }}
         renderCustom={(node) => <Custom node={node} small={small} />}
         styles={{
-          root: { gap: 8, fontSize, lineHeight, color: small ? colors.muted : colors.text },
-          code: { fontFamily: MONO, fontSize: small ? 13 : 14.5, color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
+          root: { gap: 8 * k(), fontSize: fontSize(), lineHeight: lineHeight(), color: small ? colors.muted : colors.text },
+          code: { fontFamily: MONO, fontSize: (small ? 13 : 14.5) * k(), color: colors.text, backgroundColor: alpha(colors.text, 0.07) },
           emphasis: { fontStyle: "normal", fontWeight: "600" },
           link: { color: linkColor(), textDecorationColor: token("link-underline") },
         }}
@@ -763,6 +765,7 @@ function Media(props: { hub: Hub; path: string }) {
   const ratio = signal(16 / 10);
   const zoomed = signal(false);
   const frame: ViewStyle = { borderRadius: radius.inset, backgroundColor: colors.inset };
+  if (isDoc(props.path)) return <DocAttachment src={src} name={attachmentName(props.path)} />;
   if (isVideo(props.path)) return <Video src={src} controls paused style={{ ...frame, borderWidth: 1, borderColor: colors.border, width: "100%", maxWidth: 480, aspectRatio: 16 / 9 }} />;
   // a thumbnail that keeps the timeline readable; press it to see the full image
   const THUMB = 240;
@@ -816,6 +819,132 @@ function Media(props: { hub: Hub; path: string }) {
   );
 }
 
+/** The report open in the chat's reader pane: one at a time, shared by every file card in the timeline. */
+type DocRef = { src: string; name: string; at?: string };
+const reading = signal<DocRef | null>(null);
+/** The page the reader belongs to (a channel or a task); a report opened on one page never shows on another. */
+const readerAt = signal("");
+/** Report bodies already fetched, so reopening or switching back is instant. Bounded, newest kept; a failed one loads again when reopened or retried. */
+type DocBody = { text: string | null; error: string };
+const DOC_CACHE_MAX = 16;
+const docCache = new Map<string, Signal<DocBody>>();
+function clearDocCache() {
+  docCache.clear();
+  reading.set(null);
+}
+function loadDoc(src: string, body: Signal<DocBody>) {
+  body.set({ text: null, error: "" });
+  void fetch(src)
+    .then(async (r) => {
+      if (r.ok) return body.set({ text: stripFrontMatter(await r.text()), error: "" });
+      body.set({ text: null, error: r.status === 404 ? L("This file has expired.", "这个文件已过期。") : L(`Couldn’t load (${r.status})`, `读取失败（${r.status}）`) });
+    })
+    .catch(() => {
+      body.set({ text: null, error: L("Can’t reach the server", "连不上服务器") });
+    });
+}
+function docBody(src: string) {
+  const hit = docCache.get(src);
+  if (hit) {
+    docCache.delete(src);
+    docCache.set(src, hit);
+    if (untracked(hit).error) loadDoc(src, hit);
+    return hit;
+  }
+  const body = signal<DocBody>({ text: null, error: "" });
+  docCache.set(src, body);
+  while (docCache.size > DOC_CACHE_MAX) docCache.delete(docCache.keys().next().value!);
+  loadDoc(src, body);
+  return body;
+}
+function retryDoc(src: string, body: Signal<DocBody>) {
+  if (!docCache.has(src)) {
+    docCache.set(src, body);
+    while (docCache.size > DOC_CACHE_MAX) docCache.delete(docCache.keys().next().value!);
+  }
+  loadDoc(src, body);
+}
+
+/** A Markdown report attached to a message: a file card that opens the report in the chat's reader pane. */
+function DocAttachment(props: { src: string; name: string }) {
+  const active = () => reading()?.src === props.src && reading()?.at === readerAt();
+  const stem = () => props.name.replace(/\.(md|markdown)$/i, "");
+  return (
+    <View
+      testID="doc-attachment"
+      role="button"
+      accessibilityLabel={L(`Open ${props.name}`, `打开 ${props.name}`)}
+      accessibilityState={{ selected: active() }}
+      onPress={() => reading.set(active() ? null : { src: props.src, name: props.name, at: readerAt() })}
+      hoverStyle={active() ? undefined : { borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.03) }}
+      style={{
+        flexDirection: "row", alignItems: "center", gap: 12, width: 344, maxWidth: "100%", padding: 14,
+        borderRadius: radius.inset, borderCurve: "continuous", borderWidth: 1, cursor: "pointer",
+        borderColor: active() ? alpha(colors.info, 0.35) : colors.border,
+        backgroundColor: active() ? alpha(colors.info, 0.04) : colors.background,
+      }}
+    >
+      <View style={{ width: 40, height: 44, flexShrink: 0, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: 3 }}>
+        <Icon name="document" size={18} tint={active() ? colors.info : colors.muted} />
+        <Text style={{ fontFamily: MONO, fontSize: 8, fontWeight: "600", letterSpacing: 0.5, color: colors.faint }}>MD</Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <Text style={{ fontSize: 14, lineHeight: 19, fontWeight: "600", color: colors.text, numberOfLines: 2 }}>{stem()}</Text>
+        <Text style={{ fontSize: 12, lineHeight: 16, color: active() ? colors.info : colors.faint, numberOfLines: 1 }}>
+          {active() ? L("Markdown · Reading", "Markdown · 正在阅读") : L("Markdown · Report", "Markdown · 报告")}
+        </Text>
+      </View>
+      <Icon name="chevron" size={14} tint={active() ? colors.info : colors.faint} />
+    </View>
+  );
+}
+
+const DOC_SCALES = [0.875, 1, 1.125, 1.25, 1.4];
+/** The reader beside the chat (a full sheet on a phone): the open report rendered with TextView, with text zoom and a wider pane. */
+function DocPane(props: { doc: DocRef; wide: boolean; expanded: boolean; onExpand: () => void; onClose: () => void }) {
+  const step = signal(1);
+  // looked up once per report, so a re-render never fetches again by itself
+  const cell = computed(() => { const src = props.doc.src; return untracked(() => docBody(src)); });
+  const body = () => cell()();
+  const btn = (p: { id: string; icon: IconName; label: string; on?: boolean; disabled?: boolean; onPress: () => void }) => (
+    <View testID={p.id} role="button" accessibilityLabel={p.label} accessibilityState={{ disabled: !!p.disabled }}
+      onPress={p.disabled ? undefined : p.onPress} hoverStyle={p.disabled ? undefined : hovered()}
+      style={{ width: props.wide ? 28 : 36, height: props.wide ? 28 : 36, borderRadius: 6, alignItems: "center", justifyContent: "center", cursor: p.disabled ? "default" : "pointer", opacity: p.disabled ? 0.35 : 1, backgroundColor: p.on ? alpha(colors.text, 0.07) : undefined }}>
+      <Icon name={p.icon} size={15} tint={colors.muted} />
+    </View>
+  );
+  return (
+    <View testID="doc-reader" style={{ flex: 1, minWidth: 0, backgroundColor: colors.background }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 2, height: props.wide ? 44 : 52, paddingLeft: 14, paddingRight: 8, borderBottomWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}>
+        <Icon name="document" size={16} tint={colors.muted} />
+        <Text testID="doc-title" style={{ flex: 1, minWidth: 0, marginLeft: 8, marginRight: 6, fontSize: 13.5, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{props.doc.name}</Text>
+        {btn({ id: "doc-zoom-out", icon: "zoom-out", label: L("Smaller text", "缩小文字"), disabled: step() === 0, onPress: () => step.set(Math.max(0, step() - 1)) })}
+        <Text testID="doc-scale" style={{ width: 36, textAlign: "center", fontSize: 11.5, fontVariant: ["tabular-nums"], color: colors.faint }}>{`${Math.round(DOC_SCALES[step()] * 100)}%`}</Text>
+        {btn({ id: "doc-zoom-in", icon: "zoom-in", label: L("Larger text", "放大文字"), disabled: step() === DOC_SCALES.length - 1, onPress: () => step.set(Math.min(DOC_SCALES.length - 1, step() + 1)) })}
+        <If when={props.wide}>
+          {btn({ id: "doc-expand", icon: props.expanded ? "minimize" : "maximize", label: props.expanded ? L("Narrow reader", "收窄阅读栏") : L("Widen reader", "加宽阅读栏"), on: props.expanded, onPress: props.onExpand })}
+        </If>
+        {btn({ id: "doc-close", icon: "close", label: L("Close reader", "关闭阅读栏"), onPress: props.onClose })}
+      </View>
+      <Scroll style={{ flex: 1 }}>
+        <View selectable style={{ width: "100%", maxWidth: 760, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 28 : 20, paddingTop: 28, paddingBottom: 48 }}>
+          <If when={body().text !== null} else={
+            <View style={{ gap: 10, alignItems: "flex-start" }}>
+              <Text testID="doc-status" style={{ fontSize: 14, color: body().error ? colors.danger : colors.faint }}>{body().error || L("Loading…", "读取中…")}</Text>
+              <If when={body().error}>
+                <Btn label={L("Retry", "重试")} onPress={() => retryDoc(props.doc.src, cell())} testID="doc-retry" />
+              </If>
+            </View>
+          }>
+            <Rich text={body().text ?? ""} scale={DOC_SCALES[step()]} />
+          </If>
+        </View>
+      </Scroll>
+    </View>
+  );
+}
+
+
 // ---------------------------------------------------------------- timeline
 
 /** Messages the hub just confirmed: a quiet check beside their timestamp fades away. */
@@ -840,7 +969,7 @@ function SentCheck() {
       accessibilityLabel={L("Sent", "已发送")}
       style={{ width: 14, height: 16, alignItems: "center", justifyContent: "center", opacity: fade }}
     >
-      <CheckMark size={14} weight={1.8} tint={colors.muted} />
+      <CheckMark size={14} weight={2.2} tint={colors.muted} />
     </View>
   );
 }
@@ -3782,6 +3911,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const onChannel = () => nav.routes().length === 1;
   /** The channel the conversation is narrowed to (a Slack-like topic), or null for the main chat. Same view, same composer. */
   const scope = signal<string | null>(null);
+  effect(() => { const r = top(); readerAt.set(r.name === "task" ? `task:${r.id}` : r.name === "channel" ? `channel:${scope() ?? ""}` : r.name); });
   const scoped = () => { const slug = scope(); return slug ? channels.list().find((c) => c.slug === slug) : undefined; };
   const openScope = (slug: string | null) => { drawer.set(false); nav.popToRoot(); scope.set(slug); };
   // a channel's history beyond what this device holds; what is said there arrives live like the main chat's
@@ -3846,6 +3976,35 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     return merge(hub.events().filter((e) => !e.thread && !e.channel && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))), outgoing);
   });
   const answered = computed(() => answeredIds(shown()));
+  /** The newest Markdown report in this conversation: the reader opens it by itself when it arrives. */
+  const latestDoc = computed((): DocRef | null => {
+    const list = shown();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const path = [...(list[i].attachments ?? [])].reverse().find(isDoc);
+      if (path) return { src: mediaUrl(hub.cfg.url, hub.cfg.token, path), name: attachmentName(path) };
+    }
+    return null;
+  });
+  let autoDoc: string | undefined;
+  effect(() => {
+    const d = latestDoc();
+    if (d?.src === autoDoc) return;
+    autoDoc = d?.src;
+    untracked(() => reading.set(d && { ...d, at: `channel:${scope() ?? ""}` }));
+  });
+  // a different hub or a sign-out starts with no reports kept from the last one
+  cleanup(clearDocCache);
+  const readerWide = signal(false);
+  /** Room for the chat beside the reader; below it the reader covers the chat like a sheet. */
+  const chatRoom = () => windowSize().width - (wide() && sidebarOpen() ? size.sidebar : 0);
+  const readerSide = () => wide() && chatRoom() >= 860;
+  const readerWidth = () => (readerWide() ? Math.round(chatRoom() * 0.62) : Math.min(460, Math.round(chatRoom() * 0.42)));
+  const shownDoc = () => { const d = reading(); return d && d.at === readerAt() ? d : null; };
+  const readerPane = () => {
+    const d = shownDoc();
+    if (!d) return null;
+    return <DocPane doc={d} wide={readerSide()} expanded={readerWide()} onExpand={() => { if (!reduceMotion()) LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut")); readerWide.set(!readerWide()); }} onClose={() => reading.set(null)} />;
+  };
   const visibleMessages = signal<HubEvent[]>([]);
   effect(() => {
     if (!reads.loaded() || lifecycle() !== "active") return;
@@ -4443,6 +4602,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const swipeDrawer = () => touch && !wide() && !drawer();
   /** The channel: the timeline and the composer. */
   const channelPage = () => (
+    <View style={{ flex: 1, flexDirection: "row", minWidth: 0 }}>
       <View testID="channel-swipe" pan={swipeDrawer() ? { x: drawerX } : undefined}
         onPanStart={swipeDrawer() ? () => drawerDragging.set(true) : undefined}
         onPanEnd={swipeDrawer() ? finishDrawerPan : undefined}
@@ -4818,6 +4978,19 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
           </View>
           </View>
       </View>
+    </View>
+  );
+  /** Any page with report cards (the channel, a task) gets the same reader beside it, or over it on a phone. */
+  const withReader = (page: JSX.Element) => (
+    <View style={{ flex: 1, flexDirection: "row", minWidth: 0 }}>
+      {page}
+      <If when={shownDoc() && readerSide()}>
+        <View testID="doc-side" style={{ width: readerWidth(), borderLeftWidth: 0.5, borderColor: colors.line }}>{readerPane()}</View>
+      </If>
+      <If when={shownDoc() && !readerSide()}>
+        <View testID="doc-sheet" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, paddingBottom: safeArea().bottom, backgroundColor: colors.background }}>{readerPane()}</View>
+      </If>
+    </View>
   );
 
   const gutter = () => (wide() ? 32 : 16);
@@ -4892,6 +5065,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{titleOf(p.route)}</Text>
       </View>
       {connPill()}
+      <If when={p.route === CHANNEL && !shownDoc() && latestDoc()}>
+        <ToolButton icon="document" label={L("Open latest report", "打开最新报告")} onPress={() => { const d = latestDoc(); reading.set(d && { ...d, at: readerAt() }); }} testID="doc-reopen" />
+      </If>
       <If when={!wide() && p.route === CHANNEL}>
         <ToolButton icon="sliders" label={L("Settings", "设置")} onPress={openTeam} testID="settings-top" />
       </If>
@@ -4899,8 +5075,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   );
   const content = (r: Route) => {
     switch (r.name) {
-      case "channel": return channelPage();
-      case "task": return <TaskDetail hub={hub} id={r.id} wide={wide()} />;
+      case "channel": return withReader(channelPage());
+      case "task": return withReader(<TaskDetail hub={hub} id={r.id} wide={wide()} />);
       case "tasks": return <TaskHistory hub={hub} wide={wide()} onTask={openTask} />;
       case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
       case "team":
@@ -5304,6 +5480,7 @@ function Connected(props: { config: Config; openRef: string | null; onExpired: (
         for (const id of [...showing]) closeNotification(id);
         setBadge(0);
         await hub.logout();
+        clearDocCache();
         props.onLogout();
       }}
     />

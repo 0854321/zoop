@@ -90,7 +90,7 @@ export function MenuMark(props: { kind?: "check" | "dot"; tint: string; size?: n
       {props.kind === "dot" ? (
         <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: props.tint }} />
       ) : (
-        <CheckMark size={size() - 2} weight={2.25} tint={props.tint} />
+        <CheckMark size={size() - 2} weight={2.7} tint={props.tint} />
       )}
     </View>
   );
