@@ -4269,7 +4269,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // Images the owner attaches: pasted, dropped on the window, or picked.
   const attachments = signal<Attachment[]>([]);
   const attachNote = signal<string | null>(null);
-  const dropping = signal(false);
+  // A file drag over the window: null when none, else the offered files (empty until the shell reports them).
+  const dropping = signal<string[] | null>(null);
   let attachSeq = 0;
   function attach(file: Blob, name: string, fromPicker = false) {
     // the photo picker only returns images, but phones often give them no type or extension; the server reads the bytes
@@ -4637,12 +4638,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         onPanStart={swipeDrawer() ? () => drawerDragging.set(true) : undefined}
         onPanEnd={swipeDrawer() ? finishDrawerPan : undefined}
         style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height, transitionProperty: "padding-bottom", transitionDuration: keyboardFrame().duration }}>
-          {/* Files dropped on the timeline or the composer attach their images. */}
           <View
             testID="composer-area"
-            onFileDragEnter={() => dropping.set(true)}
-            onFileDragLeave={() => dropping.set(false)}
-            onFileDrop={({ uris }) => { dropping.set(false); void attachUris(uris); }}
             style={{ flex: 1 }}
           >
             <List
@@ -4870,7 +4867,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                   paddingLeft: 18,
                   paddingRight: 8,
                   ...composerGlass(focused()),
-                  ...(dropping() ? { borderColor: colors.accent, borderStyle: "dashed" as const } : {}),
+                  ...(dropping() && onChannel() ? { borderColor: colors.accent, borderStyle: "dashed" as const } : {}),
                 }}
               >
                 <If when={replyTo()}>
@@ -5152,7 +5149,18 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   };
 
   return (
-    <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.sidebar, overflow: "hidden" }}>
+    <View
+      testID="drop-window"
+      onFileDragEnter={(e?: { uris?: string[] }) => dropping.set(e?.uris ?? [])}
+      onFileDragLeave={() => dropping.set(null)}
+      onFileDrop={({ uris }) => {
+        dropping.set(null);
+        // files land in the chat composer: from a task or doc page, go back to the chat first
+        if (!onChannel()) nav.popToRoot();
+        void attachUris(uris);
+      }}
+      style={{ flex: 1, flexDirection: "row", backgroundColor: colors.sidebar, overflow: "hidden" }}
+    >
       <If when={platform.os === "macos" && wide() && sidebarOpen()}>
         <View style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: size.sidebar + 20, ...glass(colors.sidebar, 0), backgroundColor: alpha(colors.sidebar, 0.25), borderWidth: 0, boxShadow: "none", pointerEvents: "none" }} />
       </If>
@@ -5231,6 +5239,34 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       </If>
 
       <HelpSheet open={help()} onClose={() => help.set(false)} />
+      <If when={dropping()}>
+        {(files) => <DropTarget files={files()} />}
+      </If>
+    </View>
+  );
+}
+
+/** What a file drag over the window shows: the whole window becomes the target, saying what the drop will do. */
+function DropTarget(props: { files: string[] }) {
+  const names = () => props.files.map((u) => { const n = u.split(/[\\/]/).pop() ?? ""; try { return decodeURIComponent(n); } catch { return n; } });
+  const images = () => names().filter((n) => imageType(undefined, n)).length;
+  const detail = () => {
+    const n = names().length;
+    if (n === 0) return L("Images are added to the message", "图片会添加到消息中");
+    if (images() === 0) return L("Only images can be sent", "只能发送图片");
+    if (images() < n) return L(`${images()} of ${n} files are images`, `${n} 个文件中有 ${images()} 张图片`);
+    return n === 1 ? names()[0] : L(`${n} images`, `${n} 张图片`);
+  };
+  const ok = () => names().length === 0 || images() > 0;
+  return (
+    <View testID="drop-target" style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, padding: 12, pointerEvents: "none" }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, borderRadius: 20, borderCurve: "continuous", borderWidth: 2, borderStyle: "dashed", borderColor: ok() ? colors.accent : colors.faint, backgroundColor: alpha(colors.background, 0.88) }}>
+        <View style={{ width: 56, height: 56, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: ok() ? tints.accent : colors.raised }}>
+          <Icon name="image" size={28} tint={ok() ? colors.accent : colors.muted} />
+        </View>
+        <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text }}>{L("Drop to attach", "松开以添加附件")}</Text>
+        <Text testID="drop-detail" style={{ fontSize: 14, color: colors.muted, numberOfLines: 1, maxWidth: 360 }}>{detail()}</Text>
+      </View>
     </View>
   );
 }

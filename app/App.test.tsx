@@ -925,10 +925,10 @@ describe("images", () => {
     expect(posts[0]).toMatchObject({ text: "", attachments: ["/media/shot-1.png"] });
   });
 
-  test("an image file dropped on the composer attaches", async () => {
+  test("an image file dropped anywhere on the window attaches", async () => {
     const app = await open("./App.tsx", { ...desk, network: withUploads([], []) });
     await app.waitFor("id:composer");
-    await app.dropFiles("id:composer-area", [`file://${here("icon.png")}`]);
+    await app.dropFiles("id:drop-window", [`file://${here("icon.png")}`]);
     await app.waitFor("id:attachment");
     expect(app.count("id:attachment")).toBe(1);
   });
