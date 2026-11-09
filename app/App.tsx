@@ -37,7 +37,7 @@ import {
   View,
   windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
-import type { InputRef, JSX, SpeechSession, ViewStyle } from "nsh";
+import type { InputRef, JSX, ScrollRef, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Toast, ToastStack, Button, ContextMenu, Dialog, Menu, MenuItem, MenuSeparator, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, currentWindow } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
@@ -1510,6 +1510,12 @@ function createChannels(hub: Hub, reads: MessageReads) {
 }
 type Channels = ReturnType<typeof createChannels>;
 
+/** A page whose head has scrolled out of sight: what its title bar shows in the head's place, and how to bring the head back. */
+type Folded = { title: string; detail: string; reveal: () => void };
+/** How far a page scrolls before its head's title row is under the bar: past a channel's 44 pt mark and name, past a task's state row and title. */
+const CHANNEL_HEAD = 52;
+const TASK_HEAD = 72;
+
 /** One channel: its goal (editable), archive, and the tasks and cards that belong to it, newest first. */
 /** A channel's head above its conversation: name and purpose together, actions out of the way. The conversation itself is the main chat's. */
 function ChannelHeader(props: { channels: Channels; slug: string }) {
@@ -1649,7 +1655,7 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
   );
 }
 
-function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
+function TaskDetail(props: { hub: Hub; id: string; wide: boolean; onFold?: (folded: Folded | null) => void }) {
   // a task past the status snapshot's newest few is read on its own
   const older = signal<(TaskInfo & { decisions?: string[]; events?: HubEvent[] }) | null>(null);
   const missing = signal(false);
@@ -1709,14 +1715,31 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   }
   const composerHeight = signal(0);
   const showActivity = signal(false);
+  const stateLabel = () => (t()!.state === "nohost" ? L(`Waiting for ${needsLabel(t()!.needs)}`, `等 ${needsLabel(t()!.needs)}`) : STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? "");
+  // Once the title has scrolled under the page's bar, the bar carries it; back at the top, the head shows it again.
+  let page: ScrollRef | undefined;
+  const headPassed = signal(false);
+  const foldTitle = computed(() => (headPassed() && t() ? t()!.title : null));
+  const foldDetail = computed(() => (headPassed() && t() ? `${props.id} · ${stateLabel()}` : ""));
+  effect(() => {
+    const title = foldTitle(), detail = foldDetail();
+    untracked(() => props.onFold?.(title === null ? null : { title, detail, reveal: () => page?.scrollTo({ y: 0, animated: !reduceMotion() }) }));
+  });
+  cleanup(() => props.onFold?.(null));
   return (
     <View style={{ flex: 1 }}>
-    <Scroll style={{ flex: 1 }}>
+    <Scroll
+      testID="task-page"
+      ref={(r) => { page = r; }}
+      scrollEventThrottle={100}
+      onScroll={(ev) => { const passed = ev.offset.y > TASK_HEAD; if (passed !== untracked(headPassed)) headPassed.set(passed); }}
+      style={{ flex: 1 }}
+    >
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingTop: 24, paddingBottom: composerHeight() + 24 }}>
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{missing() ? L(`Can’t find ${props.id}.`, `找不到 ${props.id}。`) : L("Loading…", "读取中…")}</Text>}>
-          <View style={{ gap: 8 }}>
+          <View testID="task-head" style={{ gap: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Badge label={t()!.state === "nohost" ? L(`Waiting for ${needsLabel(t()!.needs)}`, `等 ${needsLabel(t()!.needs)}`) : STATE_OF()[t()!.state ?? ""]?.[0] ?? t()!.state ?? ""} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
+              <Badge label={stateLabel()} tone={t()!.state === "failed" ? "danger" : t()!.state === "blocked" ? "warn" : "neutral"} />
               <Text style={{ fontFamily: MONO, fontSize: 13, color: colors.muted }}>{t()!.id}</Text>
               <View style={{ flex: 1 }} />
               <If when={cancellable() && !cancelling()}>
@@ -3940,6 +3963,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const inputHeight = signal(28);
   const outbox = signal<Outgoing[]>([]);
   const atEnd = signal(true);
+  /** The channel's head (name, goal, actions) has scrolled under the bar. */
+  const headPassed = signal(false);
   const unseen = signal(0);
   const chosen = signal<string | null>(null);
 
@@ -4037,14 +4062,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     const out: TimelineRow[] = [];
     const all = shown();
     const hidden = timelineWindow.update(all, hub.loaded(), limit(), untracked(atEnd) && untracked(onChannel));
+    // a channel's head stays the first row, above any older history still to load, so its name, goal and actions are always at the top
+    const slug = scope();
+    if (slug) {
+      const key = `head:${slug}`;
+      const head = built.get(key) ?? { key, head: slug };
+      next.set(key, head);
+      out.push(head);
+    }
     if (hidden) {
       const old = built.get("more");
       const more = old && "more" in old && old.more === hidden ? old : { key: "more", more: hidden };
       next.set("more", more);
       out.push(more);
     }
-    const slug = scope();
-    if (slug && !hidden) out.push({ key: `head:${slug}`, head: slug });
     for (const row of rows(hidden ? all.slice(hidden) : all)) {
       if ("event" in row && row.event.id === d) out.push(UNREAD);
       const old = built.get(row.key);
@@ -4125,8 +4156,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     timelineWindow = createTimelineWindow(PAGE);
     built = new Map();
     limit.set(PAGE);
+    headPassed.set(false);
     atEnd.set(true); unseen.set(0); count = untracked(shown).length; toEnd();
   });
+  // Pages whose head has scrolled under the bar, which then carries a compact title instead; back at the head it unfolds.
+  const taskFolds = signal<Record<string, Folded | null>>({});
+  const folded = (r: Route): Folded | null => {
+    if (r.name === "task") return taskFolds()[r.id] ?? null;
+    if (r !== CHANNEL || !headPassed() || !scope()) return null;
+    const c = scoped();
+    return { title: `# ${c?.name ?? scope()}`, detail: c?.goal ?? "", reveal: () => scrollTimeline(0) };
+  };
 
   const reply = (ref: string, note?: string) => {
     replyNote.set(note ?? null);
@@ -4558,8 +4598,6 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     else if (nav.routes().length > 1) nav.pop();
   }, { when: "always" });
 
-  const connLabel = () => ({ connecting: L("Connecting…", "连接中…"), live: L("Live", "实时"), offline: L("Disconnected, reconnecting…", "已断开，重连中…"), unauthorized: L("Session expired", "登录已过期"), blocked: L(`IP ${hub.blockedIp()} not allowed`, `IP ${hub.blockedIp()} 未放行`) })[hub.conn()];
-  const connTone = () => (hub.conn() === "live" ? "on" : hub.conn() === "unauthorized" || hub.conn() === "blocked" ? "bad" : hub.conn() === "offline" ? "wait" : "off");
   const sidebar = (inDrawer: boolean) => (
     <Sidebar
       onRestart={() => void restartToUpdate()}
@@ -4631,6 +4669,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                 const end = ev.contentSize.height - ev.offset.y - ev.size.height <= AT_END;
                 if (end !== untracked(atEnd)) atEnd.set(end);
                 if (end) unseen.set(0);
+                const passed = ev.offset.y > (wide() ? 24 : 12) + CHANNEL_HEAD;
+                if (passed !== untracked(headPassed)) headPassed.set(passed);
               }}
               empty={() => <View style={{ width: "100%", maxWidth: size.column + gutter() * 2, alignSelf: "center", paddingHorizontal: gutter(), paddingTop: wide() ? 24 : 12, paddingBottom: composerHeight() + 16 }}>
                 <If when={!hub.loaded()}>
@@ -5021,16 +5061,20 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   /** The back button's label, the page below's short name. */
   const backTitle = (r: Route | undefined) => (!r ? "" : r.name === "channel" ? L("Channel", "主会话") : r.name === "team" ? L("Settings", "设置") : r.name === "host" ? L("Machines", "机器") : r.name === "rules" ? L("Memory", "记忆") : r.name === "tasks" ? L("All tasks", "全部任务") : titleOf(r));
   const below = (r: Route) => { const rs = nav.routes(); const i = rs.indexOf(r); return i > 0 ? rs[i - 1] : undefined; };
-  const connPill = () => (
+  /** A folded page's compact title in its bar: pressing it scrolls back to the head. Centered in two lines in a phone's system header. */
+  const FoldedTitle = (p: { folded: Folded; stacked?: boolean }) => (
     <View
-      tooltip={<Tip label={hub.cfg.url} />}
-      accessibilityLabel={connLabel()}
-      testID="conn"
-      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 30, paddingHorizontal: wide() ? 10 : 11 }}
+      testID="page-title-folded"
+      role="button"
+      accessibilityLabel={L(`${p.folded.title}, back to the top`, `${p.folded.title}，回到顶部`)}
+      onPress={() => p.folded.reveal()}
+      style={p.stacked
+        ? { minWidth: 0, maxWidth: "100%", alignItems: platform.os === "ios" ? "center" : "flex-start" }
+        : { flexShrink: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 }}
     >
-      <Dot tone={connTone()} />
-      <If when={wide()}>
-        <Text style={{ fontSize: 13.5, color: hub.conn() === "unauthorized" ? colors.danger : colors.muted }}>{connLabel()}</Text>
+      <Text style={{ flexShrink: 1, minWidth: 0, maxWidth: "100%", fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{p.folded.title}</Text>
+      <If when={p.folded.detail}>
+        <Text testID="page-title-detail" style={{ flexShrink: 4, minWidth: 0, maxWidth: "100%", fontSize: p.stacked ? 12.5 : 13.5, color: colors.muted, numberOfLines: 1 }}>{p.folded.detail}</Text>
       </If>
     </View>
   );
@@ -5072,9 +5116,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         )}
       </If>
       <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <Text style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{titleOf(p.route)}</Text>
+        <If when={folded(p.route)} else={<Text testID="page-title" style={{ fontSize: 16, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{titleOf(p.route)}</Text>}>
+          {(f) => <FoldedTitle folded={f()} />}
+        </If>
       </View>
-      {connPill()}
       <If when={p.route === CHANNEL && !shownDoc() && latestDoc()}>
         <ToolButton icon="document" label={L("Open latest report", "打开最新报告")} onPress={() => { const d = latestDoc(); reading.set(d && { ...d, at: readerAt() }); }} testID="doc-reopen" />
       </If>
@@ -5086,7 +5131,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const content = (r: Route) => {
     switch (r.name) {
       case "channel": return withReader(channelPage());
-      case "task": return withReader(<TaskDetail hub={hub} id={r.id} wide={wide()} />);
+      case "task": return withReader(<TaskDetail hub={hub} id={r.id} wide={wide()} onFold={(f) => taskFolds.update((m) => ({ ...m, [r.id]: f }))} />);
       case "tasks": return <TaskHistory hub={hub} wide={wide()} onTask={openTask} />;
       case "host": return <MachineDetail hub={hub} host={r.host} wide={wide()} onTask={openTask} />;
       case "team":
@@ -5130,26 +5175,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
             headerLeft={systemHeader && route === CHANNEL && !wide() ? <ToolButton icon="menu" label={L("Menu", "菜单")} onPress={() => drawer.set(true)} /> : undefined}
             ios={{ headerLeftSymbol: "sidebar.left", headerRightSymbol: "gearshape" }}
             headerTitle={
-              // iOS: the bar's buttons are UIKit's own, so the connection sits by the title.
-              platform.os === "ios" && route === CHANNEL ? (
-                <View testID="conn" accessibilityLabel={connLabel()} style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-                  <Dot tone={connTone()} />
-                  <Text style={{ fontSize: 17, fontWeight: "600", color: colors.text }}>{titleOf(route)}</Text>
-                </View>
-              ) : undefined
+              // phones: a folded page's compact title replaces the system title until its head is back in sight
+              systemHeader && folded(route) ? <FoldedTitle folded={folded(route)!} stacked /> : undefined
             }
-            headerRight={
-              platform.os === "ios" ? (
-                route === CHANNEL ? <ToolButton icon="sliders" label={L("Settings", "设置")} onPress={openTeam} testID="settings-top" /> : undefined
-              ) : systemHeader ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  {connPill()}
-                  <If when={route === CHANNEL}>
-                    <ToolButton icon="sliders" label={L("Settings", "设置")} onPress={openTeam} testID="settings-top" />
-                  </If>
-                </View>
-              ) : undefined
-            }
+            headerRight={systemHeader && route === CHANNEL ? <ToolButton icon="sliders" label={L("Settings", "设置")} onPress={openTeam} testID="settings-top" /> : undefined}
             style={{ backgroundColor: colors.background }}
           >
             {content(route)}

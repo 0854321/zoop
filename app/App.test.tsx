@@ -1785,6 +1785,109 @@ test("channels share per-message read state with main chat, and Menu can mark al
   expect(app.shows("id:menu-unread-count")).toBe(false);
 });
 
+describe("folding page heads", () => {
+  const omamail = { slug: "omamail", name: "Omamail", goal: "Mail quality and releases", status: "active", created: ts(-900), last_activity: ts(5), stale: false, count: 0, refs: [], items: [] };
+  const quiet = { ...omamail, slug: "quiet", name: "Quiet room", goal: "Nothing much" };
+  const talk = Array.from({ length: 60 }, (_, i) => ({ id: `fold-${i}`, ts: ts(1 + i / 100), from: "agent", kind: "notice", text: `Channel line ${i}`, channel: "omamail" }));
+  const channelHub = () => ({
+    ...hub([], talk),
+    [`GET ${URL}/api/channels`]: { body: { channels: [omamail, quiet] } },
+    [`GET ${URL}/api/channels/feed?*`]: (r: { url: string }) => ({ body: { events: r.url.includes("quiet") ? [] : talk } }),
+  });
+
+  for (const platform of ["macos", "ios", "android"] as const) {
+    test(`a channel's head folds into the bar away from the top and unfolds back there (${platform})`, async () => {
+      const app = await open("./App.tsx", { storage: STORAGE, width: platform === "macos" ? 1200 : 390, height: 800, platform, network: channelHub() });
+      await app.waitFor("id:composer");
+      // the bar no longer carries a connection pill
+      expect(app.shows("text:Live")).toBe(false);
+      expect(app.shows("id:conn")).toBe(false);
+      if (platform !== "macos") await app.press("label:Menu");
+      await app.press("id:side-channel-omamail");
+      await app.waitFor("Channel line 59");
+      // opened at the newest message, the head is far above: the bar holds the name and goal
+      await app.waitFor("id:page-title-folded");
+      expect(app.shows("label:# Omamail, back to the top")).toBe(true);
+      expect(app.shows("id:page-title-detail")).toBe(true);
+      expect(app.shows("text:Mail quality and releases")).toBe(true);
+
+      // back at the top, the head is the page's own again, with its actions
+      await app.scroll("id:timeline", -20000);
+      await app.waitFor("id:channel-edit-goal");
+      await app.waitUntil(() => !app.shows("id:page-title-folded"));
+      expect(app.shows("id:channel-archive")).toBe(true);
+      if (platform === "macos") expect(app.shows("id:page-title")).toBe(true);
+
+      // away from it again it folds; the folded title brings the head back
+      await app.scroll("id:timeline", 20000);
+      await app.waitFor("Channel line 59");
+      await app.waitFor("id:page-title-folded");
+      expect(app.shows("label:Back to bottom")).toBe(false); // still following the newest
+      await app.press("id:page-title-folded");
+      await app.waitFor("id:channel-edit-goal");
+      await app.waitUntil(() => !app.shows("id:page-title-folded"));
+
+      // another channel starts unfolded; the main chat has no head to fold
+      await app.scroll("id:timeline", 20000);
+      await app.waitFor("id:page-title-folded");
+      if (platform !== "macos") await app.press("label:Menu");
+      await app.press("id:side-channel-quiet");
+      await app.waitFor("Nothing much");
+      expect(app.shows("id:page-title-folded")).toBe(false);
+      if (platform !== "macos") await app.press("label:Menu");
+      await app.press("id:side-channel-omamail");
+      await app.waitFor("Channel line 59");
+      await app.waitFor("id:page-title-folded");
+      if (platform !== "macos") await app.press("label:Menu");
+      await app.press(platform === "macos" ? "text:Channel" : "text:Channel >> nth=0");
+      await app.waitUntil(() => !app.shows("Channel line 59"));
+      expect(app.shows("id:page-title-folded")).toBe(false);
+    });
+  }
+
+  for (const platform of ["macos", "ios"] as const) {
+    test(`a task's head folds into the bar and its actions come back at the top (${platform})`, async () => {
+      const said = Array.from({ length: 40 }, (_, i) => ({ id: `task-said-${i}`, ts: ts(10 + i / 100), from: "dev@linux-box", kind: "notice", ref: "T-0007", thread: true, text: `Task progress ${i}` }));
+      const app = await open("./App.tsx", { storage: STORAGE, width: platform === "macos" ? 1200 : 390, height: 800, platform, network: {
+        ...hub([], said),
+        [`GET ${URL}/api/status`]: { body: { ...status, active: [{ ...status.active[0], state: "active", started: ts(50) }] } },
+        [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0007", title: "截图检查 gallery", agent: "dev", host: "linux-box", state: "active", started: ts(50), request: "截图检查 gallery", runs: [] } },
+      } });
+      await app.waitFor("id:composer");
+      if (platform !== "macos") await app.press("label:Menu");
+      await app.press("text:截图检查 gallery");
+      await app.waitFor("id:task-head");
+      await app.waitFor("id:cancel-task");
+      expect(app.shows("id:page-title-folded")).toBe(false);
+      expect(app.shows("text:Live")).toBe(false);
+
+      await app.scroll("id:task-page", 1200);
+      await app.waitFor("id:page-title-folded");
+      expect(app.shows("label:截图检查 gallery, back to the top")).toBe(true);
+      expect(app.shows("text:T-0007 · In progress")).toBe(true);
+
+      await app.scroll("id:task-page", -20000);
+      await app.waitUntil(() => !app.shows("id:page-title-folded"));
+      expect(app.shows("id:cancel-task")).toBe(true);
+
+      await app.scroll("id:task-page", 1200);
+      await app.waitFor("id:page-title-folded");
+      await app.press("id:page-title-folded");
+      await app.waitUntil(() => !app.shows("id:page-title-folded"));
+      await app.waitFor("id:cancel-task");
+      await app.waitFor("id:finish-task");
+
+      // leaving the task leaves its folded title behind
+      await app.scroll("id:task-page", 1200);
+      await app.waitFor("id:page-title-folded");
+      if (platform === "macos") await app.press("label:Back to Channel");
+      else await app.back();
+      await app.waitUntil(() => !app.shows("id:task-head"));
+      expect(app.shows("id:page-title-folded")).toBe(false);
+    });
+  }
+});
+
 
 describe("decision notification", () => {
   for (const platform of ["ios", "android", "macos", "web"] as const) {
