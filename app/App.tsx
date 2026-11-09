@@ -132,6 +132,7 @@ import {
   updateSummary,
   type UpdateLine,
   isQueued,
+  taskConversation,
   type TaskInfo,
 } from "./hub";
 import { notificationFor, type NotifyRules } from "./notify";
@@ -1649,9 +1650,6 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   void props.hub.api("GET", `/api/tasks/get?id=${encodeURIComponent(props.id)}`).then((r) => {
     if (r.ok) older.set(r.data as TaskInfo); else missing.set(true);
   });
-  const section = (title: string) => (
-    <Text role="header" style={{ fontSize: 13, fontWeight: "600", color: colors.muted, marginTop: 24, marginBottom: 8 }}>{title}</Text>
-  );
   const cancellable = () => ["active", "inbox", "nohost", "waiting", "parked", "blocked", "proposed"].includes(t()?.state ?? "");
   const cancelling = signal(false);
   async function cancel() {
@@ -1673,6 +1671,8 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     const refs = new Set([props.id, ...(older()?.decisions ?? []), ...(t()?.decision ? [t()!.decision!] : [])]);
     return merge(merge(older()?.events ?? [], props.hub.events()), saying()).filter((e) => !!e.ref && refs.has(e.ref) && (e.thread || !(isHub(e.from) && e.kind === "system")));
   });
+  const conversation = computed(() => taskConversation({ ...older(), ...t(), id: props.id, title: t()?.title ?? "", agent: t()?.agent ?? "", request: older()?.request ?? t()?.request, runs: older()?.runs ?? t()?.runs }, talk()));
+  const timeline = computed(() => rows(conversation()));
   const settled = computed(() => answeredIds(talk()));
   const text = signal("");
   const note = signal("");
@@ -1695,6 +1695,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
     saying.update((l) => l.filter((x) => x.id !== id));
   }
   const composerHeight = signal(0);
+  const showActivity = signal(false);
   return (
     <View style={{ flex: 1 }}>
     <Scroll style={{ flex: 1 }}>
@@ -1733,62 +1734,23 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
               </Text>
             </View>
           </If>
-          <If when={t()!.request}>
-            {section(L("Request", "请求"))}
-            <View selectable><Rich text={t()!.request ?? ""} context={t()!.title} /></View>
-          </If>
-          <If when={talk().length}>
-            {section(L("Conversation", "对话"))}
-            <View testID="task-talk" style={{ gap: 14 }}>
-              <Each of={talk()} key={(e) => e.id}>
-                {(e) => isAsk(e()) ? (
-                  <Message hub={props.hub} event={e()} answered={settled} target={() => null}
-                    onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true).catch((err) => note.set(String((err as Error)?.message ?? err)))}
-                    onReply={() => hint.set(L("Write your instructions in the box below; they’ll be sent as the answer to this card.", "在下面的输入框写你的指示，会作为这张卡片的回答。"))} />
-                ) : (
-                  <View style={{ gap: 3 }}>
-                    <Text style={{ fontSize: 13, color: colors.faint }}>
-                      <Text style={{ fontWeight: "600", color: e().from === "owner" ? colors.accent : colors.muted }}>{e().from === "owner" ? L("You", "你") : displayName(e().from)}</Text>
-                      {`  ${timeOf(e().ts)}`}
-                    </Text>
-                    <Rich text={e().text} />
-                    <If when={e().attachments?.length}>
-                      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: 8 }}>
-                        <Each of={e().attachments ?? []}>{(a) => <Media hub={props.hub} path={a()} />}</Each>
-                      </View>
-                    </If>
-                  </View>
-                )}
-              </Each>
-            </View>
-          </If>
-          <If when={t()!.runs?.length}>
-            {section(L("Result", "结果"))}
-            <View style={{ gap: 12 }}>
-              <Each of={[...(t()!.runs ?? [])].reverse()}>
-                {(r) => (
-                  <View style={{ gap: 4 }}>
-                    <Text style={{ fontSize: 13, color: colors.faint, fontVariant: ["tabular-nums"] }}>{`${r().ts.slice(5, 16).replace("T", " ")} · ${r().host} · ${r().status}`}</Text>
-                    <Rich text={r().summary} context={`${t()!.title}\n${t()!.request ?? ""}`} />
-                  </View>
-                )}
-              </Each>
-            </View>
-          </If>
+          <View testID="task-talk" style={{ gap: 14, marginTop: 24 }}>
+            <Each of={timeline()} key={(row) => row.key}>
+              {(item) => {
+                const row = item();
+                if ("day" in row) return <Text style={{ alignSelf: "center", fontSize: 13, color: colors.faint, marginVertical: 8 }}>{dayLabel(row.day)}</Text>;
+                const e = row.event;
+                if (e.from === "owner") return <OwnerBubble hub={props.hub} event={e} />;
+                return <Message hub={props.hub} event={e} answered={settled} target={() => null}
+                  onAnswer={(ref, choice) => void props.hub.send(`${ref} ${choice}`, ref, [], true).catch((err) => note.set(String((err as Error)?.message ?? err)))}
+                  onReply={() => hint.set(L("Write your instructions in the box below.", "在下面的输入框继续说。"))} />;
+              }}
+            </Each>
+          </View>
           <If when={t()!.steps?.length}>
-            {section(L("Progress", "进度"))}
-            <View selectable style={{ gap: 6 }}>
-              <Each of={t()!.steps ?? []}>
-                {(st) => (
-                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-                    <Text style={{ width: 44, fontSize: 13.5, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{st().time ?? ""}</Text>
-                    <View style={{ width: 12, height: 21, alignItems: "center", justifyContent: "center" }}>
-                      <Dot tone={st().kind === "done" ? "off" : st().kind === "fail" ? "bad" : st().kind === "decision" ? "wait" : "off"} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}><Rich text={st().text.replace(new RegExp(`^${t()!.id}\\b\\s*(→\\s*)?[:：]?\\s*`), "")} muted context={t()!.title} /></View>
-                  </View>
-                )}
-              </Each>
+            <View style={{ marginTop: 24, gap: 6 }}>
+              <Btn label={L("Activity", "运行记录")} kind="ghost" onPress={() => showActivity.set(!showActivity())} />
+              <If when={showActivity()}><Each of={t()!.steps ?? []}>{(st) => <Text style={{ fontSize: 13, lineHeight: 20, color: colors.muted }}>{`${st().day ?? ""} ${st().time ?? ""}  ${st().text}`}</Text>}</Each></If>
             </View>
           </If>
         </If>

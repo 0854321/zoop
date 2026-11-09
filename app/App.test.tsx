@@ -375,9 +375,16 @@ describe("channel", () => {
       { id: "e11", ts: ts(11), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "手机上也正常，截图附上" },
       { id: "e12", ts: ts(12), from: "hub", kind: "system", ref: "T-0005", text: "收到，已补充到 T-0005" },
     ];
-    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts, said), width: 1200, height: 800, platform: "macos" });
+    const app = await open("./App.tsx", { storage: STORAGE, network: {
+      ...hub(posts, said),
+      [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0005", title: "修复登录页", agent: "dev", state: "done", created: ts(1), request: "请修复登录页在手机上的布局", runs: [
+        { ts: ts(5), host: "linux-box", cli: "codex", status: "done", summary: "已修复登录页布局，桌面验证通过" },
+      ] } },
+    }, width: 1200, height: 800, platform: "macos" });
     await app.press("id:task-chip-T-0005 >> nth=0");
     await app.waitFor("id:task-talk");
+    await app.waitFor("text:已修复登录页布局，桌面验证通过");
+    expect(app.shows("text:请修复登录页在手机上的布局")).toBe(true);
     expect(app.shows("text:登录页在手机上也看一下")).toBe(true);
     expect(app.shows("text:手机上也正常，截图附上")).toBe(true);
     await app.type("id:task-composer", "再看下 iPad");
