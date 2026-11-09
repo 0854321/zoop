@@ -1683,7 +1683,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean }) {
   });
   const conversation = computed(() => taskConversation({ ...older(), ...t(), id: props.id, title: t()?.title ?? "", agent: t()?.agent ?? "", request: older()?.request ?? t()?.request, runs: older()?.runs ?? t()?.runs }, talk()));
   const timeline = computed(() => rows(conversation()));
-  const settled = computed(() => answeredIds(talk()));
+  const settled = computed(() => answeredIds(merge(props.hub.events(), talk())));
   const text = signal("");
   const note = signal("");
   const hint = signal("");
@@ -3947,7 +3947,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     }
     return merge(hub.events().filter((e) => !e.thread && !e.channel && !(e.kind === "system" && e.text.startsWith("⚙️ 设置已更新"))), outgoing);
   });
-  const answered = computed(() => answeredIds(shown()));
+  // one answer state for every view: the owner may answer a card in the main chat that a channel also shows
+  const answered = computed(() => answeredIds(merge(hub.events(), shown())));
   /** The newest Markdown report in this conversation: the reader opens it by itself when it arrives. */
   const latestDoc = computed((): DocRef | null => {
     const list = shown();
