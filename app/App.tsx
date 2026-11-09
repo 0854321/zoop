@@ -613,10 +613,37 @@ function ghInlines(inlines: TextViewInline[]): TextViewInline[] {
     return "content" in i && Array.isArray(i.content) ? ({ ...i, content: ghInlines(i.content) } as TextViewInline) : i;
   });
 }
+/** A link's target, so ".../pull/12" and ".../issues/12" (what "nsh #12" links to) count as the same one. */
+const linkKey = (url: string) => { const m = url.match(GH); return m ? `${m[1]}/${m[2]}#${m[4]}`.toLowerCase() : url.replace(/\/$/, ""); };
+const inlineText = (i: TextViewInline): string => ("text" in i && typeof i.text === "string" ? i.text : "content" in i && Array.isArray(i.content) ? i.content.map(inlineText).join("") : "");
+/**
+ * A paragraph gives each link once: a later link to the same target is dropped when it is only the bare URL
+ * ("NSH #1394 https://github.com/longbridge/nsh/pull/1394"), and otherwise keeps its words as plain text.
+ */
+function onceInlines(inlines: TextViewInline[], seen = new Set<string>()): TextViewInline[] {
+  const out: TextViewInline[] = [];
+  for (const i of inlines) {
+    if (i.type === "link") {
+      const key = linkKey(i.url);
+      if (!seen.has(key)) { seen.add(key); out.push(i); continue; }
+      const words = inlineText(i);
+      if (words.replace(/\/$/, "") === i.url.replace(/\/$/, "")) {
+        // drop the repeat with the space that joined it
+        const prev = out[out.length - 1];
+        if (prev?.type === "text") out[out.length - 1] = { ...prev, text: prev.text.replace(/[ \t]+$/, "") };
+        continue;
+      }
+      out.push(...i.content);
+      continue;
+    }
+    out.push("content" in i && Array.isArray(i.content) ? ({ ...i, content: onceInlines(i.content, seen) } as TextViewInline) : i);
+  }
+  return out;
+}
 function ghBlocks(blocks: TextViewBlock[]): TextViewBlock[] {
   return blocks.map((b): TextViewBlock => {
     const x = { ...b } as Record<string, unknown>;
-    if (Array.isArray(x.content)) x.content = ghInlines(x.content as TextViewInline[]);
+    if (Array.isArray(x.content)) x.content = ghInlines(onceInlines(x.content as TextViewInline[]));
     if (Array.isArray(x.children)) x.children = ghBlocks(x.children as TextViewBlock[]);
     if (Array.isArray(x.items)) x.items = (x.items as { children: TextViewBlock[] }[]).map((it) => ({ ...it, children: ghBlocks(it.children) }));
     return x as TextViewBlock;

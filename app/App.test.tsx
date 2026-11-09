@@ -465,6 +465,17 @@ describe("channel", () => {
     expect(app.openedUrls()).toEqual(["https://github.com/acme/core-api/issues/41", "https://github.com/acme/core-api/issues/42"]);
   });
 
+  test("a paragraph links each PR once: the bare URL after its ref is dropped", async () => {
+    const thread = [
+      { id: "e10", ts: ts(10), from: "reviewer@linux-box", kind: "notice", text: "已评审 NSH #1394 https://github.com/acme/nsh/pull/1394 ，没发现问题。" },
+    ];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([], thread), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("text:NSH #1394");
+    expect(app.shows("text:nsh#1394")).toBe(false);
+    await app.press("text:NSH #1394");
+    expect(app.openedUrls()).toEqual(["https://github.com/acme/nsh/issues/1394"]);
+  });
+
   test("an answer quotes the card it replies to; pressing the quote goes back to the card", async () => {
     const reply = { id: "e9", ts: ts(9), from: "owner", kind: "owner", ref: "D-0001", text: "B，但先跑一遍测试" };
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([], [reply]), width: 1200, height: 800, platform: "macos" });
