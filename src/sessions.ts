@@ -34,36 +34,41 @@ type Turn = { ts: string; project: string; tool: "claude" | "codex"; text: strin
 // ---------------------------------------------------------------- redaction
 const SECRET = [
   /\b(sk-(?:ant|proj|live|test)?-?[\w-]{16,})/g, /\b(gh[pousr]_[A-Za-z0-9]{20,})/g, /\b(xox[abpr]-[\w-]{10,})/g,
-  /\b(AKIA[0-9A-Z]{16})\b/g, /\b(eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})/g, /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)\S+/gi, /\b[0-9a-f]{32,}\b/gi,
+  /\b(github_pat_\w{20,})/g, /\b(glpat-[\w-]{15,})/g, /\b(npm_[A-Za-z0-9]{30,})/g, /\b(hf_[A-Za-z0-9]{25,})/g, /\b([rs]k_(?:live|test)_\w{10,})/g,
+  /\b(AIza[\w-]{30,})/g, /\b(AQ\.[\w.-]{20,})/g, /\b(ya29\.[\w.-]{20,})/g, /\b(GOCSPX-[\w-]{15,})/g, // Google: API keys (old and new format), OAuth
+  /\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/g, /\b(eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,})/g, /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /\bBearer\s+[\w.~+\/-]{16,}=*/g, /\b[a-z][a-z0-9+.-]*:\/\/[^\s:\/@]+:[^\s\/@]+@/gi,
+  /((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)["']?\s*[:=：]\s*)(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\S+)/gi, /\b[0-9a-f]{32,}\b/gi,
 ];
 export function redact(s: string): string {
-  let out = s;
-  for (const re of SECRET) out = out.replace(re, (_m, g1) => (typeof g1 === "string" && /[:=]\s*$/.test(g1) ? `${g1}[REDACTED]` : "[REDACTED]"));
+  let out = s.replace(/[\w.+-]{2000,}/g, "[REDACTED]"); // not prose, and the email and URL patterns go quadratic on it
+  for (const re of SECRET) out = out.replace(re, (_m, g1) => (typeof g1 === "string" && /[:=：]\s*$/.test(g1) ? `${g1}[REDACTED]` : "[REDACTED]"));
   return out.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "[email]");
 }
 
 // ---------------------------------------------------------------- filters
-const FLEET_PROMPT = /^You are \*\*[^*]+\*\*, a permanent member|You are the owner's JUDGE|^\[SYSTEM NOTIFICATION/;
-const INJECTED = /^(<environment_context>|<user_instructions>|# AGENTS\.md|<permissions instructions>|<local-command|<command-name>|<command-message>|<task-notification>|<bash-|<agent-message|Caveat:|\[Request interrupted|This session is being continued)/;
+const FLEET_PROMPT = /^You are \*\*[^*]+\*\*, a permanent member|You are the owner's JUDGE|^\[SYSTEM NOTIFICATION|^You place tasks for an AI agent fleet|^You are the Noop MEDIC/;
+const INJECTED = /^(<environment_context>|<user_instructions>|# AGENTS\.md|<permissions instructions>|<local-command|<command-name>|<command-message>|<task-notification>|<bash-|<agent-message|Caveat:|\[Request interrupted|This session is being continued|<artifact-content-authored-by-others|<turn_aborted>|<external_codex_apps_open_page|The following is the Codex agent history)/;
 
 function clean(text: string): string {
   return text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<in-app-browser-context[\s\S]*?<\/in-app-browser-context>/g, "")
     .replace(/<pasted_content[\s\S]*?<\/pasted_content[^>]*>/g, "[pasted]")
+    .replace(/^\s*# Files mentioned by the user:[\s\S]*?^## My request[^\n]*\n/m, "") // Codex attachment header: local paths, not the owner's words
     .replace(/```[\s\S]{600,}?```/g, "[long code block]")
     .trim();
 }
 
-function ownerText(raw: string): string | null {
+export function ownerText(raw: string): string | null {
   if (!raw || FLEET_PROMPT.test(raw) || INJECTED.test(raw.trim())) return null;
-  const t = clean(raw);
+  const t = redact(clean(raw)); // before truncating: a cut secret no longer matches its pattern
   if (t.length < 4 || /^\[pasted\]$/.test(t) || /^\[Image #\d+\]$/.test(t)) return null;
   return t.length > 1500 ? t.slice(0, 1500) + " …" : t;
 }
 
 // ---------------------------------------------------------------- readers
-function readClaude(file: string, project: string): Turn[] {
+export function readClaude(file: string, project: string): Turn[] {
   const out: Turn[] = [];
   let lastAssistant = "";
   let fleet = false;
@@ -81,12 +86,12 @@ function readClaude(file: string, project: string): Turn[] {
     const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((x: any) => x.type === "text").map((x: any) => x.text).join("\n") : "";
     if (FLEET_PROMPT.test(raw)) { fleet = true; break; } // whole session is a fleet agent run
     const t = ownerText(raw);
-    if (t) out.push({ ts: l.timestamp ?? "", project, tool: "claude", text: t, prev: lastAssistant.slice(-400) });
+    if (t) out.push({ ts: l.timestamp ?? "", project, tool: "claude", text: t, prev: redact(lastAssistant).slice(-400) });
   }
   return fleet ? [] : out;
 }
 
-function readCodex(file: string): Turn[] {
+export function readCodex(file: string): Turn[] {
   const out: Turn[] = [];
   let project = "codex", lastAssistant = "";
   for (const line of readFileSync(file, "utf8").split("\n")) {
@@ -101,7 +106,7 @@ function readCodex(file: string): Turn[] {
     if (p.role !== "user") continue;
     if (FLEET_PROMPT.test(txt)) return [];
     const t = ownerText(txt);
-    if (t) out.push({ ts: l.timestamp ?? "", project, tool: "codex", text: t, prev: lastAssistant.slice(-400) });
+    if (t) out.push({ ts: l.timestamp ?? "", project, tool: "codex", text: t, prev: redact(lastAssistant).slice(-400) });
   }
   return out;
 }
@@ -147,8 +152,8 @@ export function collect(cfg: Cfg, opts: { full?: boolean; maxChars?: number } = 
   for (const [proj, ts] of byProject) {
     body += `\n\n## ${proj}\n`;
     for (const t of ts) {
-      const ctx = t.prev ? `  ↳ (after AI said: ${redact(t.prev).replace(/\s+/g, " ").slice(0, 220)})\n` : "";
-      body += `\n- [${t.ts.slice(0, 16)} ${t.tool}] ${redact(t.text).replace(/\n/g, "\n  ")}\n${ctx}`;
+      const ctx = t.prev ? `  ↳ (after AI said: ${t.prev.replace(/\s+/g, " ").slice(0, 220)})\n` : "";
+      body += `\n- [${t.ts.slice(0, 16)} ${t.tool}] ${t.text.replace(/\n/g, "\n  ")}\n${ctx}`;
     }
   }
   if (body.length > max) body = body.slice(-max); // keep the most recent
