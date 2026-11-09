@@ -3836,7 +3836,13 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   effect(() => {
     if (!reads.loaded() || lifecycle() !== "active") return;
     const route = top();
-    if (onChannel()) reads.read(visibleMessages());
+    if (onChannel()) {
+      // Reading is top-down: everything at or above the newest row on screen counts as read, so rows the
+      // reader scrolled past (or jumped over to the bottom) don't pop back as unread later.
+      const seen = visibleMessages();
+      const newest = seen.reduce((ts, e) => (e.ts > ts ? e.ts : ts), "");
+      reads.read(newest ? untracked(shown).filter((e) => e.ts <= newest) as HubEvent[] : seen);
+    }
     else if (route.name === "task") { hub.events(); reads.ref(route.id); }
   });
   // "以下为新消息": above the first unread message when entering a view, from the one read record the
