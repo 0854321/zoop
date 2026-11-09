@@ -4548,13 +4548,21 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
                         </View>
                       );
                     }
-                    const entrance = timelineWindow.takeArrival(row.event.id) ? createMotion({
-                      enter: { keyframes: { opacity: [0, 1], translateY: [8, 0] }, duration: 180, easing: "easeOut" },
-                    }) : undefined;
+                    const arriving = timelineWindow.takeArrival(row.event.id) && !reduceMotion();
                     if (row.event.kind === "owner") {
                       const out = () => outbox().find((o) => o.id === row.event.id);
-                      return <View style={entrance?.style}><OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRecall={() => undo(row.event.id)} onRef={pick} /></View>;
+                      // Just sent from the composer below: the bubble rises out of the input into its place.
+                      const sent = arriving && untracked(out) !== undefined;
+                      const entrance = arriving ? createMotion({
+                        enter: sent
+                          ? { keyframes: { opacity: [0, 1], translateY: [Math.min(composerHeight(), 120), 0], scale: [0.92, 1] }, duration: 260, easing: "easeOut" }
+                          : { keyframes: { opacity: [0, 1], translateY: [8, 0] }, duration: 180, easing: "easeOut" },
+                      }) : undefined;
+                      return <View testID={sent ? "sent-entrance" : undefined} style={[entrance?.style ?? null, { transformOrigin: "right bottom" }]}><OwnerBubble hub={hub} event={row.event} out={out()} onRetry={() => void deliver(row.event.id)} onRecall={() => undo(row.event.id)} onRef={pick} /></View>;
                     }
+                    const entrance = arriving ? createMotion({
+                      enter: { keyframes: { opacity: [0, 1], translateY: [8, 0] }, duration: 180, easing: "easeOut" },
+                    }) : undefined;
                     return (
                       <View style={entrance?.style}>
                         <Message
