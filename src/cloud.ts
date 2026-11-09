@@ -210,8 +210,22 @@ export async function cloudDeploy(cfg: Cfg) {
   console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
   // [cloud] domain (e.g. noop.example.com on a zone in the same account) attaches a Custom Domain and becomes the URL
   const domain = String(cfg.cloud?.domain ?? "").trim();
-  const dep = await $`${wr} deploy --name ${name} ${domain ? ["--domain", domain] : []}`.cwd(dir).env(env).quiet().nothrow();
-  const out = dep.stdout.toString() + dep.stderr.toString();
+  const deploy = () => $`${wr} deploy --name ${name} ${domain ? ["--domain", domain] : []}`.cwd(dir).env(env).quiet().nothrow();
+  let dep = await deploy();
+  let out = dep.stdout.toString() + dep.stderr.toString();
+  // a brand-new Cloudflare account has no workers.dev subdomain yet, and wrangler can only ask for one with a
+  // terminal in front of it — we run it quietly, so on that first deploy hand the user's terminal over for that
+  // one-time question, then deploy quietly again to capture the URL (a custom domain never needs workers.dev)
+  if (dep.exitCode !== 0 && !domain && /register a workers\.dev subdomain/i.test(out)) {
+    const link = out.match(/https:\/\/dash\.cloudflare\.com\/\S+\/workers\/onboarding/)?.[0];
+    if (!process.stdin.isTTY)
+      return fail(`这个 Cloudflare 账号还没有 workers.dev 子域名（账号第一次部署 Worker 都要先注册一个）。\n注册入口：${link ?? "Cloudflare 控制台 → Workers & Pages"}\n或在 cloud/ 目录交互式运行一次 bunx wrangler deploy，按提示注册。\n然后重新运行：hub cloud deploy`);
+    console.log("账号还没有 workers.dev 子域名：按 wrangler 接下来的提示注册一个（一次性，之后这个账号的 Worker 都用它做前缀）…");
+    const ask = Bun.spawn([...wr, "deploy", "--name", name], { cwd: dir, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    if ((await ask.exited) !== 0) return fail("workers.dev 子域名没有注册成；注册好之后重新运行：hub cloud deploy");
+    dep = await deploy();
+    out = dep.stdout.toString() + dep.stderr.toString();
+  }
   if (dep.exitCode !== 0) return fail(out.slice(-1500));
   const url = domain ? `https://${domain}` : out.match(/https:\/\/[\w.-]+\.workers\.dev/)?.[0];
   const secrets: Record<string, string> = { HUB_TOKEN: cfg.server.token, ...(allow !== undefined ? { HUB_ALLOW_IPS: allow } : {}) };
