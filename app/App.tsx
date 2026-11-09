@@ -1798,10 +1798,14 @@ function MachineDetail(props: { hub: Hub; host: string; wide: boolean; onTask: (
 
 // ---------------------------------------------------------------- sidebar
 
-function SideHeading(props: { title: string; count?: number | string; accent?: boolean }) {
+/** A section heading; pass `open` to make the section collapsible by clicking the heading. */
+function SideHeading(props: { title: string; count?: number | string; accent?: boolean; open?: Signal<boolean>; testID?: string }) {
+  const o = props.open;
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6 }}>
-      <Text style={{ flex: 1, fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{props.title}</Text>
+    <View testID={props.testID} onPress={o ? () => o.set(!o()) : undefined} role={o ? "button" : undefined} style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6, cursor: o ? "pointer" : undefined }}>
+      <Text style={{ flexShrink: 1, fontSize: 12, fontWeight: "600", color: colors.muted, letterSpacing: 0.4 }}>{props.title}</Text>
+      <If when={o}><Icon name={o?.() ? "chevron-up" : "chevron-down"} size={12} tint={colors.faint} /></If>
+      <View style={{ flex: 1 }} />
       <If when={props.count}>
         <If when={props.accent} else={<Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{String(props.count)}</Text>}>
           <View style={{ minWidth: 20, height: 20, paddingHorizontal: 6, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.accentFill }}>
@@ -1904,6 +1908,9 @@ function Sidebar(props: {
   const archivedChannels = () => props.channels.list().filter((c) => c.status === "archived" && c.slug !== props.channel());
   const s = () => props.hub.status();
   // the hub closes a decision on its next tick: one the channel already shows answered leaves the list now
+  // 排队 and 最近 start collapsed; the heading toggles them (owner, T-0987).
+  const queuedOpen = signal(false);
+  const recentOpen = signal(false);
   const waits = computed(() => { const done = answeredIds(props.hub.events()); return waiting(s()).filter((d) => !done.has(d.id)); });
   // the sidebar's right-click menu: end a task that can't go on without opening it
   const endTask = async (id: string, done: boolean) => {
@@ -2022,8 +2029,8 @@ function Sidebar(props: {
           </If>
 
           <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length}>
-            <SideHeading title={L("Queued", "排队")} count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length} />
-            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state))} key={(a) => a.id}>
+            <SideHeading testID="side-queued" open={queuedOpen} title={L("Queued", "排队")} count={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)).length} />
+            <Each of={queuedOpen() ? (s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && isQueued(t.state)) : []} key={(a) => a.id}>
               {(a) => (
                 <ContextMenu margin={8} popupStyle={menuStyle()} trigger={
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
@@ -2038,8 +2045,8 @@ function Sidebar(props: {
             </Each>
           </If>
           <If when={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && !isQueued(t.state)).slice(0, 6).length}>
-            <SideHeading title={L("Recent", "最近")} />
-            <Each of={(s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && !isQueued(t.state)).slice(0, 6)} key={(a) => a.id}>
+            <SideHeading testID="side-recent" open={recentOpen} title={L("Recent", "最近")} />
+            <Each of={!recentOpen() ? [] : (s()?.recent ?? []).filter((t) => !(s()?.active ?? []).some((a) => a.id === t.id) && !isQueued(t.state)).slice(0, 6)} key={(a) => a.id}>
               {(a) => (
                 <SideRow onPress={() => props.onTask(a().id)} selected={props.task() === a().id} title={`${a().id} · ${STATE_OF()[a().state ?? ""]?.[0] ?? ""}`}>
                   <Dot tone={TONE[a().state ?? ""] ?? "off"} />

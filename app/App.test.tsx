@@ -665,6 +665,9 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [nohost, ...status.recent] } } },
     });
+    await app.waitFor("id:side-queued");
+    expect(app.shows("Waiting for Windows machine")).toBe(false); // 排队 starts collapsed
+    await app.press("id:side-queued");
     await app.waitFor("Waiting for Windows machine");
     await app.press("label:T-0097 · Waiting for a machine");
     await app.waitFor("id:task-nohost");
@@ -678,6 +681,7 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [parked, ...status.recent] } } },
     });
+    await app.press("id:side-queued");
     await app.waitFor("Waiting");
     await app.press("label:T-0236 · Waiting on external result");
     await app.waitFor("id:cancel-task");
