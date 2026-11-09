@@ -8,7 +8,16 @@ Set-Content -Path $Log -Value ""
 
 function Step($name) { Write-Host ("  {0,-30}" -f $name) -NoNewline -ForegroundColor DarkGray }
 function Ok($msg = "") { Write-Host "$([char]0x2713) $msg" -ForegroundColor Green }
-function Run { param([scriptblock]$b) & $b *>> $Log }
+# Windows PowerShell 5.1 turns each stderr line of a redirected native command into an error record, and under
+# "Stop" the first one aborts the install, even when it is only curl, git or bun printing progress. Run logs
+# everything and judges native commands by their exit code instead.
+function Run {
+  param([scriptblock]$b)
+  $ErrorActionPreference = "Continue"
+  $global:LASTEXITCODE = 0
+  & $b *>> $Log
+  if ($LASTEXITCODE) { throw "exit code $LASTEXITCODE (see $Log)" }
+}
 
 trap {
   Write-Host ([char]0x2717) -ForegroundColor Red
@@ -20,7 +29,12 @@ trap {
 
 Write-Host "`nNoop - your own AI team`n"
 Step "bun"
-if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { Run { irm bun.sh/install.ps1 | iex }; $env:Path += ";$HOME\.bun\bin" } else { Run { bun upgrade } }  # an old bun cannot read a newer bun.lock
+if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+  # bun's installer sets "Stop" itself, so it gets a PowerShell of its own where nothing redirects its curl.exe.
+  Run { powershell -NoProfile -ExecutionPolicy Bypass -Command "irm bun.sh/install.ps1 | iex" }
+  $env:Path += ";$HOME\.bun\bin"
+  if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw "bun did not install (see $Log)" }
+} else { Run { bun upgrade } }  # an old bun cannot read a newer bun.lock
 Ok (bun --version)
 Step "Noop"
 if (Test-Path "$App\.git") { Run { git -C $App pull -q --ff-only } } else { Run { git clone -q https://github.com/huacnlee/noop.git $App } }
