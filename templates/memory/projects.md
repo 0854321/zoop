@@ -1,11 +1,8 @@
-# Projects the fleet works on (agents read this instead of hard-coded lists)
+# What the team works on (agents read this instead of hard-coded lists; the workflow-coach routine helps fill it)
 
-## Core (auto develop + thorough PR review with full testing, screenshots/recordings)
-| repo | local | notes |
+## Projects / areas
+| name | where (repo, folder, doc, link) | notes |
 |---|---|---|
-| owner/app | ~/work/app | |
 
-## Ops / management
-- Uptime/alerts source:
-- Report format / OKR file:
-- UI design language reference:
+## Reports
+- Report format / goals or OKR file:

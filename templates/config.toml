@@ -105,82 +105,44 @@ extra = []                            # more Claude Code tool patterns to hard-b
 
 # ------------------------------------------------------------------ routines (signal → task generators)
 # every: "15m" | "hourly" | "daily HH:MM" | "weekdays HH:MM" | "weekly MON HH:MM"
+# More examples (PR review, CI, uptime, nightly builds): presets/routines.toml in the Noop code.
 # requires = hard capability (task waits for such a host) ; prefer = soft (falls back to anyone)
 
 [[routine]]
-name = "triage-inbound"
-every = "60m"
-agent = "dispatcher"
-prompt = """Scan inbound signals since the last journal entry by dispatcher: GitHub notifications (gh api notifications),
-PRs requesting my review, issues assigned to me, CI failures on my open PRs, new uptime alerts.
-Dedupe against tasks/ and journal/, then emit follow-ups routed to the right agent. Mark handled notifications read."""
-
-[[routine]]
-name = "uptime-watch"
-readonly = true                       # only observes: runs without approval; changes come back as gated followups
-every = "10m"
-agent = "ops-watcher"
-priority = "high"
-prompt = "Check the uptime alert source listed in memory/projects.md. Apply your escalation rules."
-
-[[routine]]
-name = "pr-review"
-signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open repo:longbridge/nsh repo:longbridge/gpui-kit repo:longbridge/gpui-fast repo:huacnlee/omamail repo:huacnlee/omasend repo:huacnlee/disktree repo:huacnlee/noop' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
-every = "30m"
-agent = "reviewer"
-requires = "os:linux"
-prompt = """Find open PRs on the Core repos in memory/projects.md
-whose current head SHA is not in reviews/ (ledger), oldest first, PRs by others before my own. Review & verify up to 3 of them in parallel
-(one subagent + worktree + visual session each) per your profile."""
-
-[[routine]]
-name = "own-prs-ci"
-signal = """gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{url headRefOid reviewDecision commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' -f q='is:pr is:open author:huacnlee user:longbridge user:huacnlee' --jq '[.data.search.nodes[]|.url+" "+.headRefOid+" "+(.commits.nodes[0].commit.statusCheckRollup.state//"-")+" "+(.reviewDecision//"-")]|sort'"""   # head SHA + check conclusion + review state; updatedAt would fire on every CI tick
-readonly = true                       # only observes: runs without approval; changes come back as gated followups
-every = "30m"
-agent = "rust-maintainer"
-difficulty = "hard"
-prompt = """Keep the owner's own open PRs mergeable without asking him. List them with `gh search prs --author=@me --state=open --json repository,number,url` and, per PR, `gh pr view <n> -R <repo> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefName`.
-1. mergeable == CONFLICTING (GitHub shows "This branch has conflicts", checks stuck "awaiting conflict resolution"): in a fresh worktree of the PR branch, `git merge origin/<base>` (never rebase: force-push is forbidden), resolve every conflict preserving the PR's intent and main's newer changes (read both sides' commits), run the repo's real build + tests (cargo test / bun test etc.), then push normally to the PR branch. Comment a short signed note listing the resolved files.
-2. CI red because of main drift, or a trivial failure (fmt, clippy, snapshot, lockfile): fix on the branch the same way.
-3. Unaddressed review comments with an obvious fix: fix them.
-Only if a conflict needs a product/design choice the code can't settle → needs_decision with both versions summarized and a recommendation. Skip PRs marked draft-WIP by the owner within the last hour (he is likely still pushing)."""
-
-[[routine]]
-name = "nightly-health"
-readonly = true                       # only observes: runs without approval; changes come back as gated followups
-every = "daily 02:30"
-agent = "rust-maintainer"
-requires = "os:linux"
-weight = "heavy"
-prompt = "In each Core repo of memory/projects.md: git fetch, run cargo check/test on latest main. File follow-ups for regressions."
-
-[[routine]]
-name = "macos-check"
-readonly = true                       # only observes: runs without approval; changes come back as gated followups
-every = "daily 10:00"
-agent = "rust-maintainer"
-prefer = "os:macos"
-prompt = "Build and run tests of the Core repos on this host's OS (prefer macOS). Report platform-specific failures as follow-ups."
+name = "workflow-coach"
+every = "weekdays 10:00"
+agent = "chief-of-staff"
+prompt = """Workflow coach for a new Noop owner. Noop ships with only a small, general team; your job is to help the owner
+build, step by step, the routines and members that fit THEIR role (any job, not only engineering). Plain words, no jargon.
+1. Read memory/owner.md, memory/focus.md, the last week's journal and tasks, and agents/*/profile.md + config.toml routines.
+   If memory/owner.md still has blanks (role, what a normal week looks like, recurring chores, tools they use), ask about the
+   most important missing one or two first, as numbered options plus "other: tell me".
+2. Otherwise suggest ONE next step that would save the owner real time, based on what they actually asked for recently:
+   a recurring task to add (what, how often, what they get), a member to add (pick from the presets/agents/ library of the
+   Noop code or write a new profile), or an existing default to change or turn off. Use needs_decision with 2-3 options,
+   recommendation first, and "not now".
+3. When the owner agrees, make the change yourself (config.toml [[routine]], agents/<id>/profile.md, memory/owner.md) and
+   say in one line what was added. Never repeat a suggestion the owner declined.
+4. When the owner says the setup fits, or nothing useful is left to add, say so and suggest turning this routine off in Settings."""
 
 [[routine]]
 name = "daily-report"
 every = "weekdays 19:00"
 agent = "reporter"
-prompt = "Write today's daily report to reports/daily/<date>.md from the journal, git logs of ~/work repos and my GitHub activity. Send a 5-line summary notification."
+prompt = "Write today's short daily report to reports/daily/<date>.md from the journal and finished tasks. Send a 5-line summary notification."
 
 [[routine]]
 name = "weekly-report"
 every = "weekly FRI 17:00"
 agent = "reporter"
-prompt = "Draft this week's report in the report format from memory/projects.md, mapped to current OKRs. Ask before submitting anywhere official."
+prompt = "Draft this week's report from the journal, finished tasks and reports/daily, in the format the owner set in memory/projects.md (if any). Ask before submitting anywhere official."
 
 [[routine]]
 name = "focus-check"
 readonly = true                       # only observes: runs without approval; changes come back as gated followups
 every = "weekly MON 09:30"
 agent = "chief-of-staff"
-prompt = "Weekly focus check. Read memory/focus.md, last week's journal/reports and GitHub activity. Return needs_decision with a numbered list: current focus items to KEEP / likely-finished items to DROP / newly observed items to ADD (each with evidence). After the owner answers, rewrite memory/focus.md (dated) accordingly."
+prompt = "Weekly focus check. Read memory/focus.md and last week's journal/reports. Return needs_decision with a numbered list: current focus items to KEEP / likely-finished items to DROP / newly observed items to ADD (each with evidence). After the owner answers, rewrite memory/focus.md (dated) accordingly."
 
 [[routine]]
 name = "learn-ceo"

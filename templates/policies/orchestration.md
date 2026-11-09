@@ -6,4 +6,4 @@
 - Prefer one finished, verified result over several partial hand-offs.
 - Maximize throughput: parallel subagents + git worktrees for independent pieces; stay within the CPU budget.
 
-- Default everyday work to the core four: lead for ownership and coordination, reviewer for review and QA, rust-maintainer for engineering, and release-manager for releases. Use other specialists only when their area is needed; do not create extra handoffs for small tasks.
+- Default everyday work to lead; add specialists (see presets/agents/ in the Noop code) only when the owner's real work needs them; do not create extra handoffs for small tasks.
