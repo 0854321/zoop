@@ -632,7 +632,7 @@ export async function tick(cfg: Cfg, background = false) {
     const active = await claim(t, host);
     if (!active) { if (tried.has(t)) break; tried.add(t); continue; } // e.g. offline: don't spin on the same task
     running++;
-    const tid = readDoc(active).meta.id;
+    const tid = basename(active, ".md");
     runningIds.add(tid);
     const job = processTask(active, cfg, host)
       .catch((e) => { console.error(e); journal(host, `💥 worker crashed on ${active}: ${e}`); })
