@@ -1325,9 +1325,10 @@ function Message(props: {
   // a phone has no width to spare: the avatar sits in the name's row, and the message takes the whole column
   const wide = () => windowSize().width >= WIDE;
   if (isHub(e.from) && !ask && e.kind === "system" && !e.attachments?.length)
+    // top-aligned on one shared line height: baseline alignment drifts once the text carries an inline chip
     return (
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8, paddingVertical: 4, paddingLeft: wide() ? 50 : 0 }}>
-        <Text style={{ fontSize: size.tiny, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 4, paddingLeft: wide() ? 50 : 0 }}>
+        <Text style={{ fontSize: size.tiny, lineHeight: 21, color: colors.faint, fontVariant: ["tabular-nums"] }}>{timeOf(e.ts)}</Text>
         <View selectable style={{ flex: 1, minWidth: 0 }}><Rich text={e.text} quiet /></View>
       </View>
     );
