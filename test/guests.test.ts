@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { FilesSql as SqlStorage } from "../cloud/src/files";
 import { guestApi, guestJoin, guestWho, guestsAdmin, initGuestSchema } from "../cloud/src/guests";
+import { guestCommand, safe } from "../src/guest";
 
 // SqlStorage shim over bun:sqlite: exec(q, ...binds) → {toArray, one}, multi-statement DDL allowed
 function sql() {
@@ -76,6 +77,17 @@ test("oversized results are refused", async () => {
   expect((await asGuest(s, a.token, "/api/guest/result", "POST", { id: "T-0002", text: "x".repeat(300 * 1024) })).status).toBe(413);
 });
 
+test("guest agent never loads the cloned repo's settings, hooks or MCP servers, and has no shell", () => {
+  const c = guestCommand("claude");
+  expect(c).toContain("--strict-mcp-config");
+  expect(c[c.indexOf("--setting-sources") + 1]).toBe("user");
+  expect(c).toContain("Bash");
+  const x = guestCommand("codex");
+  expect(x[x.indexOf("--sandbox") + 1]).toBe("workspace-write");
+});
+test("untrusted guest text is stripped of terminal escapes", () => {
+  expect(safe("a\u001b]52;c;ZXZpbA==\u0007b\u009b2Jc")).toBe("a]52;c;ZXZpbA==b2Jc");
+});
 test("guest invite prints install lines that join as the guest, with no login", async () => {
   const { guestInvite } = await import("../src/guest");
   const out = guestInvite("https://noop.example.com", "ABC123");

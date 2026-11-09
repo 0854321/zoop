@@ -31,6 +31,14 @@ export function guestPrompt(t: { id: string; title: string; body: string; repo?:
     "Finish with a short plain-text report of what you did and what you observed; code changes stay in the working tree."].join("\n");
 }
 
+/** The agent command for a guest task. The cloned repo is untrusted: its project settings, hooks and MCP servers must
+ *  never load (they run shell commands), and the agent gets no shell or network so it can't reach other machines. */
+export function guestCommand(cli: string): string[] {
+  if (cli === "codex") return ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false", "-"];
+  return ["claude", "-p", "--output-format", "text", "--permission-mode", "acceptEdits", "--setting-sources", "user", "--strict-mcp-config",
+    "--disallowedTools", "Bash", "WebFetch", "WebSearch", "--"];
+}
+
 class Revoked extends Error {}
 
 async function runOne(c: GuestCfg, cli: string): Promise<boolean> {
@@ -44,11 +52,13 @@ async function runOne(c: GuestCfg, cli: string): Promise<boolean> {
   try {
     let cwd = dir;
     if (t.repo) {
-      const clone = Bun.spawnSync(["git", "clone", "--depth", "50", t.repo, "repo"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      if (!/^https:\/\/[^\s]+$/.test(String(t.repo))) throw new Error("only https:// repositories are allowed");
+      // `--` keeps a hostile URL from being read as a git option; no hooks/templates from outside the clone
+      const clone = Bun.spawnSync(["git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "clone", "--depth", "50", "--no-recurse-submodules", "--", t.repo, "repo"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
       if (clone.exitCode !== 0) throw new Error(`git clone failed: ${clone.stderr.toString().slice(-500)}`);
       cwd = join(dir, "repo");
     }
-    const cmd = cli === "codex" ? ["codex", "exec", "--skip-git-repo-check", "-"] : ["claude", "-p", "--output-format", "text", "--permission-mode", "acceptEdits"];
+    const cmd = guestCommand(cli);
     const p = Bun.spawn(cmd, { cwd, stdin: new Blob([guestPrompt(t)]), stdout: "pipe", stderr: "pipe" });
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
     ok = (await p.exited) === 0;
@@ -60,6 +70,9 @@ async function runOne(c: GuestCfg, cli: string): Promise<boolean> {
   console.log(`${ok ? "✓" : "✗"} ${t.id} reported (${res?.status ?? "network error"})`);
   return true;
 }
+
+/** Untrusted text for a terminal: drop C0/C1 controls and DEL (escape sequences could rewrite the screen or the clipboard). */
+export const safe = (s: unknown) => String(s ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 
 async function admin(cfg: any, path: string, init: RequestInit = {}) {
   const url = String(cfg.cloud?.url ?? "").replace(/\/$/, "");
@@ -89,8 +102,10 @@ export async function guestCmd(rest: string[], loadCfg: () => any) {
   const flag = (n: string) => { const i = a.indexOf(n); return i >= 0 ? a.splice(i, 2)[1] : undefined; };
   switch (sub) {
     case "join": {
-      const [url, code] = a;
-      if (!url || !code) { process.exitCode = 1; return void console.log("usage: noop guest join <url> <code>"); }
+      const url = a[0];
+      // the code is read from stdin when omitted, so it never shows up in `ps` or shell history for other accounts
+      const code = a[1] ?? (process.stdin.isTTY ? prompt("join code:") : (await Bun.stdin.text()).trim());
+      if (!url || !code) { process.exitCode = 1; return void console.log("usage: noop guest join <url> [code]   (code from stdin when omitted)"); }
       const base = url.replace(/\/$/, "");
       const r = await fetch(`${base}/api/guest/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
       const b = (await r.json().catch(() => ({}))) as any;
@@ -142,7 +157,7 @@ export async function guestCmd(rest: string[], loadCfg: () => any) {
     }
     case "results": {
       const cfg = loadCfg(), { results } = await admin(cfg, "/api/guests/results");
-      for (const r of results) console.log(`--- ${r.id} from guest ${r.label} (${r.guest}) · ${r.ok ? "ok" : "failed"} · UNTRUSTED\n${r.text}${r.patch ? `\n--- patch\n${r.patch}` : ""}`);
+      for (const r of results) console.log(`--- ${safe(r.id)} from guest ${safe(r.label)} (${safe(r.guest)}) · ${r.ok ? "ok" : "failed"} · UNTRUSTED\n${safe(r.text)}${r.patch ? `\n--- patch\n${safe(r.patch)}` : ""}`);
       if (results.length && a.includes("--ack")) await admin(cfg, "/api/guests/ack", { method: "POST", body: JSON.stringify({ ids: results.map((r: any) => r.id) }) });
       return;
     }

@@ -43,3 +43,9 @@ your Noop deployment.
 Results are capped at 256 KB, tasks at 32 KB, 20 queued tasks per guest; a claimed task with no result returns to the
 queue after 6 hours. Anyone with access to the guest's home folder can act as that guest, which only lets them take
 the tasks assigned to it and send back results that are reviewed anyway.
+
+## Safety on the guest machine
+The cloned repository is untrusted. The agent runs without the repo's project settings, hooks or MCP servers (Claude:
+`--setting-sources user --strict-mcp-config`, no Bash/WebFetch/WebSearch; Codex: `workspace-write` sandbox with network
+off), so a hostile repo can't execute commands or reach other machines. Only `https://` repos are cloned. Result text
+and patches have terminal control characters stripped before they're stored or printed on the primary.
