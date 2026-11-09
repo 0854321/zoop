@@ -2,6 +2,8 @@
 # Noop installer (Linux / macOS)
 #   a machine (the default; joins your Noop):  curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- [<noop-url>]
 #   the first machine, once (the primary):     curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- --primary
+#   a guest on a shared machine:               curl -fsSL https://huacnlee.github.io/noop/install.sh | bash -s -- --guest <noop-url> <code>
+#                                              (the line `noop guest invite <label>` prints; no login, no machine key)
 set -euo pipefail
 
 HOME_DIR="${NOOP_HOME:-$([ -d "$HOME/.agent-hub" ] && [ ! -d "$HOME/.noop" ] && echo "$HOME/.agent-hub" || echo "$HOME/.noop")}"
@@ -36,6 +38,17 @@ if [ -d "$APP/.git" ]; then run git -C "$APP" pull -q --ff-only || true; else ru
 mkdir -p "$HOME/.local/bin"
 ln -sf "$APP/bin/noop" "$HOME/.local/bin/noop"; ln -sf "$APP/bin/noop" "$HOME/.local/bin/hub"
 ok "$(git -C "$APP" rev-parse --short HEAD)"
+
+if [ "${1:-}" = "--guest" ]; then
+  # A guest gets its own revocable token and nothing else: no init, no owner login, no fleet data, no service.
+  [ $# -eq 3 ] || { printf "%s✗%s usage: install.sh --guest <noop-url> <code>\n" "$R" "$N"; exit 1; }
+  have=(); for c in claude codex; do command -v "$c" >/dev/null && have+=("$c"); done
+  step "AI tools"; if [ ${#have[@]} -gt 0 ]; then ok "${have[*]}"; else warn "install claude (or codex) and log in; the guest runs tasks with this account's own login"; fi
+  step "guest"; run "$APP/bin/noop" guest join "$2" "$3"; ok
+  step "background service"; run "$APP/bin/noop" guest install; ok
+  printf "\n  The guest now runs in the background and at every login (stop it with: noop guest uninstall).\n\n"
+  exit 0
+fi
 
 missing=()
 for c in claude codex gh; do command -v "$c" >/dev/null || missing+=("$c"); done

@@ -75,3 +75,11 @@ test("oversized results are refused", async () => {
   await asGuest(s, a.token, "/api/guest/next");
   expect((await asGuest(s, a.token, "/api/guest/result", "POST", { id: "T-0002", text: "x".repeat(300 * 1024) })).status).toBe(413);
 });
+
+test("guest invite prints install lines that join as the guest, with no login", async () => {
+  const { guestInvite } = await import("../src/guest");
+  const out = guestInvite("https://noop.example.com", "ABC123");
+  expect(out).toContain(`$env:NOOP_GUEST = "https://noop.example.com ABC123"; irm https://huacnlee.github.io/noop/install.ps1 | iex`);
+  expect(out).toContain("install.sh | bash -s -- --guest https://noop.example.com ABC123");
+  expect(out).toContain("noop guest join https://noop.example.com ABC123");
+});

@@ -213,6 +213,6 @@ WantedBy=default.target
     const cmd = `"${bun}" "${cli}" daemon`;
     await $`schtasks /Create /F /SC ONLOGON /RL LIMITED /TN ${SERVICE} /TR ${cmd}`.nothrow();
     await $`schtasks /Run /TN ${SERVICE}`.nothrow();
-    console.log("✔ Scheduled Task '${SERVICE}' installed (runs at logon, restarts with the daemon's own loop). Disable sleep: powercfg /change standby-timeout-ac 0");
+    console.log(`✔ Scheduled Task '${SERVICE}' installed (runs at logon, restarts with the daemon's own loop). Disable sleep: powercfg /change standby-timeout-ac 0`);
   }
 }

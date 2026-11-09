@@ -949,7 +949,7 @@ const HELP = `Noop — your own AI team
   noop notify "text"          test Slack/Discord
   noop security [--json]      check this Noop deployment (2FA, sessions, OAuth clients, allow-lists) and this machine's Noop setup
   noop 2fa setup              bind (or re-bind) the authenticator app every sign-in requires; noop 2fa confirm <code> · noop 2fa status
-  noop guest join <url> <code> · noop guest run   low-trust guest worker for shared machines (no memory, no machine key)
+  noop guest join <url> <code> · run · install · uninstall   low-trust guest worker for shared machines (no memory, no machine key)
   noop guest invite <label> · list · assign <G-id> <T-id> · results [--ack] · revoke <G-id>   (primary side)
   noop revoke-sessions        security valve: sign out every phone, browser and MCP connector at once (machines keep working)
 `;

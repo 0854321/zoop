@@ -1,12 +1,12 @@
 // Hard rule: Noop runs on Cloudflare's free plan (cloud/src/budget.ts, AGENTS.md). One simulated fleet day — three
-// machines ticking every minute, each writing a heartbeat and journal lines and working through tasks — must stay
+// machines ticking every minute, three idle guest workers, each writing a heartbeat and journal lines and working through tasks — must stay
 // under TARGET (a fifth of the free plan) in requests and rows written. Raising a pace or adding a sync round trip
 // that breaks this needs a design change, not a bigger number here.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LAZY_PUSH_MS, PULL_MIN_MS, TARGET } from "../cloud/src/budget";
+import { GUEST_IDLE_MS, LAZY_PUSH_MS, PULL_MIN_MS, TARGET } from "../cloud/src/budget";
 import * as sync from "../src/sync";
 
 const HOSTS = ["h1", "h2", "h3"], TASKS_PER_HOST = 40, DAY_MIN = 24 * 60;
@@ -17,6 +17,9 @@ const INDEX_FACTOR = 3;
  *  owner app's status fetch on each reconnect. Each costs about two rows written where it writes at all. */
 const CHANNEL_REQUESTS = (HOSTS.length * TASKS_PER_HOST * 2 + 1) * 3; // three owner clients, pushed membership changes only
 const OTHER_REQUESTS = CHANNEL_REQUESTS + (HOSTS.length * TASKS_PER_HOST * 2 + 96) + 50 * 3 + Math.ceil(DAY_MIN / 20) + 50;
+/** Three guest workers running as services all day (src/guest.ts): one request per idle ask, and the Worker rewrites
+ *  each guest's last_seen (no index on it) at most once a minute, so at most one row per ask. */
+const GUESTS = 3, GUEST_ASKS = GUESTS * Math.ceil(DAY_MIN * 60_000 / GUEST_IDLE_MS);
 // The receipt index only includes owner sends with client_id; fleet events add no index rows.
 const RECEIPT_ROWS = 50;
 const OTHER_ROWS = RECEIPT_ROWS + (HOSTS.length * TASKS_PER_HOST * 2 + 96) * 2 + 50 * 6 + 2_000; // + events the fleet reports
@@ -64,8 +67,8 @@ test("a fleet day stays under the free-plan target", async () => {
     clock += 60_000;
   }
 
-  const requests = t.meter!.requests + OTHER_REQUESTS;
-  const rowsWritten = t.meter!.rowsWritten * INDEX_FACTOR + OTHER_ROWS;
+  const requests = t.meter!.requests + OTHER_REQUESTS + GUEST_ASKS;
+  const rowsWritten = t.meter!.rowsWritten * INDEX_FACTOR + OTHER_ROWS + GUEST_ASKS;
   console.log(`fleet day: ${requests} requests (target ${TARGET.requests}), ~${rowsWritten} rows written (target ${TARGET.rowsWritten})`);
   expect(requests).toBeLessThanOrEqual(TARGET.requests);
   expect(rowsWritten).toBeLessThanOrEqual(TARGET.rowsWritten);

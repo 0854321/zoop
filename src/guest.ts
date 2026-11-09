@@ -3,11 +3,13 @@
 // NOOP_GUEST_HOME (default ~/.noop-guest). Each OS account / person on a shared machine uses its own home, so several
 // people's guests on one device never see each other. Tasks run in a fresh scratch folder with this machine's own
 // claude/codex login; the answer (text + `git diff`) goes back as an untrusted result the primary reviews.
-//   noop guest join <url> <code>   ·   noop guest run [--cli claude|codex] [--once]
+//   noop guest join <url> <code>   ·   noop guest run [--cli claude|codex] [--once]   ·   noop guest install | uninstall
 // Primary (machine key): noop guest invite <label> · noop guest list · noop guest assign <G-id> <T-id> [title] [-b body] [--repo url] · noop guest results · noop guest revoke <G-id>
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { $ } from "bun";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import { GUEST_IDLE_MS } from "../cloud/src/budget";
 
 const HOME = () => process.env.NOOP_GUEST_HOME || join(homedir(), ".noop-guest");
 type GuestCfg = { url: string; id: string; token: string };
@@ -29,9 +31,11 @@ export function guestPrompt(t: { id: string; title: string; body: string; repo?:
     "Finish with a short plain-text report of what you did and what you observed; code changes stay in the working tree."].join("\n");
 }
 
+class Revoked extends Error {}
+
 async function runOne(c: GuestCfg, cli: string): Promise<boolean> {
-  const r = await call(c, "/api/guest/next");
-  if (r?.status === 401) throw new Error("this guest was revoked or its token is invalid: run `noop guest join` again");
+  const r = await call(c, "/api/guest/next"); // also the heartbeat: the Worker refreshes last_seen on every guest request
+  if (r?.status === 401) throw new Revoked("this guest was revoked or its token is invalid: run `noop guest join` again");
   const t = r?.ok ? ((await r.json()) as any).task : null;
   if (!t) return false;
   console.log(`▶ ${t.id} ${t.title}`);
@@ -66,17 +70,31 @@ async function admin(cfg: any, path: string, init: RequestInit = {}) {
   return b as any;
 }
 
+const SITE = "https://huacnlee.github.io/noop";
+
+/** What `noop guest invite` prints: one line per OS that installs Noop and joins as this guest, no login. */
+export function guestInvite(url: string, code: string): string {
+  return [
+    "", "  on the guest machine, in the account that runs it (valid 10 minutes, once):", "",
+    "  Windows (PowerShell):",
+    `  $env:NOOP_GUEST = "${url} ${code}"; irm ${SITE}/install.ps1 | iex`, "",
+    "  macOS / Linux:",
+    `  curl -fsSL ${SITE}/install.sh | bash -s -- --guest ${url} ${code}`, "",
+    `  already has Noop:  noop guest join ${url} ${code}`, "",
+  ].join("\n");
+}
+
 export async function guestCmd(rest: string[], loadCfg: () => any) {
   const [sub, ...a] = rest;
   const flag = (n: string) => { const i = a.indexOf(n); return i >= 0 ? a.splice(i, 2)[1] : undefined; };
   switch (sub) {
     case "join": {
       const [url, code] = a;
-      if (!url || !code) return void console.log("usage: noop guest join <url> <code>");
+      if (!url || !code) { process.exitCode = 1; return void console.log("usage: noop guest join <url> <code>"); }
       const base = url.replace(/\/$/, "");
       const r = await fetch(`${base}/api/guest/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
       const b = (await r.json().catch(() => ({}))) as any;
-      if (!r.ok) return void console.log(`join failed: ${b.error ?? r.status}`);
+      if (!r.ok) { process.exitCode = 1; return void console.log(`join failed: ${b.error ?? r.status}`); }
       mkdirSync(HOME(), { recursive: true });
       const f = join(HOME(), "guest.json");
       writeFileSync(f, JSON.stringify({ url: base, id: b.id, token: b.token }, null, 2));
@@ -86,19 +104,29 @@ export async function guestCmd(rest: string[], loadCfg: () => any) {
     case "run": {
       const c = readGuestCfg();
       if (!c) return void console.log("not joined: noop guest join <url> <code>");
-      const cli = flag("--cli") ?? "claude", once = a.includes("--once");
+      const cli = flag("--cli") ?? defaultCli(), once = a.includes("--once");
+      console.log(`guest ${c.id} on ${c.url}, running tasks with ${cli}`);
       for (;;) {
-        await call(c, "/api/guest/heartbeat", { method: "PUT" });
-        const did = await runOne(c, cli);
+        let did = false;
+        try { did = await runOne(c, cli); } catch (e) {
+          if (e instanceof Revoked) {
+            // Park the token so a service restarting this command does not keep asking the Worker.
+            renameSync(join(HOME(), "guest.json"), join(HOME(), "guest.revoked.json"));
+            return void console.log(e.message);
+          }
+          console.log(`guest: ${(e as Error).message ?? e}`);
+        }
         if (once) return;
-        if (!did) await Bun.sleep(30_000);
+        if (!did) await Bun.sleep(GUEST_IDLE_MS);
       }
     }
+    case "install": return installGuestService(flag("--cli"));
+    case "uninstall": return uninstallGuestService();
     case "invite": {
       const label = a.join(" ").trim();
       if (!label) return void console.log("usage: noop guest invite <label>");
       const cfg = loadCfg(), { code } = await admin(cfg, "/api/guests/code", { method: "POST", body: JSON.stringify({ label }) });
-      return void console.log(`\n  on the guest machine (valid 10 minutes, once):\n  noop guest join ${String(cfg.cloud.url).replace(/\/$/, "")} ${code}\n`);
+      return void console.log(guestInvite(String(cfg.cloud.url).replace(/\/$/, ""), code));
     }
     case "list": {
       const { guests } = await admin(loadCfg(), "/api/guests");
@@ -123,6 +151,85 @@ export async function guestCmd(rest: string[], loadCfg: () => any) {
       await admin(loadCfg(), "/api/guests/revoke", { method: "POST", body: JSON.stringify({ id: a[0] }) });
       return void console.log(`revoked ${a[0]}`);
     }
-    default: console.log("usage: noop guest join|run|invite|list|assign|results|revoke");
+    default: console.log("usage: noop guest join|run|install|uninstall|invite|list|assign|results|revoke");
   }
+}
+
+/** The guest runs tasks with this machine's own model login: claude when it is installed, else codex. */
+function defaultCli() { return Bun.which("claude") || !Bun.which("codex") ? "claude" : "codex"; }
+
+// ------------------------------------------------------------------ guest service
+// Per OS account, like the guest home: each person's guest starts at their own login and never needs admin rights.
+const GUEST_LABEL = "dev.noop.guest";
+
+/** Run `noop guest run` in the background from now on and at every login of this account. */
+export async function installGuestService(cliFlag?: string) {
+  if (!readGuestCfg()) { process.exitCode = 1; return void console.log("not joined: noop guest join <url> <code>"); }
+  const cli = cliFlag ?? defaultCli();
+  if (!Bun.which(cli)) console.log(`! ${cli} is not installed: install it and log in, or the guest cannot run tasks`);
+  const bun = process.execPath, entry = join(import.meta.dir, "cli.ts"), home = HOME(), log = join(home, "guest.log");
+  const args = [bun, entry, "guest", "run", "--cli", cli];
+  const path = [join(homedir(), ".bun/bin"), join(homedir(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":");
+  mkdirSync(home, { recursive: true });
+  if (process.platform === "linux") {
+    const unit = join(homedir(), ".config/systemd/user/noop-guest.service");
+    mkdirSync(join(unit, ".."), { recursive: true });
+    // on-failure: a revoked guest exits 0 and stays stopped instead of asking the Worker again every few seconds
+    writeFileSync(unit, `[Unit]\nDescription=Noop guest worker\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nExecStart=${args.join(" ")}\nRestart=on-failure\nRestartSec=60\nEnvironment=PATH=${path}\nEnvironment=NOOP_GUEST_HOME=${home}\nNice=5\n\n[Install]\nWantedBy=default.target\n`);
+    await $`systemctl --user daemon-reload`.nothrow();
+    await $`systemctl --user enable --now noop-guest.service`.nothrow();
+    await $`systemctl --user restart noop-guest.service`.nothrow();
+    console.log(`✔ guest service installed: ${unit}\n  logs: journalctl --user -u noop-guest -f`);
+  } else if (process.platform === "darwin") {
+    const plist = join(homedir(), `Library/LaunchAgents/${GUEST_LABEL}.plist`);
+    const x = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${GUEST_LABEL}</string>
+  <key>ProgramArguments</key><array>${args.map((v) => `<string>${x(v)}</string>`).join("")}</array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${path}</string><key>NOOP_GUEST_HOME</key><string>${x(home)}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>${x(log)}</string>
+  <key>StandardErrorPath</key><string>${x(log)}</string>
+</dict></plist>
+`);
+    await $`launchctl bootout gui/${process.getuid!()} ${plist}`.quiet().nothrow();
+    await $`launchctl bootstrap gui/${process.getuid!()} ${plist}`.nothrow();
+    console.log(`✔ guest service installed: ${plist}\n  logs: ${log}`);
+  } else if (process.platform === "win32") {
+    // A hidden window started from the account's Run key: no admin rights, no task name shared with other accounts.
+    const vbs = join(home, "guest.vbs"), vb = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    // cmd /c strips one outer pair of quotes, so the whole command line gets its own pair
+    const cmd = `cmd /c ""${bun}" "${entry}" guest run --cli ${cli} >> "${log}" 2>&1"`;
+    writeFileSync(vbs, `Set sh = CreateObject("WScript.Shell")\r\nsh.Environment("Process")("NOOP_GUEST_HOME") = ${vb(home)}\r\nsh.Run ${vb(cmd)}, 0, False\r\n`);
+    await $`reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v NoopGuest /t REG_SZ /d ${`wscript.exe "${vbs}"`} /f`.quiet().nothrow();
+    await stopWindowsGuest();
+    await $`wscript.exe ${vbs}`.nothrow();
+    console.log(`✔ guest service installed: starts at every login of ${userInfo().username}\n  logs: ${log}`);
+  }
+}
+
+export async function uninstallGuestService() {
+  if (process.platform === "linux") {
+    await $`systemctl --user disable --now noop-guest.service`.nothrow();
+    rmSync(join(homedir(), ".config/systemd/user/noop-guest.service"), { force: true });
+  } else if (process.platform === "darwin") {
+    const plist = join(homedir(), `Library/LaunchAgents/${GUEST_LABEL}.plist`);
+    await $`launchctl bootout gui/${process.getuid!()} ${plist}`.quiet().nothrow();
+    rmSync(plist, { force: true });
+  } else if (process.platform === "win32") {
+    await $`reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v NoopGuest /f`.quiet().nothrow();
+    await stopWindowsGuest();
+  }
+  console.log("✔ guest service removed");
+}
+
+/** This account's running `guest run` processes (other accounts' guests are left alone). */
+async function stopWindowsGuest() {
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='bun.exe'" | Where-Object { $_.CommandLine -like '*guest run*' -and (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $env:USERNAME } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
+  await $`powershell -NoProfile -Command ${ps}`.quiet().nothrow();
 }
