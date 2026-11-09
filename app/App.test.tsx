@@ -452,6 +452,19 @@ describe("channel", () => {
     expect(app.openedUrls()).toEqual(["https://github.com/acme/nsh/issues/770", "https://github.com/acme/nsh/issues/746"]);
   });
 
+  test("a #N after a repository the channel never linked stays text, not the one named before it", async () => {
+    const thread = [
+      { id: "e10", ts: ts(10), from: "lead@linux-box", kind: "notice", text: "见 https://github.com/acme/core-api/pull/41" },
+      { id: "e11", ts: ts(11), from: "lead@linux-box", kind: "notice", text: "core-api #41 只等评审。video-tool #2、#3 和 docs #12 都能合并。\ncore-api：#42 待审；\ndocs：#13 无检查记录。" },
+    ];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([], thread), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("text:#42");
+    for (const n of ["#2", "#3", "#12", "#13"]) expect(app.shows(`text:${n}`)).toBe(false);
+    await app.press("text:core-api #41");
+    await app.press("text:#42");
+    expect(app.openedUrls()).toEqual(["https://github.com/acme/core-api/issues/41", "https://github.com/acme/core-api/issues/42"]);
+  });
+
   test("an answer quotes the card it replies to; pressing the quote goes back to the card", async () => {
     const reply = { id: "e9", ts: ts(9), from: "owner", kind: "owner", ref: "D-0001", text: "B，但先跑一遍测试" };
     const app = await open("./App.tsx", { storage: STORAGE, network: hub([], [reply]), width: 1200, height: 800, platform: "macos" });

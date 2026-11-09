@@ -632,6 +632,10 @@ function reposIn(text: string, into = new Map<string, string>()): Map<string, st
 }
 
 const REF = /(^|[^\w\/\[#&])(?:([A-Za-z][\w.-]*)( ?))?#(\d+)\b/g;
+/** A word before "#N" naming a repository, not what the ref is: "docs#3", "video-tool #2" (not "PR #3", "and #4"). */
+const repoWord = (name: string, sp: string) => !/^(pr|issue)s?$/i.test(name) && (!sp || /[-_.\d]/.test(name));
+/** A line's or clause's label ("docs：#12", "- web-app: ..."), not a URL's scheme. */
+const LABEL = /(?:^|[\n。；;，,])[\s*+\-\d.)]*([A-Za-z][\w.-]*)\**\s*[:：](?!\/\/)/g;
 
 /**
  * A "#746" is a GitHub PR or issue: "nsh #747" / "NSH#747" links to that repository when the channel has linked it
@@ -653,22 +657,28 @@ function linkRepoRefs(text: string, context = ""): string {
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const names = [...known.keys()].sort((a, b) => b.length - a.length);
   const mention = new RegExp(`(?<![\\w-])(${names.map((k) => esc(k).replace(/[-_]/g, "[-_ ]?")).join("|")})(?![\\w-])`, "gi");
+  const flat = (k: string) => k.toLowerCase().replace(/[-_ ]/g, "");
+  const slugOf = (name: string) => [...known].find(([k]) => flat(k) === flat(name))?.[1];
   const marks: [number, string][] = [];
   for (const m of text.matchAll(mention)) {
-    const flat = (k: string) => k.toLowerCase().replace(/[-_ ]/g, "");
-    const slug = [...known].find(([k]) => flat(k) === flat(m[1]))?.[1];
+    const slug = slugOf(m[1]);
     if (slug) marks.push([m.index!, slug]);
   }
+  // a repository it doesn't know, named before a ref or as a label ("video-tool #2", "docs：#12"), ends the one
+  // before it: the refs after it aren't that one's
+  for (const m of text.matchAll(REF)) if (m[2] && repoWord(m[2], m[3]) && !slugOf(m[2])) marks.push([m.index! + m[1].length, ""]);
+  for (const m of text.matchAll(LABEL)) if (repoWord(m[1], "") && !slugOf(m[1])) marks.push([m.index! + m[0].lastIndexOf(m[1]), ""]);
+  marks.sort((a, b) => a[0] - b[0]);
   const near = (at: number) => { let s: string | null = null; for (const [i, slug] of marks) { if (i >= at) break; s = slug; } return s; };
   const url = (slug: string, n: string) => `https://github.com/${slug}/issues/${n}`;
   let base = 0;
   return text.split(/(`[^`\n]*`)/).map((part, i) => { const off = base; base += part.length; return i % 2 ? part : part.replace(
     REF,
     (all, pre: string, name: string | undefined, sp: string, n: string, at: number) => {
-      const slug = name && known.get(name.toLowerCase());
+      const slug = name && slugOf(name);
       if (slug) return `${pre}[${name}${sp}#${n}](${url(slug, n)})`;
       const repo = near(off + at + pre.length) ?? only;
-      if (!repo || (name && !sp && !/^(pr|issue)s?$/i.test(name))) return all;
+      if (!repo || (name && repoWord(name, sp))) return all;
       return `${pre}${name ? name + sp : ""}[#${n}](${url(repo, n)})`;
     },
   ); }).join("");
