@@ -33,6 +33,7 @@ type Glyph =
   | "chevron-down"
   | "back"
   | "check"
+  | "smile"
   | "plus"
   | "minus"
   | "arrow-up"
@@ -131,6 +132,7 @@ const PATHS: Record<Glyph, string> = {
   "chevron-down": "M6 9l6 6l6 -6",
   "back": "M15 18l-6 -6l6 -6",
   "check": "M20 6L9 17l-5 -5",
+  "smile": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01",
   "plus": "M5 12h14M12 5v14",
   "minus": "M5 12h14",
   "arrow-up": "M5 12l7 -7l7 7M12 19V5",
