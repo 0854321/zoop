@@ -934,10 +934,17 @@ function proposalsOf(text: string): Proposal[] {
   return out;
 }
 
+/** The checklist items of a card: an approval batch from its text, a next-steps menu from its options. */
+function menuItems(e: HubEvent): Proposal[] {
+  return proposalsOf(e.kind === "menu" ? (e.options ?? []).join("\n") : e.text);
+}
+
 /** An approval batch as a checklist: tick what may start, then approve. */
 function ProposalList(props: { event: HubEvent; selection: Map<string, Signal<Set<string>>>; done: boolean; onAnswer: (ref: string, choice: string) => void; onReply: (ref: string) => void }) {
   const e = props.event;
-  const items = proposalsOf(e.text);
+  // a next-steps menu is the same checklist: several items may start at once (D-0215 was answered by typing "1,2")
+  const menu = e.kind === "menu";
+  const items = menuItems(e);
   let picked = props.selection.get(e.id);
   if (!picked) { picked = signal<Set<string>>(new Set()); props.selection.set(e.id, picked); }
   const selection = picked;
@@ -946,7 +953,7 @@ function ProposalList(props: { event: HubEvent; selection: Map<string, Signal<Se
   return (
     <>
       <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 6 }}>
-        <Text style={{ fontSize: size.small, color: colors.muted }}>{L(`The team wants to do ${items.length} things. Check the ones to start:`, `团队想做这 ${items.length} 件事，勾选同意开始的：`)}</Text>
+        <Text style={{ fontSize: size.small, color: colors.muted }}>{menu ? L(`Next steps: check the ones to do (${items.length} options)`, `下一步做哪些？勾选要做的（共 ${items.length} 项）`) : L(`The team wants to do ${items.length} things. Check the ones to start:`, `团队想做这 ${items.length} 件事，勾选同意开始的：`)}</Text>
       </View>
       <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
         <Each of={items}>
@@ -978,8 +985,8 @@ function ProposalList(props: { event: HubEvent; selection: Map<string, Signal<Se
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 16 }}>
           <Btn testID={`approve-${e.ref}`} label={selection().size ? L(`Approve selected (${selection().size})`, `批准所选（${selection().size}）`) : L("Approve selected", "批准所选")} kind="primary" disabled={!selection().size}
             onPress={() => answer([...selection()].sort((a, b) => +a - +b).join(","))} />
-          <Btn testID={`opt-${e.ref}-all`} label={L("Approve all", "全部批准")} kind="secondary" onPress={() => answer("all")} />
-          <Btn testID={`opt-${e.ref}-none`} label={L("None", "都不要")} kind="ghost" onPress={() => answer("none")} />
+          <Btn testID={`opt-${e.ref}-all`} label={L("Approve all", "全部批准")} kind="secondary" onPress={() => answer(menu ? "全部" : "all")} />
+          <Btn testID={`opt-${e.ref}-none`} label={L("None", "都不要")} kind="ghost" onPress={() => answer(menu ? "都不要" : "none")} />
           <View style={{ flex: 1 }} />
           <Btn testID={`other-${e.ref}`} label={L("Other instructions…", "其他指示…")} kind="dashed" onPress={() => props.onReply(e.ref!)} />
         </View>
@@ -995,7 +1002,7 @@ const IGNORE = "忽略";
 function answerText(t: string): string {
   const [, ref, rest] = t.match(/^([DLP]-[A-Z]?\d{4}) (.+)$/) ?? [, "", t];
   const a = rest.trim();
-  if (ref.startsWith("P-")) {
+  if (ref.startsWith("P-") || /^\d+(\s*[,，]\s*\d+)+$/.test(a)) {
     if (/^(all|全部)$/i.test(a)) return L("Approve all", "全部批准");
     if (/^(none|都不要)$/i.test(a)) return L("None", "都不要");
     if (/^\d+(\s*[,，]\s*\d+)*$/.test(a)) { const items = a.split(/\s*[,，]\s*/); return L(`Approve ${items.join(", ")}`, `批准 ${items.join("、")}`); }
@@ -1216,7 +1223,7 @@ function Message(props: {
                 </View>
               </If>
             </View>
-            {e.kind === "proposals" && proposalsOf(e.text).length ? (
+            {(e.kind === "proposals" || e.kind === "menu") && menuItems(e).length ? (
               <ProposalList event={e} selection={selection} done={done()} onAnswer={props.onAnswer} onReply={props.onReply} />
             ) : (
             <>

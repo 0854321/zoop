@@ -465,6 +465,20 @@ describe("channel", () => {
     await app.waitUntil(() => !app.shows("text:要不要升级依赖？"));
   });
 
+  test("a next-steps menu takes several items at once", async () => {
+    const posts: { text: string; reply_to?: string }[] = [];
+    const menu = { id: "menu-1", ts: ts(9), from: "Tudi@lb", kind: "menu", ref: "D-0900", text: "*D-0900* · Tudi：团队空闲了，下一步做哪些？\n1. [rust-maintainer] 修复快捷键串窗\n2. [rust-maintainer] 修复窗口属性丢失\n3. [rust-maintainer] 修复依赖冲突\n建议：*1*",
+      options: ["1. [rust-maintainer] 修复快捷键串窗", "2. [rust-maintainer] 修复窗口属性丢失", "3. [rust-maintainer] 修复依赖冲突"] };
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts, [menu]), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("id:proposal-D-0900-1");
+    await app.press("id:proposal-D-0900-1");
+    await app.press("id:proposal-D-0900-3");
+    await app.waitFor("Approve selected (2)");
+    await app.press("id:approve-D-0900");
+    await app.waitUntil(() => posts.length === 1);
+    expect(posts[0]).toMatchObject({ text: "D-0900 1,3" });
+  });
+
   test("replies to an agent's message: the reply names its task and quotes it", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const kai = { id: "e9", ts: ts(9), from: "Kai@lb", kind: "notice", ref: "T-0125", text: "\n  \t nsh #812   主要修的是文字排版\n细节在 PR 里" };
