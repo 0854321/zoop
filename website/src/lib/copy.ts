@@ -43,6 +43,16 @@ export const copy = {
       ['More machines, no waiting', 'One always-on Linux machine is the primary. Others claim work when they’re online, and only make outbound connections.'],
       ['On every device', 'Apps for macOS, Linux, Windows, Android and iOS, or just open your Noop address in a browser and sign in with a one-time code.'],
     ],
+    guest: 'Guest workers for shared machines.',
+    guestIntro: 'Need a test box you share with other people, like a Windows machine several accounts log into? Run a guest worker there. It can neither read your team’s memory nor be used against your Noop.',
+    guestFacts: [
+      ['One-time join code', 'Run noop guest invite on a trusted machine to get a join command valid for 10 minutes. The guest receives its own token that you can revoke at any time, never the machine key.'],
+      ['Narrow permissions', 'A guest can only claim tasks assigned to it, send back results and report it is alive. No memory, chat, settings, journal or decisions, and none of your GitHub or model credentials: it uses the machine’s own model login.'],
+      ['Results are untrusted', 'Everything a guest returns is marked untrusted. Nothing is merged or applied automatically; you or the primary review it first.'],
+      ['One machine, many accounts', 'Each OS account keeps its own guest home, so people sharing the machine never see each other’s tasks or tokens.'],
+    ],
+    guestCommands: '# trusted machine\nnoop guest invite "shared-win-1"\n\n# shared machine, in the account that runs it\nnoop guest join <url> <code>\nnoop guest run\n\n# hand it a self-contained task, then review what comes back\nnoop guest assign G-xxxx T-1234 "Run the Windows install test" -b "steps…" --repo https://github.com/o/r\nnoop guest results\nnoop guest revoke G-xxxx',
+    guestGuide: 'Guest worker guide',
     related: 'More projects',
     relatedIntro: 'More tools from the same author.',
     relatedDescriptions: {
@@ -99,6 +109,16 @@ export const copy = {
       ['多台机器，互不等待', '一台常开的 Linux 机器作为主机，其他机器在线时认领工作，并且只发起出站连接。'],
       ['所有设备都能用', '提供 macOS、Linux、Windows、Android 和 iOS 应用，也可以直接在浏览器打开你的 Noop 地址，用一次性验证码登录。'],
     ],
+    guest: '共享机器上的 Guest worker',
+    guestIntro: '需要和别人共用的测试机，比如几个人的账号都会登录的 Windows 电脑？在上面运行 Guest worker。它读不到团队的记忆，也没法被用来攻击你的 Noop。',
+    guestFacts: [
+      ['一次性加入码', '在可信机器上运行 noop guest invite，得到 10 分钟内有效的加入命令。Guest 拿到的是自己的令牌，可随时吊销，永远拿不到机器密钥。'],
+      ['最小权限', 'Guest 只能领取派给它的任务、交回结果、发送心跳。看不到记忆、chat、设置、journal 和决策，也不持有你的 GitHub 或模型凭据，使用那台机器自己的模型登录。'],
+      ['结果不可信', 'Guest 交回的一切都标记为不可信，不会自动合并或应用，先由你或主控机审查。'],
+      ['一台机器，多个账号', '每个系统账号有自己的 guest 目录，共用机器的人互相看不到对方的任务和令牌。'],
+    ],
+    guestCommands: '# 可信机器\nnoop guest invite "shared-win-1"\n\n# 共享机器，在运行它的账号下\nnoop guest join <url> <code>\nnoop guest run\n\n# 派一个自包含的任务，再审查交回的结果\nnoop guest assign G-xxxx T-1234 "Run the Windows install test" -b "steps…" --repo https://github.com/o/r\nnoop guest results\nnoop guest revoke G-xxxx',
+    guestGuide: 'Guest worker 指南',
     related: '更多项目',
     relatedIntro: '同一作者的其他工具。',
     relatedDescriptions: {

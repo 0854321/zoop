@@ -108,6 +108,7 @@ const relatedProjects = [
         <ol class="steps">{t.steps.map(([title, body], i) => <li><span class="step-number" aria-hidden="true">0{i + 1}</span><div><h3>{title}</h3><p>{body}</p></div></li>)}</ol>
       </section>
       <section class="section details"><div class="section-heading"><span class="index" aria-hidden="true">02 /</span><h2>{t.details}</h2></div><dl>{t.facts.map(([title, body]) => <div><dt>{title}</dt><dd>{body}</dd></div>)}</dl></section>
+      <section id="guest" class="section details guest"><div class="section-heading"><span class="index" aria-hidden="true">03 /</span><h2>{t.guest}</h2><p>{t.guestIntro}</p></div><div class="guest-body"><dl>{t.guestFacts.map(([title, body]) => <div><dt>{title}</dt><dd>{body}</dd></div>)}</dl><pre class="guest-commands"><code>{t.guestCommands}</code></pre><p class="requirements"><a class="text-link" href={`${repo}/blob/main/docs/guest-workers.md`}>{t.guestGuide} ↗</a></p></div></section>
       <section class="related-projects" aria-labelledby="related-title"><div class="related-heading"><h2 id="related-title">{t.related}</h2><p>{t.relatedIntro}</p></div><ul>{relatedProjects.map(project => <li><a href={project.href}>{project.name} <span aria-hidden="true">↗</span></a><p>{project.description}</p></li>)}</ul></section>
     </main>
     <footer><div class="shell"><span>Noop · {t.footer}</span><span>{t.built} <a class="text-link" href="https://nsh.dev">Native Shell</a> · <a class="text-link" href={repo}>{t.source}</a></span></div></footer>

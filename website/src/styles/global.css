@@ -197,3 +197,5 @@ footer .text-link { font-size: inherit; }
 .sponsor p { margin: 0; color: var(--brand); font-size: 16px; font-weight: 600; }
 .sponsor .sponsor-button { height: 36px; padding: 0 16px; font-size: 14px; }
 @media (max-width: 680px) { nav a.sponsor-button { display: none; } .sponsor { margin-bottom: 32px; } }
+.guest-commands { display: block; margin: 24px 0 12px; border: 1px solid var(--border); border-radius: 8px; }
+.guest-body { min-width: 0; }
