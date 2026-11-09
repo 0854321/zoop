@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
-import { CODE, DATA, P } from "./core";
+import { CODE, DATA, HOME_DIR, P } from "./core";
 
 const STATE_DIRS = [
   "tasks/proposed", "tasks/rejected", "tasks/waiting", "tasks/inbox", "tasks/active", "tasks/blocked", "tasks/failed", "tasks/done",
@@ -94,6 +94,14 @@ function writeLocalConfig(me: string) {
 }
 
 // ------------------------------------------------------------------ self-update
+const REJECTED = () => join(HOME_DIR, "update-rejected"); // machine-local: a release this host already refused
+
+/** A release whose tests failed here is not tried again until origin moves on — otherwise every check
+ *  re-installs the same bad code and wakes the medic again. An explicit `hub update` still retries. */
+export function updateRejected(up: string, file = REJECTED()): boolean {
+  try { return readFileSync(file, "utf8").trim() === up; } catch { return false; }
+}
+
 /** Fast-forward framework code if origin has new commits that pass tests. Returns true if updated. */
 export async function selfUpdate(opts: { busy?: number; force?: boolean; deploy?: boolean } = {}): Promise<boolean> {
   // never swap code (and then restart) under running work: defer until this host is idle
@@ -105,6 +113,7 @@ export async function selfUpdate(opts: { busy?: number; force?: boolean; deploy?
   const head = (await g("rev-parse", "HEAD")).stdout.toString().trim();
   const up = (await g("rev-parse", "@{u}")).stdout.toString().trim();
   if (!up || head === up) return false;
+  if (!opts.force && updateRejected(up)) return false; // already failed its tests here; wait for the next release
   // upstream history may have been rewritten (e.g. scrubbed); with no local edits, follow it — tests below still guard the switch
   if ((await g("merge-base", "--is-ancestor", "HEAD", "@{u}")).exitCode !== 0) {
     // diverged: follow upstream only when it already has every local commit's change (a rewrite); unpushed work stays
@@ -117,6 +126,7 @@ export async function selfUpdate(opts: { busy?: number; force?: boolean; deploy?
   if (deps.exitCode !== 0 || test.exitCode !== 0) {
     await g("reset", "--hard", "-q", head); // roll back a bad release
     await $`bun install --frozen-lockfile`.cwd(CODE).quiet().nothrow();
+    try { mkdirSync(HOME_DIR, { recursive: true }); writeFileSync(REJECTED(), up); } catch {}
     console.error(`self-update to ${up.slice(0, 7)} failed tests → rolled back to ${head.slice(0, 7)}`);
     const { medic } = await import("./medic");
     const { loadConfig } = await import("./core");

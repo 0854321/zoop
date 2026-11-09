@@ -145,6 +145,18 @@ test("selfUpdate defers while tasks run on this host", async () => {
   expect(await selfUpdate({ busy: 2 })).toBe(false);
 });
 
+test("a release whose tests failed here is not installed again until origin moves on", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { updateRejected } = await import("../src/setup");
+  const f = join(mkdtempSync(join(tmpdir(), "noop-up-")), "update-rejected");
+  expect(updateRejected("1c6ae5a", f)).toBe(false); // nothing refused yet
+  writeFileSync(f, "1c6ae5a\n");
+  expect(updateRejected("1c6ae5a", f)).toBe(true); // the same bad release is skipped, no reinstall, no medic
+  expect(updateRejected("d23c0de", f)).toBe(false); // a newer release is tried again
+});
+
 test("taskView shows the original ask, not daemon requeue notes", async () => {
   const { mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

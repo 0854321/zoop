@@ -980,7 +980,7 @@ async function main() {
       return void console.log(force ? "noop restarts as soon as its running tasks finish"
         : "noop restarts once its running tasks finish (at most once per hour; --force to skip the limit)");
     }
-    case "update": return void console.log((await selfUpdate()) ? "updated" : "up to date");
+    case "update": return void console.log((await selfUpdate({ force: true })) ? "updated" : "up to date"); // asked by a person: retry even a release this host rejected
     case "daemon": return daemon(cfg);
     case "tick": return tick(cfg);
     case "add": {
