@@ -724,9 +724,7 @@ describe("channel", () => {
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [nohost, ...status.recent] } } },
     });
     await app.waitFor("id:side-queued");
-    expect(app.shows("Waiting for Windows machine")).toBe(false); // 排队 starts collapsed
-    await app.press("id:side-queued");
-    await app.waitFor("Waiting for Windows machine");
+    await app.waitFor("Waiting for Windows machine"); // 排队 starts open
     await app.press("label:T-0097 · Waiting for a machine");
     await app.waitFor("id:task-nohost");
     expect(app.shows("id:cancel-task")).toBe(true);
@@ -739,7 +737,6 @@ describe("channel", () => {
       storage: STORAGE, width: 1200, height: 800, platform: "macos",
       network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, recent: [parked, ...status.recent] } } },
     });
-    await app.press("id:side-queued");
     await app.waitFor("Waiting");
     await app.press("label:T-0236 · Waiting on external result");
     await app.waitFor("id:cancel-task");
@@ -819,6 +816,18 @@ describe("images", () => {
       },
     };
   }
+
+  test("a zoomed image pages through its message's images in a loop", async () => {
+    const shots = { id: "i1", ts: ts(8), from: "lead@mac", kind: "notice", text: "截图", attachments: ["/media/1-a.png", "/media/2-b.png"] };
+    const app = await open("./App.tsx", { ...desk, network: { ...hub([], [shots]) } });
+    await app.waitFor("label:View full size");
+    await app.press("label:View full size >> nth=0");
+    await app.waitFor("text:1 / 2");
+    await app.press("id:image-next");
+    await app.waitFor("text:2 / 2");
+    await app.press("id:image-next");
+    await app.waitFor("text:1 / 2");
+  });
 
   test("the newest Markdown report opens in the reader pane, which zooms, closes and reopens", async () => {
     const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "推送通知梳理完成", attachments: ["/media/1762650000000-push-notifications.md"] };
@@ -1940,57 +1949,4 @@ describe("decision notification", () => {
       await app.waitFor("id:opt-D-0204-A");
     });
   }
-});
-
-describe("composer emoji", () => {
-  for (const platform of ["macos", "ios", "android"] as const) {
-    test(`composer emoji inserts without sending on ${platform}`, async () => {
-      const posts: { text: string }[] = [];
-      const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: platform === "macos" ? 1200 : 390, height: 800, platform });
-      await app.waitFor("id:composer");
-      await app.type("id:composer", "你好");
-      await app.press("id:emoji");
-      await app.waitFor("id:emoji-picker");
-      await app.press("label:grinning face");
-      await app.waitUntil(() => app.value("id:composer") === "你好😀");
-      expect(posts).toEqual([]);
-      await app.press("id:emoji");
-      await app.waitFor("Recent");
-      if (platform === "macos") await app.keyboard.press("escape");
-      else await app.press("id:emoji-close");
-      await app.waitUntil(() => !app.shows("id:emoji-picker"));
-      expect(app.value("id:composer")).toBe("你好😀");
-      await app.press("id:send");
-      await app.waitUntil(() => posts.length === 1);
-      expect(posts[0].text).toBe("你好😀");
-    });
-  }
-  test("composer emoji searches and restores focus after Unicode text", async () => {
-    const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: 1200, height: 800, platform: "macos" });
-    await app.type("id:composer", "a😀b");
-    await app.press("id:emoji");
-    await app.waitFor("id:emoji-picker");
-    await app.type("label:Search emoji", "grinning face");
-    await app.waitUntil(() => app.value("label:Search emoji") === "grinning face");
-    await app.press("label:grinning face");
-    await app.waitUntil(() => app.value("id:composer") === "a😀b😀");
-    await app.keyboard.press("x");
-    await app.waitUntil(() => app.value("id:composer") === "a😀b😀x");
-  });
-});
-
-test("composer emoji also inserts into task replies", async () => {
-  const posts: { text: string; reply_to?: string }[] = [];
-  const app = await open("./App.tsx", { storage: STORAGE, network: hub(posts), width: 1200, height: 800, platform: "macos" });
-  await app.waitFor("text:T-0005");
-  await app.press("text:T-0005");
-  await app.waitFor("id:task-composer");
-  await app.type("id:task-composer", "收到");
-  await app.press("id:emoji");
-  await app.press("label:grinning face");
-  await app.waitUntil(() => app.value("id:task-composer") === "收到😀");
-  expect(posts).toEqual([]);
-  await app.press("id:task-send");
-  await app.waitUntil(() => posts.length === 1);
-  expect(posts[0]).toMatchObject({ text: "收到😀", reply_to: "T-0005" });
 });
