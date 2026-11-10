@@ -100,6 +100,7 @@ import {
   SettingsChoices,
   NumberField,
   PageHeader,
+  pageContent,
   font,
   leading,
 } from "./ui";
@@ -1656,6 +1657,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean; onFold?: (fold
       scrollEventThrottle={100}
       onScroll={(ev) => { const passed = ev.offset.y > TASK_HEAD; if (passed !== untracked(headPassed)) headPassed.set(passed); }}
       style={{ flex: 1 }}
+      contentStyle={pageContent}
     >
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", paddingHorizontal: props.wide ? 32 : 16, paddingTop: 24, paddingBottom: composerHeight() + 24 }}>
         <If when={t()} else={<Text style={{ fontSize: 15, color: colors.muted }}>{missing() ? L(`Can’t find ${props.id}.`, `找不到 ${props.id}。`) : L("Loading…", "读取中…")}</Text>}>
@@ -3531,7 +3533,7 @@ function RuleDoc(props: { hub: Hub; path: string; wide: boolean }) {
     else error.set(r.status === 404 ? L("This file no longer exists.", "这个文件已经不在了。") : r.status ? L(`Couldn’t load (${r.status})`, `读取失败（${r.status}）`) : L("Can’t reach the server", "连不上服务器"));
   });
   return (
-    <Scroll testID="rule-doc" style={{ flex: 1, backgroundColor: colors.background }}>
+    <Scroll testID="rule-doc" style={{ flex: 1, backgroundColor: colors.background }} contentStyle={pageContent}>
       <View style={{ width: "100%", maxWidth: size.column, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 32 : 16, paddingTop: 20, paddingBottom: Math.max(32, safeArea().bottom + 16) }}>
         <PageHeader style={{ marginBottom: 8 }}>
           <Text style={{ fontSize: 20, fontWeight: "600", color: colors.text }}>{props.path.split("/").pop()!.replace(/\.md$/, "")}</Text>
