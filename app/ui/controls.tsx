@@ -7,7 +7,7 @@
  * (`fill.press`), keyboard focus the field's ring (`focusRing`), disabled half strength with no hover or press.
  */
 import type { JSX, ViewStyle } from "nsh";
-import { createMotion, signal, Text, View } from "nsh";
+import { signal, Text, View } from "nsh";
 import { Input as BaseInput, NumberInput as BaseNumberInput, Switch as BaseSwitch } from "nsh/base";
 import { Icon, type IconName } from "./icons";
 import { alpha, colors, focusRing, motion, tints } from "./theme";
@@ -239,19 +239,40 @@ export function IconButton(props: {
   );
 }
 
-/** An icon button's glyph: when it swaps (copy → check), the new one pops in from a little smaller. */
+/**
+ * An icon button's glyph: when it swaps (copy → check), the new one pops in from a little smaller. A single icon is kept and re-scaled
+ * in place: swapping keyed children let the outgoing glyph linger beside the incoming one, so copy and check showed overlapped.
+ */
 function Glyph(props: { name: IconName; size: number; tint: string }) {
+  const pop = signal(false);
+  let last = props.name;
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const name = () => {
+    const n = props.name;
+    if (n !== last) {
+      last = n;
+      pop.set(true);
+      clearTimeout(t);
+      t = setTimeout(() => pop.set(false), 16);
+    }
+    return n;
+  };
   return (
-    <Each of={[props.name]} key={(n) => n}>
-      {(n) => {
-        const m = createMotion({ enter: { keyframes: { opacity: [0, 1], scale: [0.6, 1] }, duration: duration.settle, easing: "easeOut" } });
-        return (
-          <View style={m.style}>
-            <Icon name={n()} size={props.size} tint={props.tint} />
-          </View>
-        );
+    <View
+      style={{
+        width: props.size,
+        height: props.size,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: pop() ? 0 : 1,
+        transform: [{ scale: pop() ? 0.6 : 1 }],
+        transitionProperty: pop() ? "none" : "opacity, transform",
+        transitionDuration: duration.settle,
+        transitionTimingFunction: "ease-out",
       }}
-    </Each>
+    >
+      <Icon name={name()} size={props.size} tint={props.tint} />
+    </View>
   );
 }
 
