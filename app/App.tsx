@@ -429,6 +429,31 @@ const EXTENSIONS: MarkdownExtension[] = [
   { name: "task", pattern: "\\bT-[A-Z]?\\d{4}\\b" },
   { name: "item", pattern: "\\b[DP]-[A-Z]?\\d{4}\\b" },
 ];
+/**
+ * An id inside a file path ("tasks/done/T-0930.md", "T-0930/notes") names the file, not the task: it stays plain
+ * text, so the path reads and copies whole. The patterns cannot see past the match (Rust's `regex` has no
+ * lookaround), so this looks at the text on either side of each chip.
+ */
+function pathInlines(inlines: TextViewInline[]): TextViewInline[] {
+  const out: TextViewInline[] = [];
+  const text = (t: string) => {
+    const prev = out[out.length - 1];
+    if (prev?.type === "text") out[out.length - 1] = { ...prev, text: prev.text + t };
+    else out.push({ type: "text", text: t });
+  };
+  inlines.forEach((i, k) => {
+    if (i.type === "custom" && (i.name === "task" || i.name === "item")) {
+      const prev = out[out.length - 1];
+      const next = inlines[k + 1];
+      const before = prev?.type === "text" ? prev.text : "";
+      const after = next?.type === "text" ? next.text : "";
+      if (/[\w.-]\/$/.test(before) || /^(\.\w|\/[\w.-])/.test(after)) return text(i.text ?? "");
+    }
+    if (i.type === "text") return text(i.text);
+    out.push("content" in i && Array.isArray(i.content) ? ({ ...i, content: pathInlines(i.content) } as TextViewInline) : i);
+  });
+  return out;
+}
 const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)\/?$/;
 
 /** A bare GitHub PR or issue link reads as "nsh#747": still a plain link, not a chip (GFM autolinks bare URLs). */
@@ -472,7 +497,7 @@ function onceInlines(inlines: TextViewInline[], seen = new Set<string>()): TextV
 function ghBlocks(blocks: TextViewBlock[]): TextViewBlock[] {
   return blocks.map((b): TextViewBlock => {
     const x = { ...b } as Record<string, unknown>;
-    if (Array.isArray(x.content)) x.content = ghInlines(onceInlines(x.content as TextViewInline[]));
+    if (Array.isArray(x.content)) x.content = ghInlines(onceInlines(pathInlines(x.content as TextViewInline[])));
     if (Array.isArray(x.children)) x.children = ghBlocks(x.children as TextViewBlock[]);
     if (Array.isArray(x.items)) x.items = (x.items as { children: TextViewBlock[] }[]).map((it) => ({ ...it, children: ghBlocks(it.children) }));
     return x as TextViewBlock;

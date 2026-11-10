@@ -368,6 +368,16 @@ describe("channel", () => {
     await app.waitFor("Task T-0005");
   });
 
+  test("an id inside a file path stays plain text; one on its own is a chip", async () => {
+    const extra = [{ id: "e30", ts: ts(40), from: "dev@linux-box", kind: "notice", text: "依据 tasks/done/T-0005.md 和 D-0294/notes，不重复 T-0005" }];
+    const app = await open("./App.tsx", { storage: STORAGE, network: hub([], extra), width: 1200, height: 800, platform: "macos" });
+    await app.waitFor("text:/tasks\\/done\\/T-0005\\.md/");
+    expect(app.shows("text:/D-0294\\/notes/")).toBe(true);
+    // The chip of the id on its own (the earlier message has one too).
+    expect(app.shows("id:task-chip-T-0005 >> nth=1")).toBe(true);
+    expect(app.shows("id:task-chip-T-0005 >> nth=2")).toBe(false);
+  });
+
   test("a task page is its conversation: what was said about it, and a box that adds to it", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const said = [
