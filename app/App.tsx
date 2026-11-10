@@ -111,6 +111,8 @@ import {
   choicesOf,
   dayLabel,
   dayKey,
+  groupByDay,
+  dayRangeLabel,
   greeting,
   type HubEvent,
   initials,
@@ -1550,8 +1552,11 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
         </View>
         <If when={error()}><Text style={{ fontSize: 14, color: colors.danger }}>{error()}</Text></If>
         <If when={total() === 0 && !loading()}><Text style={{ fontSize: 14, color: colors.faint }}>{L("No matching tasks", "没有符合的任务")}</Text></If>
+        <Each of={groupByDay(tasks(), (t) => t.updated ?? "")} key={(g) => g.key}>
+          {(g) => (
         <View>
-          <Each of={tasks()} key={(t) => t.id}>
+          <Text style={{ fontSize: 13, fontWeight: "500", color: colors.faint, marginTop: 8, marginBottom: 4 }}>{dayRangeLabel(g().newest, g().oldest)}</Text>
+          <Each of={g().items} key={(t) => t.id}>
             {(t) => (
               <View
                 role="button"
@@ -1568,6 +1573,8 @@ function TaskHistory(props: { hub: Hub; wide: boolean; onTask: (id: string) => v
             )}
           </Each>
         </View>
+          )}
+        </Each>
         <If when={total() !== null && tasks().length < total()!}>
           <View style={{ alignSelf: "flex-start" }}>
             <Button testID="task-more" label={loading() ? L("Loading…", "读取中…") : L(`Load more (${total()! - tasks().length} left)`, `加载更多（还有 ${total()! - tasks().length} 个）`)} variant="secondary" disabled={loading()} onPress={() => void load(false)} />
