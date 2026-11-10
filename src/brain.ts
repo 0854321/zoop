@@ -48,6 +48,19 @@ export function reopenTask(file: string, text: string) {
   unlinkSync(file);
 }
 
+/** The owner added to an open task: a queued or running one gets it on top of its request (a running one reruns with it after),
+ * a waiting one is woken to act on it now. Their words never open a gate: only an answered card does (decisions.ts), and an
+ * approval a card already gave stays (gates.ts). */
+export function addFollowUp(file: string, text: string, waiting: boolean) {
+  const { meta, body } = readDoc(file);
+  const added = `${body}\n\n## Owner follow-up ${now()}\n> ${text.replace(/\n/g, "\n> ")}\n`;
+  if (!waiting) return writeDoc(file, meta, added);
+  const kids = meta.children ? ` Its sub-tasks (${meta.children}) may still be open: check them, don't start them again.` : "";
+  writeDoc(P("tasks", "inbox", `${meta.id}.md`), { ...meta, claimed_by: undefined, status: undefined, wake_at: undefined, resumed: "yes" },
+    `${added}\nWoken from waiting by the owner's message above: act on it now.${kids}\n`);
+  unlinkSync(file);
+}
+
 /** Writes that only touch task metadata or memory files: done right here (git-synced data repo). */
 export function dataActs(host: string, io = { pull: _pull, push: _commitPush }): Acts {
   const pull = () => io.pull(), push = (m: string) => io.push(m);

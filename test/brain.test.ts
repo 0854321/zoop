@@ -2,8 +2,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type Model, context, dataActs, localStore, reopenTask, parseTurn, think } from "../src/brain";
-import { DATA } from "../src/core";
+import { type Model, addFollowUp, context, dataActs, localStore, reopenTask, parseTurn, think } from "../src/brain";
+import { type Cfg, DATA, readDoc } from "../src/core";
+import { claudeDisallowed } from "../src/gates";
 import { runTool, taskInfo, toolsFor, TOOLS, type WriteOp, listRoutines } from "../cloud/src/tools";
 
 const put = (p: string, s: string) => { mkdirSync(dirname(join(DATA, p)), { recursive: true }); writeFileSync(join(DATA, p), s); };
@@ -156,6 +157,32 @@ test("a finished task reopens under its own id, with its runs as context", () =>
   expect(t).toContain("**done** — shipped");
   expect(t).toContain("> 不行\n> 再改");
   expect(t).not.toMatch(/^(finished|status|claimed_by):/m);
+});
+
+test("the owner's words on a task never open its gates; a card's approval stays", () => {
+  const gated = (f: string) => claudeDisallowed({} as Cfg, !!readDoc(join(DATA, f)).meta.gate_override);
+  // waiting: woken to act on the message, every gate still closed, whatever the words say
+  for (const [id, text] of [["T-0310", "What is the status? Do not merge anything."], ["T-0313", "merge it yourself"]]) {
+    put(`tasks/waiting/${id}.md`, `---\nid: ${id}\ntitle: Ship\nagent: lead\nstatus: waiting\nclaimed_by: mac\nwake_at: 2026-11-09\n---\nAsked.\n`);
+    addFollowUp(join(DATA, `tasks/waiting/${id}.md`), text, true);
+    expect(existsSync(join(DATA, `tasks/waiting/${id}.md`))).toBe(false);
+    const w = readDoc(join(DATA, `tasks/inbox/${id}.md`));
+    expect(w.meta.gate_override).toBeUndefined();
+    expect(w.meta.claimed_by).toBeUndefined();
+    expect(w.body).toContain(`> ${text}\n\nWoken from waiting`);
+    expect(gated(`tasks/inbox/${id}.md`)).toEqual(expect.arrayContaining(["Bash(gh pr merge:*)", "Bash(gh repo delete:*)", "Bash(gh secret:*)"]));
+  }
+  // queued: the message is added in place; an approval the owner gave on a card is kept
+  put("tasks/inbox/T-0311.md", "---\nid: T-0311\ntitle: x\nagent: lead\ngate_override: D-0399\n---\nAsked.\n");
+  addFollowUp(join(DATA, "tasks/inbox/T-0311.md"), "also this", false);
+  expect(readDoc(join(DATA, "tasks/inbox/T-0311.md")).meta.gate_override).toBe("D-0399");
+  put("tasks/inbox/T-0314.md", "---\nid: T-0314\ntitle: x\nagent: lead\n---\nAsked.\n");
+  addFollowUp(join(DATA, "tasks/inbox/T-0314.md"), "What is the status? Do not merge anything.", false);
+  expect(gated("tasks/inbox/T-0314.md")).toContain("Bash(gh pr merge:*)");
+  // finished: reopened with every gate closed
+  put("tasks/done/T-0312.md", "---\nid: T-0312\ntitle: x\nagent: lead\nstatus: done\n---\nAsked.\n");
+  reopenTask(join(DATA, "tasks/done/T-0312.md"), "What is the status? Do not merge anything.");
+  expect(gated("tasks/inbox/T-0312.md")).toContain("Bash(gh pr merge:*)");
 });
 
 test("a task's detail names the cards it asked", () => {
