@@ -1907,8 +1907,8 @@ function MachineDetail(props: { hub: Hub; host: string; wide: boolean; onTask: (
     >
       {mark}
       <Text style={{ fontFamily: MONO, fontSize: 12.5, color: colors.faint }}>{id}</Text>
-      <Text style={{ flex: 1, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{title}</Text>
-      <Text style={{ fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{right}</Text>
+      <Text style={{ flex: 1, minWidth: 0, fontSize: 14.5, color: colors.text, numberOfLines: 1 }}>{title}</Text>
+      <Text style={{ maxWidth: "50%", minWidth: 0, flexShrink: 1, numberOfLines: 1, fontSize: 12.5, color: colors.faint, fontVariant: ["tabular-nums"] }}>{right}</Text>
     </View>
   );
   return (

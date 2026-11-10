@@ -609,6 +609,19 @@ describe("channel", () => {
     await app.waitFor("Task T-0005");
   });
 
+  test("a machine page on a phone keeps a long latest step inside the screen", async () => {
+    const step = "Bash · Capture phone screenshots and compare every page with the desktop layout";
+    const host = { ...status.hosts[0], running: [{ ...status.hosts[0].running[0], activity: { at: new Date().toISOString(), step, model: "claude-opus-5-5" } }] };
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 390, height: 844, platform: "ios",
+      network: { ...hub([]), [`GET ${URL}/api/status`]: { body: { ...status, hosts: [host] } } },
+    });
+    await app.press("label:Menu");
+    await app.press("label:Load 42% · Disk 120 GB free · 1 running");
+    await app.waitFor("Running");
+    expect(app.shows("截图检查 gallery")).toBe(true);
+  });
+
   test("all tasks: older ones load page by page, and any of them opens", async () => {
     const row = (i: number) => ({ id: `T-${1000 + i}`, title: `旧任务 ${i}`, agent: "lead", state: "done", updated: ts(1) });
     const app = await open("./App.tsx", {
