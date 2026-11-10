@@ -3,24 +3,34 @@
  * App code passes `menuPopup()` as `popupStyle` and fills it with `MenuRow` / `MenuSep`; it does not restyle them.
  */
 import type { JSX, ViewStyle } from "nsh";
-import { Text } from "nsh";
+import { platform, Text } from "nsh";
 import { MenuItem, MenuSeparator } from "nsh/base";
 import { Icon, type IconName } from "./icons";
 import { PopIn, type PopupSide } from "./popup";
 import { alpha, colors } from "./theme";
-import { corner, duration, fill, font, leading, space, touch } from "./tokens";
+import { corner, duration, fill, font, leading, menuGlass, space, touch } from "./tokens";
 
-/** The popup of a menu: the surface, one hairline, a soft shadow. */
-export const menuPopup = (): ViewStyle => ({
-  minWidth: 160,
-  padding: space.xs,
-  borderRadius: corner.field,
-  borderCurve: "continuous",
-  borderWidth: 1,
-  borderColor: colors.line,
-  backgroundColor: colors.surface,
-  boxShadow: "0 4px 14px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.05)",
-});
+/** iOS menus float as Liquid Glass with the system's rounder corners; other platforms keep the solid popup. */
+const ios = platform.os === "ios";
+
+/**
+ * The popup of a menu: on iOS the glass surface (`menuGlass`), elsewhere the surface, one hairline, a soft shadow.
+ */
+export const menuPopup = (): ViewStyle => ios
+  ? { minWidth: 200, padding: space.sm, ...menuGlass(colors.surface, corner.sheet) }
+  : {
+      minWidth: 160,
+      padding: space.xs,
+      borderRadius: corner.field,
+      borderCurve: "continuous",
+      borderWidth: 1,
+      borderColor: colors.line,
+      backgroundColor: colors.surface,
+      boxShadow: "0 4px 14px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.05)",
+    };
+
+/** A row's corner inside the popup: concentric with the popup's corner across its padding. */
+export const menuRowCorner = ios ? corner.sheet - space.sm : corner.control - 2;
 
 /**
  * The popup box a `Menu` / `ContextMenu` gets (`popupStyle`): bare, so the look rides on `MenuPanel` inside it, which
@@ -62,7 +72,7 @@ export function MenuRow(props: {
         alignItems: "center",
         gap: space.md,
         paddingHorizontal: space.md,
-        borderRadius: corner.control - 2,
+        borderRadius: menuRowCorner,
         borderCurve: "continuous",
         transitionProperty: "background-color",
         transitionDuration: duration.quick,

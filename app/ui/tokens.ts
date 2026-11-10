@@ -51,6 +51,8 @@ export const controlMetrics = (sm: boolean) =>
  */
 export const corner = {
   composer: 24,
+  /** A sheet or an iOS menu: the softest floating surface, as the system's. */
+  sheet: 24,
   field: 10,
   control: 8,
   item: 8,
@@ -96,6 +98,23 @@ export const glass = (tint: string, cornerRadius: number): ViewStyle => ({
   ...(platform.os === "linux" || (platform.os === "android" && Number(platform.version) < 31)
     ? { backgroundColor: tint }
     : { backgroundColor: alpha(tint, 0.55), glassEffect: "regular" as const, backdropFilter: "blur(20px)" }),
+});
+
+/** iOS 26 and later draw Liquid Glass; earlier iOS falls back to a blur. */
+export const iosGlass = platform.os === "ios" && Number.parseFloat(platform.version) >= 26;
+
+/**
+ * The surface of a menu or sheet on iOS. On iOS 26 it is the bare native glass: no fill over the material, which would
+ * hide it, and no hairline or shadow, since the material draws its own edge. Earlier iOS has no glass, so the blur
+ * there carries a nearly opaque `tint` with a hairline, which keeps the rows readable over whatever is behind.
+ */
+export const menuGlass = (tint: string, cornerRadius: number): ViewStyle => ({
+  borderRadius: cornerRadius,
+  borderCurve: "continuous",
+  ...(iosGlass
+    ? { borderWidth: 0, backgroundColor: "transparent", boxShadow: "none", glassEffect: "regular" as const, backdropFilter: "blur(20px)" }
+    : { borderWidth: 1, borderColor: alpha(colors.text, 0.1), backgroundColor: alpha(tint, 0.9), backdropFilter: "blur(20px)",
+        boxShadow: "0 10px 32px rgba(0,0,0,0.16)" }),
 });
 
 /** The floating surface of a message composer, which the conversation scrolls under. */

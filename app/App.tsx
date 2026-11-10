@@ -55,8 +55,13 @@ import { createTimelineWindow } from "./timeline";
 import { CHECK_EVERY_MS, createUpdates, shellLine, type ShellInfo, type UpdateState } from "./update";
 import {
   alpha,
+  avatarIdentity,
+  avatarInitials,
   colors,
+  fill,
   focusRing,
+  iosGlass,
+  menuGlass,
   hovered,
   Icon,
   type IconName,
@@ -2112,13 +2117,6 @@ function Sidebar(props: {
   );
 }
 
-/** A fixed colour per initial, so the same account always gets the same avatar colour. */
-function initialColor(ch: string): string {
-  const c = ch.toUpperCase().charCodeAt(0);
-  const index = c >= 65 && c <= 90 ? (c - 65) % 10 + 1 : 10;
-  return token(`avatar-${index}` as "avatar-1");
-}
-
 /** The sidebar account, opening the user menu (settings, appearance, language). */
 function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads }) {
   /** The signed-in account: its email, shown as the local part; the server address stays out of the UI. */
@@ -2128,22 +2126,29 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
   // A pointer gets a compact popup at the trigger; a finger gets the sheet at the bottom with rows it can hit.
   const touch = platform.os === "ios" || platform.os === "android";
   const m = touch
-    ? { row: 52, padX: 16, gap: 12, icon: 20, label: 16, value: 14, avatar: 48, name: 20, mail: 14, seg: 44, segH: 44, sepX: 12 }
+    ? { row: 52, padX: 16, gap: 12, icon: 20, label: 16, value: 14, avatar: 44, name: 20, mail: 14, seg: 44, segH: 44, sepX: 12 }
     : { row: 30, padX: 8, gap: 10, icon: 15, label: 13.5, value: 13, avatar: 30, name: 13.5, mail: 12, seg: 28, segH: 22, sepX: 8 };
-  const surface = (): ViewStyle => touch
-    // Opaque on a phone: the sheet sits over the sidebar's own rows, which would show through glass.
-    ? { backgroundColor: colors.raised, borderRadius: 24, borderCurve: "continuous", boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
-        left: 12, right: 12, bottom: Math.max(12, safeArea().bottom), padding: 12 }
+  const sheet = (): ViewStyle => ({ left: 12, right: 12, bottom: Math.max(12, safeArea().bottom), padding: 12 });
+  const surface = (): ViewStyle => platform.os === "ios"
+    // iOS: the sheet is Liquid Glass (a blurred, nearly opaque fallback before iOS 26), its groups quiet fills on it.
+    ? { ...menuGlass(colors.raised, corner.sheet), ...sheet() }
+    : touch
+    // Android: opaque, as the sheet sits over the sidebar's own rows.
+    ? { backgroundColor: colors.raised, borderRadius: corner.sheet, borderCurve: "continuous", boxShadow: "0 10px 40px rgba(0,0,0,0.18)", ...sheet() }
     // No minWidth here: the language submenu takes this same style and should fit its rows; the menu gets its width from its header.
     : { ...glass(colors.surface, 12), padding: 5 };
   const row = (): ViewStyle => ({ flexDirection: "row", alignItems: "center", gap: m.gap, ...(touch ? { minHeight: m.row, paddingVertical: 12 } : { height: m.row }), paddingHorizontal: m.padX, borderRadius: touch ? 12 : 7, borderCurve: "continuous" });
   const label = (text: string) => <Text style={{ flex: 1, minWidth: 0, fontSize: m.label, color: colors.text, ...(touch ? {} : { numberOfLines: 1 }) }}>{text}</Text>;
   const lead = (name: IconName) => <Icon name={name} size={m.icon} tint={colors.muted} />;
   const sep = () => <MenuSep />;
-  const initial = () => (account().slice(0, 1) || "?").toUpperCase();
-  const avatar = (box: number) => (
-    <View style={{ width: box, height: box, borderRadius: box / 2, flexShrink: 0, alignItems: "center", justifyContent: "center", backgroundColor: initialColor(initial()) }}>
-      <Text style={{ fontSize: Math.round(box * 0.44), fontWeight: "600", color: token("avatar-foreground") }}>{initial()}</Text>
+  /** A group of rows on the sheet: a quiet fill on glass, which an opaque one would cover; the surface elsewhere. */
+  const group = () => (iosGlass ? alpha(colors.text, fill.rest) : colors.surface);
+  const initials = () => avatarInitials(account());
+  /** The account's identity: its initials on a soft tint of its own stable hue, with a hairline of the same hue. */
+  const avatar = (box: number, testID?: string) => (
+    <View testID={testID} style={{ width: box, height: box, borderRadius: box / 2, flexShrink: 0, alignItems: "center", justifyContent: "center",
+      borderWidth: 1, borderColor: avatarIdentity(account() || "?").border, backgroundColor: avatarIdentity(account() || "?").background }}>
+      <Text style={{ fontSize: Math.round(box * (initials().length > 1 ? 0.38 : 0.44)), fontWeight: "600", color: avatarIdentity(account() || "?").foreground }}>{initials()}</Text>
     </View>
   );
   /** One of the two appearances, as a segment whose raised thumb marks the current one. */
@@ -2159,7 +2164,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
     </MenuItem>
   );
   const radio = (text: string, on: () => boolean, pick: () => void, testID: string) => (
-    <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={menuRowHover()} activeStyle={menuRowHover()} style={{ ...row(), ...(touch ? { backgroundColor: colors.surface, marginTop: 4 } : { minWidth: 136 }) }}>
+    <MenuItem testID={testID} role="menuitemradio" checked={on()} onSelect={() => !on() && pick()} hoverStyle={menuRowHover()} activeStyle={menuRowHover()} style={{ ...row(), ...(touch ? { backgroundColor: group(), marginTop: 4 } : { minWidth: 136 }) }}>
       {label(text)}
       <View style={{ width: m.icon }}>
         <If when={on()}>
@@ -2186,7 +2191,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
           hoverStyle={hovered()}
           style={{ width: "100%", flexDirection: "row", alignItems: "center", gap: 8, minHeight: touch ? 44 : 40, paddingLeft: 8, paddingRight: 10, borderRadius: radius.control, borderCurve: "continuous" }}
         >
-          {avatar(24)}
+          {avatar(touch ? 28 : 24, "user-avatar")}
           <Text testID="user-account" style={{ flex: 1, fontSize: 13, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
           <Icon name="chevron-up" size={12} tint={colors.faint} />
         </View>
@@ -2194,7 +2199,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
     >
       <PopIn side="top" style={touch ? {} : surface()}>
       <View style={{ ...(touch ? {} : { minWidth: 254 }), flexDirection: "row", alignItems: "center", gap: touch ? 12 : 10, paddingHorizontal: m.padX, paddingTop: touch ? 12 : 6, paddingBottom: touch ? 24 : 7 }}>
-        {avatar(m.avatar)}
+        {avatar(m.avatar, "user-menu-avatar")}
         <View style={{ flex: 1, minWidth: 0, gap: touch ? 4 : 1 }}>
           <Text style={{ fontSize: m.name, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
           <If when={email()}>
@@ -2203,7 +2208,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
         </View>
       </View>
       <If when={!touch}>{sep()}</If>
-      <View style={touch ? { backgroundColor: colors.surface, borderRadius: 12, borderCurve: "continuous" } : {}}>
+      <View style={touch ? { backgroundColor: group(), borderRadius: 12, borderCurve: "continuous" } : {}}>
         <MenuItem testID="mark-all-read" disabled={!props.reads.main().length} onSelect={props.reads.all} hoverStyle={menuRowHover()} activeStyle={menuRowHover()} disabledStyle={{ opacity: 0.4 }} style={row()}>
           {lead("check")}{label(L("Mark all as read", "全部已读"))}
         </MenuItem>
