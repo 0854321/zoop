@@ -8,7 +8,7 @@ import {
   type Cfg, P, ROOT, _commitPush, _pull, agentName, chooseCli, claim, commitPush, heartbeat, hostCaps, hostName, journal,
   list, loadConfig, locked, newTask, now, onlineHosts, pickTask, pull, readDoc, remember, writeDoc,
 } from "./core";
-import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, overrideJudge, recentJudgeIds, routeDecision } from "./decisions";
+import { amendDecision, closeDecision, IGNORE, ignoreDecision, openDecision, overrideJudge, ownerPickedMenu, recentJudgeIds, routeDecision } from "./decisions";
 import { notify, openDecisionIds, pollReplies } from "./notify";
 import { STALLED, agentProcs, ask, buildPrompt, parseResult, quickAsk, runAgent } from "./runner";
 import { writeRules } from "./rules";
@@ -205,7 +205,7 @@ async function processTask(path: string, cfg: Cfg, host: string) {
   remember(agent, res.lessons, meta.id);
   const depth = Number(meta.depth ?? 0) + 1;
   const maxDepth = cfg.fleet?.max_followup_depth ?? 4;
-  const ownerWork = meta.origin === "owner" || /^owner/.test(meta.source ?? "");
+  const ownerWork = meta.origin === "owner" || /^owner/.test(meta.source ?? "") || ownerPickedMenu(meta);
   const delegated = res.status === "delegated" && (res.followups?.length ?? 0) > 0;
   const children: string[] = [];
   const chans = [...new Set([...(meta.channels ?? "").split(",").filter(Boolean), ...resolveChannels(res.channels)])].join(",") || undefined;

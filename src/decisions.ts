@@ -104,6 +104,16 @@ export function closeDecision(id: string, answer: string, by: string, note = "")
   return true;
 }
 
+/** A menu task resumed by the owner's own pick: its followups are the items the owner chose, not new proposals.
+ *  A skipped card (ignored) leaves the choice to the agent, so it does not count. */
+export function ownerPickedMenu(task: Record<string, string>): boolean {
+  if (task.kind !== "menu" || !task.resumes) return false;
+  const f = P("decisions", "closed", `${task.resumes}.md`);
+  if (!existsSync(f)) return false;
+  const d = readDoc(f).meta;
+  return d.kind === "menu" && d.task === task.id && /^owner/.test(d.answered_by ?? "") && d.ignored !== "yes";
+}
+
 /** The answer that sets a card aside: the owner skipped it (often just forgot to pick); it is not a rejection. */
 export const IGNORE = "忽略";
 

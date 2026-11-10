@@ -130,3 +130,19 @@ test("D: the judge never answers a merge card, even when allowed to decide", asy
   expect(existsSync(core.P("decisions", "open", `${id}.md`))).toBe(true);
   expect(sent.at(-1)!.split("\n")[0]).toBe("https://github.com/huacnlee/omamail/pull/457 需要你点合并");
 });
+
+test("followups of an owner-answered idle menu count as the owner's pick; a skipped or judged menu does not", () => {
+  const menuTask = (tid: string) => {
+    const id = dec.openDecision({ id: tid, agent: "chief-of-staff", kind: "menu" }, { status: "needs_decision", summary: "idle", question: "Which next actions?", recommendation: "1", options: ["1. a", "2. b"] } as any, "h");
+    core.writeDoc(core.P("tasks", "blocked", `${tid}.md`), { id: tid, agent: "chief-of-staff", kind: "menu", source: "idle", decision: id }, "menu");
+    return id;
+  };
+  const resumed = (tid: string) => core.readDoc(core.P("tasks", "inbox", `${tid}.md`)).meta;
+  dec.closeDecision(menuTask("T-0301"), "all", "owner(chat)");
+  expect(dec.ownerPickedMenu(resumed("T-0301"))).toBe(true);
+  dec.ignoreDecision(menuTask("T-0302"), "owner(chat)");
+  expect(dec.ownerPickedMenu(resumed("T-0302"))).toBe(false);
+  dec.closeDecision(menuTask("T-0303"), "1", "judge");
+  expect(dec.ownerPickedMenu(resumed("T-0303"))).toBe(false);
+  expect(dec.ownerPickedMenu({ id: "T-0304", kind: "menu" })).toBe(false); // first run: nothing answered yet
+});
