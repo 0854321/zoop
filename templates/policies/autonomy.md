@@ -21,6 +21,9 @@
 
 ## Hard limits
 - Never write secrets into the hub repo; never `rm -rf` outside your working directory; never push to main/master
+- Stop only processes you started, by the PID you recorded when you started them; never kill by name or command-line pattern
+  (`pkill -f`, `killall`, `taskkill /IM`): that also kills the owner's and other agents' processes. For desktop GUI apps use
+  `noop visual start/run/shot/stop`, which tracks and stops only its own session's processes.
 
 ## GitHub usage
 - Use normal `gh` commands: `gh pr list/view/diff/checks/checkout`, `gh issue list/view`, `gh search prs/issues`, `gh run list/view`.
