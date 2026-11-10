@@ -32,6 +32,10 @@ function merge(a: any, b: any): any {
   return out;
 }
 
+/** Owner-facing text in the fleet's language: `[owner] language = "en"` in config.toml gives English, otherwise Simplified Chinese. */
+export const isEnglish = (): boolean => /^en/i.test(String(loadConfig().owner?.language ?? ""));
+export const L = (en: string, zh: string): string => (isEnglish() ? en : zh);
+
 export function loadConfig(): Cfg {
   const read = (f: string) => (existsSync(P(f)) ? Bun.TOML.parse(readFileSync(P(f), "utf8")) : {});
   // noop.toml = machine-local bootstrap (Worker url + machine token), outside DATA because DATA itself comes from the Worker
@@ -260,7 +264,7 @@ export function updateState(): UpdateState | undefined {
   if ((u.state === "restarting" || u.state === "waiting") && Date.parse(u.ts) < STARTED) {
     const rev = runningRev().rev;
     if (rev && rev !== u.from) setUpdateState({ at: u.at, state: "done", detail: rev.slice(0, 7), from: u.from });
-    else setUpdateState({ at: u.at, state: "failed", detail: "重启后仍是旧代码", from: u.from });
+    else setUpdateState({ at: u.at, state: "failed", detail: L("Still on the old code after restart", "重启后仍是旧代码"), from: u.from });
     return updateState();
   }
   return u;

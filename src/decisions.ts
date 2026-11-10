@@ -1,7 +1,7 @@
 // Decisions: agent asks → AI judge (owner's precedents & principles) → only unprecedented taste calls reach the owner.
 import { existsSync, unlinkSync, appendFileSync, writeFileSync } from "node:fs";
 import {
-  type Cfg, P, agentName, journal, list, newTask, nextId, now, precedents, readAll, readDoc, readIf, today, writeDoc,
+  type Cfg, L, P, agentName, journal, list, newTask, nextId, now, precedents, readAll, readDoc, readIf, today, writeDoc,
 } from "./core";
 import { notify } from "./notify";
 import { ask, type Result } from "./runner";
@@ -167,10 +167,10 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
   }
   if (v && !judgeMayDecide(cfg, meta.agent) && v.verdict !== "hold") { // shadow mode: record, but ask the owner
     journal(host, `👤 shadow-judge on ${id}: would ${v.verdict} "${v.answer ?? v.reason}"`);
-    v = { verdict: "hold", reason: `学习期，judge 认为：${v.verdict === "decided" ? v.answer : "应退回: " + v.reason}` };
+    v = { verdict: "hold", reason: L(`Onboarding period, the judge thinks: ${v.verdict === "decided" ? v.answer : "send back: " + v.reason}`, `学习期，judge 认为：${v.verdict === "decided" ? v.answer : "应退回: " + v.reason}`) };
   }
   if (v && v.verdict !== "hold" && isMergeCard(meta)) { // the judge's answer cannot click merge: hold for the owner
-    journal(host, `👤 ${id} 是合并卡，judge 不代答（judge 认为：${v.answer ?? v.reason}）`);
+    journal(host, L(`👤 ${id} is a merge card, the judge does not answer it (the judge thinks: ${v.answer ?? v.reason})`, `👤 ${id} 是合并卡，judge 不代答（judge 认为：${v.answer ?? v.reason}）`));
     v = { verdict: "hold", reason: "merge card" };
   }
   if (v?.verdict === "decided" && v.answer) {
@@ -188,10 +188,10 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
   const menu = meta.kind === "menu";
   const context = body.match(/## Context\n([\s\S]*?)(?=\n## |$)/)?.[1]?.trim() ?? "";
   const text = menu ? [
-    `*${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`,
+    L(`*${id}* · ${agentName(meta.agent)}: the team is idle, what should come next?`, `*${id}* · ${agentName(meta.agent)}：团队空闲了，下一步做哪些？`),
     ...opts.map((o) => `${o}`),
-    `建议：*${meta.recommendation || "-"}*`,
-    `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``,
+    L(`Recommended: *${meta.recommendation || "-"}*`, `建议：*${meta.recommendation || "-"}*`),
+    L(`Reply \`${id} 1,3\` (several allowed) or \`${id} <other instructions>\``, `回复 \`${id} 1,3\`（可多选）或 \`${id} <其他指示>\``),
   ].join("\n") : [
     // the card already shows the id, the agent and the options as buttons: the question, then the agent's account of
     // what is at stake (what the PR changes, what each choice means). The judge's reason for asking is not news to the owner.
@@ -199,7 +199,7 @@ export async function routeDecision(id: string, cfg: Cfg, host: string) {
     linkRefs(meta.question ?? "", meta.task, [context, ...opts].join("\n")),
     context ? `\n${linkRefs(context, meta.task, [meta.question ?? "", ...opts].join("\n"))}` : "",
     // the app marks this option 推荐 (and drops the line); chat channels show it as written
-    meta.recommendation ? `\n建议：*${meta.recommendation}*` : "",
+    meta.recommendation ? L(`\nRecommended: *${meta.recommendation}*`, `\n建议：*${meta.recommendation}*`) : "",
   ].filter(Boolean).join("\n");
   const ids = await notify(text, cfg, { kind: menu ? "menu" : "decision", ref: id, options: opts,
     attachments: (meta.attachments ?? "").split(" | ").filter(Boolean), from: `${agentName(meta.agent)}@${meta.host}` });

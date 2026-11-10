@@ -11,6 +11,7 @@
 // Guest token:    GET /api/guest/next → {task|null} · POST /api/guest/result {id, ok, text, patch?} · PUT /api/guest/heartbeat
 
 import type { FilesSql } from "./files";
+import { L } from "./i18n";
 type SqlStorage = FilesSql;
 
 export const GUEST_TOKEN = /^g_[0-9a-f]{64}$/;
@@ -55,7 +56,7 @@ export async function guestJoin(sql: SqlStorage, req: Request, notice: (t: strin
   if (!row || Number(row.expires) < Date.now()) return json({ error: "invalid code" }, 401);
   const id = `G-${rand(4)}`, token = `g_${rand(32)}`;
   sql.exec("INSERT INTO guests (id, label, token_hash, created, last_seen, revoked) VALUES (?, ?, ?, ?, ?, 0)", id, row.label, await sha256(token), Date.now(), Date.now());
-  notice(`访客机器 ${row.label}（${id}）已加入，只能领取派给它的任务。`);
+  notice(L(`Guest machine ${row.label} (${id}) joined. It can only take tasks assigned to it.`, `访客机器 ${row.label}（${id}）已加入，只能领取派给它的任务。`));
   return json({ id, token });
 }
 

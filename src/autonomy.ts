@@ -1,7 +1,7 @@
 // Graduated autonomy. Start conservative ("onboarding"): self-generated work needs owner approval,
 // the judge only shadows. Graduation is proposed by the architect from metrics, decided by the owner.
 import { existsSync, unlinkSync } from "node:fs";
-import { type Cfg, P, journal, list, nextId, now, readDoc, writeDoc } from "./core";
+import { type Cfg, L, P, journal, list, nextId, now, readDoc, writeDoc } from "./core";
 import { notify } from "./notify";
 
 export type Level = "onboarding" | "assisted" | "autonomous";
@@ -99,10 +99,10 @@ export async function proposeBatch(cfg: Cfg, host: string) {
   });
   writeDoc(P("decisions", "open", `${id}.md`), {
     id, kind: "proposals", created: now(), notified: now(), host, items: itemIds.join(","),
-    question: "要做哪几项？",
-  }, `## 待确认\n${lines.join("\n")}\n`);
-  await notify([`*${id}* 想做这几件事，请确认：`, ...lines,
-    `回复 \`${id} 1,3\`、\`${id} all\`（全做）或 \`${id} none\`（都不做）`].join("\n"), cfg,
+    question: L("Which of these should go ahead?", "要做哪几项？"),
+  }, L(`## To confirm\n${lines.join("\n")}\n`, `## 待确认\n${lines.join("\n")}\n`));
+  await notify([L(`*${id}* would like to do the following, please confirm:`, `*${id}* 想做这几件事，请确认：`), ...lines,
+    L(`Reply \`${id} 1,3\`, \`${id} all\` (do all) or \`${id} none\` (do none)`, `回复 \`${id} 1,3\`、\`${id} all\`（全做）或 \`${id} none\`（都不做）`)].join("\n"), cfg,
     { kind: "proposals", ref: id, options: ["all", "none", ...lines.map((_, i) => String(i + 1))] });
   journal(host, `${id} asked owner to approve ${items.length} proposed tasks`);
 }

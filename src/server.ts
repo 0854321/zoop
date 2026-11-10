@@ -17,7 +17,7 @@ import { basename, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { accountsInfo } from "./accounts";
 import { cliCommand, startModel } from "./runner";
-import { type Cfg, DATA, P, _commitPush, allowedClis, hostName, locked, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
+import { type Cfg, DATA, L, P, _commitPush, isEnglish, allowedClis, hostName, locked, list, loadConfig, onlineHosts, readDoc, UPDATE_REQUEST } from "./core";
 import { mediaHeaders, ownerAttachments, sniffImage, uploadId, uploadProblem } from "../cloud/src/uploads";
 import { timingSafeEqual } from "node:crypto";
 import { readable, validPath } from "../cloud/src/files";
@@ -231,6 +231,7 @@ export function agentRole(agent: string): { title?: string; about?: string } {
   const zh = ROLE_ZH[agent];
   const title = m ? (m[2] ?? m[1]).trim() : undefined;
   const about = m?.[3]?.trim();
+  if (isEnglish()) return { title: m?.[1]?.trim(), about };
   return {
     title: hasHan(title) ? title : (zh?.title ?? title),
     about: hasHan(about) ? about : (zh?.about ?? about),
@@ -255,7 +256,7 @@ const ROUTINE_DESC: Record<string, string> = {
   "release-wednesday": "周三发布 NSH：准备好一切，发布前问你一次",
 };
 const routineDesc = (r: any) =>
-  String(r.desc ?? ROUTINE_DESC[r.name] ?? String(r.prompt ?? "").split(/(?<=[.。])\s/)[0].slice(0, 120)).trim() || undefined;
+  String((isEnglish() ? (r.builtin ? undefined : r.desc) : r.desc ?? ROUTINE_DESC[r.name]) ?? String(r.prompt ?? "").split(/(?<=[.。])\s/)[0].slice(0, 120)).trim() || undefined;
 
 export function settingsView() {
   const cfg = loadConfig();
@@ -309,7 +310,7 @@ export const setUpdateFleet = (fn: () => Promise<number>) => { updateHook = fn; 
 export async function updateFleet(): Promise<string> {
   if (!updateHook) return "not available";
   const n = await updateHook();
-  appendEvent({ from: "hub", kind: "system", text: `已通知 ${n} 台机器更新到最新代码：空闲的马上更新，有任务在跑的等跑完再重启；主控机同时重新发布线上。` });
+  appendEvent({ from: "hub", kind: "system", text: L(`Told ${n} machine(s) to update to the latest code: idle ones update now, busy ones restart after their tasks finish; the primary also redeploys.`, `已通知 ${n} 台机器更新到最新代码：空闲的马上更新，有任务在跑的等跑完再重启；主控机同时重新发布线上。`) });
   return "ok";
 }
 const AMEND_MS = 5 * 60_000;

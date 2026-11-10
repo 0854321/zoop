@@ -3,7 +3,7 @@
 // tasks that wait on nothing), and only then raises ONE decision card per root cause for what is still stuck.
 // Gates are never touched: a supervisor card never sets gate_override, so merge/release/external messages stay gated.
 import { existsSync, unlinkSync } from "node:fs";
-import { type Cfg, type HostBeat, P, journal, list, nextId, now, onlineHosts, readDoc, writeDoc } from "./core";
+import { type Cfg, type HostBeat, L, P, journal, list, nextId, now, onlineHosts, readDoc, writeDoc } from "./core";
 
 export type Meta = Record<string, string>;
 export type Task = { meta: Meta; folder: "waiting" | "blocked"; body?: string };
@@ -41,38 +41,38 @@ export function classify(t: Task, ctx: Ctx): Verdict | null {
   const pin = pinnedHost(m);
   const gone = [pin, m.claimed_by].find((h) => h && ctx.retired.includes(h));
   if (gone && m.children && t.folder === "waiting") // delegated parent: only fix where it resumes later
-    return pin === gone ? v(`host:${gone}`, "repin", [`绑定的主机 ${gone} 已停用`], reqs(m).filter((r) => r !== `host:${gone}`).join(",")) : null;
+    return pin === gone ? v(`host:${gone}`, "repin", [L(`pinned host ${gone} is retired`, `绑定的主机 ${gone} 已停用`)], reqs(m).filter((r) => r !== `host:${gone}`).join(",")) : null;
   if (m.children && t.folder === "waiting") return null; // delegated parent: follows its children
   if (/\bdate\b/.test(m.wait_check ?? "") && t.folder === "waiting") return null; // dated follow-up: waits for the calendar on purpose
   if (gone) {
     const rest = reqs(m).filter((r) => r !== `host:${gone}`);
-    if (capable(rest).length) return v(`host:${gone}`, "reroute", [`绑定的主机 ${gone} 已停用`], rest.join(","));
-    return v(`host:${gone}`, "escalate", [`绑定的主机 ${gone} 已停用，且没有其他在线主机满足 ${rest.join(",") || "要求"}`]);
+    if (capable(rest).length) return v(`host:${gone}`, "reroute", [L(`pinned host ${gone} is retired`, `绑定的主机 ${gone} 已停用`)], rest.join(","));
+    return v(`host:${gone}`, "escalate", [L(`pinned host ${gone} is retired and no other online host meets ${rest.join(",") || "the requirements"}`, `绑定的主机 ${gone} 已停用，且没有其他在线主机满足 ${rest.join(",") || "要求"}`)]);
   }
   // 2. blocked on a card that is already closed → the answer never reached it
-  if (t.folder === "blocked" && m.decision && ctx.decision(m.decision) === "closed") return v(`answered:${m.decision}`, "resume", [`${m.decision} 已回答但任务没有继续`]);
+  if (t.folder === "blocked" && m.decision && ctx.decision(m.decision) === "closed") return v(`answered:${m.decision}`, "resume", [L(`${m.decision} was answered but the task did not continue`, `${m.decision} 已回答但任务没有继续`)]);
   if (t.folder === "blocked" && m.decision && ctx.decision(m.decision) === "open") return null; // the owner has the card
   const age = (ctx.now - startedAt(m)) / 3_600_000;
   const wakes = Number(m.wakes ?? 0);
   const reasons: string[] = [];
-  if (age >= ctx.maxAgeHours) reasons.push(`已等待 ${Math.floor(age)} 小时`);
-  if (wakes >= ctx.maxWakes) reasons.push(`唤醒 ${wakes} 次`);
-  if (checkUnrunnable(m.wait_check, ctx.primaryOs)) reasons.push("等待检查命令在主控机上无法运行，永远不会触发");
+  if (age >= ctx.maxAgeHours) reasons.push(L(`waiting ${Math.floor(age)} hours`, `已等待 ${Math.floor(age)} 小时`));
+  if (wakes >= ctx.maxWakes) reasons.push(L(`woken ${wakes} times`, `唤醒 ${wakes} 次`));
+  if (checkUnrunnable(m.wait_check, ctx.primaryOs)) reasons.push(L("the wait check cannot run on the primary, so it will never fire", "等待检查命令在主控机上无法运行，永远不会触发"));
   // 3. waits on nothing: requeue once so the agent re-decides; the second time it is a card
   if (!m.waiting_on && !m.wait_check && t.folder === "waiting") {
-    if (m.supervisor_requeued) return v("no-wait", "escalate", ["没有记录在等什么", ...reasons]);
-    return v("no-wait", "requeue", ["没有记录在等什么"]);
+    if (m.supervisor_requeued) return v("no-wait", "escalate", [L("nothing recorded as being waited on", "没有记录在等什么"), ...reasons]);
+    return v("no-wait", "requeue", [L("nothing recorded as being waited on", "没有记录在等什么")]);
   }
   // 4. needs a platform: re-route if another online host has it, else one card for the platform
   const plat = platform(m);
   if (plat && pin && !ctx.online.some((h) => h.host === pin) && capable(reqs(m).filter((r) => r !== `host:${pin}`)).length)
-    return v(`host:${pin}`, "reroute", [`绑定的主机 ${pin} 离线`], reqs(m).filter((r) => r !== `host:${pin}`).join(","));
+    return v(`host:${pin}`, "reroute", [L(`pinned host ${pin} is offline`, `绑定的主机 ${pin} 离线`)], reqs(m).filter((r) => r !== `host:${pin}`).join(","));
   if (!reasons.length && t.folder === "waiting") return null; // young and cycling normally
   // platform host is online but the wait_check can't run here: hand the task back to that host to check itself
   if (plat && capable([plat]).length && checkUnrunnable(m.wait_check, ctx.primaryOs) && !m.supervisor_requeued)
-    return v(`platform:${plat}`, "reroute", [...reasons, `${plat} 主机在线，交回该主机自行检查`], reqs(m).filter((r) => !r.startsWith("host:")).join(","));
-  if (plat) return v(`platform:${plat}`, "escalate", [...reasons, capable([plat]).length ? `${plat} 主机在线，但任务交回后仍未推进` : `没有在线的 ${plat} 主机`]);
-  if (!reasons.length) reasons.push("被阻塞");
+    return v(`platform:${plat}`, "reroute", [...reasons, L(`a ${plat} host is online, handed back to it to check`, `${plat} 主机在线，交回该主机自行检查`)], reqs(m).filter((r) => !r.startsWith("host:")).join(","));
+  if (plat) return v(`platform:${plat}`, "escalate", [...reasons, capable([plat]).length ? L(`a ${plat} host is online, but the task still did not advance after being handed back`, `${plat} 主机在线，但任务交回后仍未推进`) : L(`no ${plat} host is online`, `没有在线的 ${plat} 主机`)]);
+  if (!reasons.length) reasons.push(L("blocked", "被阻塞"));
   return v(`slow:${m.claimed_by || "any"}`, "escalate", reasons);
 }
 
@@ -82,7 +82,7 @@ export function sweepPlatform(tasks: Task[], vs: Verdict[]): Verdict[] {
   const causes = new Set(vs.filter((v) => v.action === "escalate" && v.cause.startsWith("platform:")).map((v) => v.cause));
   const have = new Set(vs.map((v) => v.id));
   return tasks.filter((t) => t.folder === "waiting" && !t.meta.children && !have.has(t.meta.id) && causes.has(`platform:${platform(t.meta)}`))
-    .map((t) => ({ id: t.meta.id, cause: `platform:${platform(t.meta)}`, reasons: [`同样需要 ${platform(t.meta)}`], action: "escalate" as const }));
+    .map((t) => ({ id: t.meta.id, cause: `platform:${platform(t.meta)}`, reasons: [L(`also needs ${platform(t.meta)}`, `同样需要 ${platform(t.meta)}`)], action: "escalate" as const }));
 }
 
 /** One card per root cause. */
@@ -99,24 +99,24 @@ export function alreadyAsked(cause: string, ids: string[], cards: Meta[]): strin
 }
 
 const CAUSE_LABEL = (c: string) =>
-  c === "platform:os:macos" ? "macOS 任务推不动" : c === "platform:os:windows" ? "Windows 任务推不动"
-    : c.startsWith("host:") ? `主机 ${c.slice(5)} 不可用` : c === "no-wait" ? "没有记录等待条件" : c.startsWith("slow:") ? `${c.slice(5)} 上的长时间运行` : c;
+  c === "platform:os:macos" ? L("macOS tasks not advancing", "macOS 任务推不动") : c === "platform:os:windows" ? L("Windows tasks not advancing", "Windows 任务推不动")
+    : c.startsWith("host:") ? L(`host ${c.slice(5)} unavailable`, `主机 ${c.slice(5)} 不可用`) : c === "no-wait" ? L("no wait condition recorded", "没有记录等待条件") : c.startsWith("slow:") ? L(`long run on ${c.slice(5)}`, `${c.slice(5)} 上的长时间运行`) : c;
 
 export function cardFor(cause: string, items: { id: string; title: string; reasons: string[] }[]) {
-  const lines = items.map((i) => `- ${i.id} ${i.title}（${i.reasons.join("；")}）`).join("\n");
+  const lines = items.map((i) => L(`- ${i.id} ${i.title} (${i.reasons.join("; ")})`, `- ${i.id} ${i.title}（${i.reasons.join("；")}）`)).join("\n");
   const platformCause = cause.startsWith("platform:") || cause.startsWith("host:");
   const options = platformCause ? [
-    "A: 放弃这些原生验证，在 PR/任务里记录未验证的缺口，其余部分收尾 — 任务今天结束，验证缺口公开可见",
-    "B: 等环境恢复（你解锁/登录那台机器后任务自动继续） — 任务继续挂起，不再提醒",
-    "C: 取消这些任务 — 不做验证也不再跟进",
+    L("A: Drop these native checks, record the unverified gap in the PR/task and finish the rest — the tasks end today and the gap is visible", "A: 放弃这些原生验证，在 PR/任务里记录未验证的缺口，其余部分收尾 — 任务今天结束，验证缺口公开可见"),
+    L("B: Wait for the environment (the tasks continue once you unlock or log in to that machine) — they stay parked, no more reminders", "B: 等环境恢复（你解锁/登录那台机器后任务自动继续） — 任务继续挂起，不再提醒"),
+    L("C: Cancel these tasks — no checks and no further follow-up", "C: 取消这些任务 — 不做验证也不再跟进"),
   ] : [
-    "A: 由各任务的 agent 自行判断：能收尾就收尾，跑不完的记录现状后结束 — 不再挂起",
-    "B: 再等一轮，之后仍未完成就按 A 处理 — 最多再等几个小时",
-    "C: 取消这些任务 — 不再跟进",
+    L("A: Let each task's agent decide: finish what it can, record the state of the rest and end — nothing stays parked", "A: 由各任务的 agent 自行判断：能收尾就收尾，跑不完的记录现状后结束 — 不再挂起"),
+    L("B: Wait one more round, then treat anything unfinished as A — at most a few more hours", "B: 再等一轮，之后仍未完成就按 A 处理 — 最多再等几个小时"),
+    L("C: Cancel these tasks — no further follow-up", "C: 取消这些任务 — 不再跟进"),
   ];
   return {
-    question: `${CAUSE_LABEL(cause)}，${items.length} 个任务怎么办？`.slice(0, 40),
-    summary: `${CAUSE_LABEL(cause)}，以下任务卡住（已先尝试改派、重跑、补做不依赖该条件的部分）：\n${lines}\n合并、发布、对外消息的闸门不受这张卡影响。`,
+    question: L(`${CAUSE_LABEL(cause)}: what to do with ${items.length} task(s)?`, `${CAUSE_LABEL(cause)}，${items.length} 个任务怎么办？`).slice(0, 60),
+    summary: L(`${CAUSE_LABEL(cause)}. These tasks are stuck (rerouting, rerunning and the parts not needing this condition were tried first):\n${lines}\nMerge, release and external-message gates are not affected by this card.`, `${CAUSE_LABEL(cause)}，以下任务卡住（已先尝试改派、重跑、补做不依赖该条件的部分）：\n${lines}\n合并、发布、对外消息的闸门不受这张卡影响。`),
     options, recommendation: "A",
   };
 }
@@ -147,16 +147,16 @@ export function supervise(cfg: Cfg, host: string, t = Date.now()) {
     };
     if (v.action === "reroute") {
       back({ host: "any", requires: v.requires || undefined, resumed: "yes", ...(v.cause.startsWith("platform:") ? { supervisor_requeued: "yes" } : {}) }, `${v.reasons.join("; ")}. Re-routed to any host with ${v.requires || "the remaining requirements"}; local files on the old host are gone, redo what is needed.`);
-      journal(host, `🧭 supervisor: ${meta.id} 改派（${v.reasons.join("；")}）`); counts.reroute++;
+      journal(host, L(`🧭 supervisor: ${meta.id} rerouted (${v.reasons.join("; ")})`, `🧭 supervisor: ${meta.id} 改派（${v.reasons.join("；")}）`)); counts.reroute++;
     } else if (v.action === "repin") {
       writeDoc(task.path, { ...meta, host: "any", requires: v.requires || undefined }, body ?? "");
-      journal(host, `🧭 supervisor: ${meta.id} 去掉已停用主机的绑定`); counts.reroute++;
+      journal(host, L(`🧭 supervisor: ${meta.id} unpinned from a retired host`, `🧭 supervisor: ${meta.id} 去掉已停用主机的绑定`)); counts.reroute++;
     } else if (v.action === "resume") {
       back({ resumed: "yes", resumes: meta.decision }, `${v.reasons.join("; ")}. Read ${meta.decision}'s answer in decisions/closed and continue accordingly.`);
-      journal(host, `🧭 supervisor: ${meta.id} 继续（${v.reasons.join("；")}）`); counts.resume++;
+      journal(host, L(`🧭 supervisor: ${meta.id} resumed (${v.reasons.join("; ")})`, `🧭 supervisor: ${meta.id} 继续（${v.reasons.join("；")}）`)); counts.resume++;
     } else if (v.action === "requeue") {
       back({ supervisor_requeued: "yes", resumed: "yes" }, `No waiting_on was recorded. Re-decide: finish what you can, or return "waiting" with a concrete waiting_on and wait_check.`);
-      journal(host, `🧭 supervisor: ${meta.id} 没有等待条件，重新排队`); counts.requeue++;
+      journal(host, L(`🧭 supervisor: ${meta.id} has no wait condition, requeued`, `🧭 supervisor: ${meta.id} 没有等待条件，重新排队`)); counts.requeue++;
     } else verdicts.push(v);
   }
   for (const x of sweepPlatform(tasks, verdicts)) verdicts.push(x);

@@ -4,7 +4,7 @@ import { existsSync, lstatSync, readdirSync, rmSync, statSync, statfsSync } from
 import { availableParallelism, freemem, homedir, loadavg, tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
-import { type Cfg, P, journal } from "./core";
+import { type Cfg, L, P, journal } from "./core";
 
 export type Stats = { cores: number; load1: number; loadRatio: number; memFreePct: number; diskFreeGB: number; diskFreePct: number };
 
@@ -222,6 +222,6 @@ export async function ensureDisk(cfg: Cfg, host: string, busyRepos: Set<string>,
   }
   const msg = `🧹 disk cleanup freed ${gb(total)}GB → ${s.diskFreeGB}GB free (${lines.join("; ") || "nothing big"})`;
   journal(host, msg);
-  if (low(s)) await alert(`⚠️ ${host} 磁盘仍不足：剩余 ${s.diskFreeGB}GB（${s.diskFreePct}%），自动清理已尽力（${gb(total)}GB）。需要你处理。`);
+  if (low(s)) await alert(L(`⚠️ ${host} is still low on disk: ${s.diskFreeGB}GB free (${s.diskFreePct}%) after automatic cleanup freed ${gb(total)}GB. Needs your attention.`, `⚠️ ${host} 磁盘仍不足：剩余 ${s.diskFreeGB}GB（${s.diskFreePct}%），自动清理已尽力（${gb(total)}GB）。需要你处理。`));
   return msg;
 }

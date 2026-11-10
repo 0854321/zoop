@@ -22,7 +22,7 @@ const SECURITY_ROUTINE = {
    - recent logins (last / log show) from unexpected places; new launch agents, systemd user units or cron jobs
    - secrets readable by others: ~/.noop, ~/.claude, ~/.codex, ~/.config/gh, ~/.aws, .env files in ~/work (permissions only, never print contents)
 3. Write the full report to reports/security/<YYYY-MM-DD>-<host>.md: a verdict line, then findings by risk (high / medium / low), each with the evidence and the exact fix command.
-4. Result summary for the owner: one verdict line (e.g. "本机安全：2 个高风险") plus the high-risk items and the report path. If anything is high risk, use needs_decision with options to fix now (as a gated follow-up) or accept; otherwise done.`,
+4. Result summary for the owner: one verdict line (e.g. "This machine: 2 high-risk") plus the high-risk items and the report path. If anything is high risk, use needs_decision with options to fix now (as a gated follow-up) or accept; otherwise done.`,
 };
 
 /** Weekly usage report: computed from the hub files by code (src/usage-report.ts, no AI run), saved under

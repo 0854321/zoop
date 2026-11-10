@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { type Jwk, newVapidKeys } from "../cloud/src/push";
 import { ipAllowed, parseAllowList } from "../cloud/src/ipallow";
-import { type Cfg, CODE, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
+import { type Cfg, CODE, L, P, _commitPush, _pull, hostName, journal, locked, HOME_DIR } from "./core";
 import { updateChannel } from "./channels";
 import { writeHubToml } from "./sync";
 import { ensureWebClient } from "./webclient";
@@ -193,21 +193,21 @@ export async function cloudDeploy(cfg: Cfg) {
   const env = { ...process.env, ...(account ? { CLOUDFLARE_ACCOUNT_ID: account } : {}) };
   const who = await $`${wr} whoami`.cwd(dir).env(env).quiet().nothrow();
   if (!/logged in/i.test(who.stdout.toString())) {
-    return fail("先登录你自己的 Cloudflare 账号（免费版即可）：\n  bunx wrangler login\n然后重新运行：hub cloud deploy");
+    return fail(L("Log in to your own Cloudflare account first (the free plan is enough):\n  bunx wrangler login\nThen run again: hub cloud deploy", "先登录你自己的 Cloudflare 账号（免费版即可）：\n  bunx wrangler login\n然后重新运行：hub cloud deploy"));
   }
-  if (!cfg.server?.token) return fail("缺少 [server] token，先运行 hub init");
-  if (!(await ensureWebClient())) return fail("客户端网页下载失败，Worker 没有部署。请检查网络后重新运行：noop cloud deploy");
+  if (!cfg.server?.token) return fail(L("[server] token is missing, run hub init first", "缺少 [server] token，先运行 hub init"));
+  if (!(await ensureWebClient())) return fail(L("Downloading the web client failed, the Worker was not deployed. Check the network and run again: noop cloud deploy", "客户端网页下载失败，Worker 没有部署。请检查网络后重新运行：noop cloud deploy"));
   const name = cfg.cloud?.name ?? "noop";
   // IP allow-list: refuse a list that doesn't parse, or that would shut out the very machine deploying it
   const allow = allowIps(cfg);
   if (allow) {
     const { nets, bad } = parseAllowList(allow);
-    if (bad.length) return fail(`[cloud] allow_ips 里有无法识别的项：${bad.join(" ")}`);
+    if (bad.length) return fail(L(`[cloud] allow_ips has entries that cannot be parsed: ${bad.join(" ")}`, `[cloud] allow_ips 里有无法识别的项：${bad.join(" ")}`));
     const prev = String(cfg.cloud?.domain ? `https://${cfg.cloud.domain}` : cfg.cloud?.url ?? "").replace(/\/$/, "");
     const mine = prev ? (await fetch(`${prev}/cdn-cgi/trace`).then((r) => r.text()).catch(() => "")).match(/^ip=(.+)$/m)?.[1]?.trim() : undefined;
-    if (mine && !ipAllowed(mine, nets)) return fail(`本机出口 IP ${mine} 不在 [cloud] allow_ips 里：部署后这台机器会连不上 Worker。先把它加进去再部署。`);
+    if (mine && !ipAllowed(mine, nets)) return fail(L(`This machine's public IP ${mine} is not in [cloud] allow_ips: it could not reach the Worker after deploying. Add it first.`, `本机出口 IP ${mine} 不在 [cloud] allow_ips 里：部署后这台机器会连不上 Worker。先把它加进去再部署。`));
   }
-  console.log(`部署到你的 Cloudflare 账号（Worker：${name}）…`);
+  console.log(L(`Deploying to your Cloudflare account (Worker: ${name})…`, `部署到你的 Cloudflare 账号（Worker：${name}）…`));
   // [cloud] domain (e.g. noop.example.com on a zone in the same account) attaches a Custom Domain and becomes the URL
   const domain = String(cfg.cloud?.domain ?? "").trim();
   const deploy = () => $`${wr} deploy --name ${name} ${domain ? ["--domain", domain] : []}`.cwd(dir).env(env).quiet().nothrow();
@@ -219,10 +219,10 @@ export async function cloudDeploy(cfg: Cfg) {
   if (dep.exitCode !== 0 && !domain && /register a workers\.dev subdomain/i.test(out)) {
     const link = out.match(/https:\/\/dash\.cloudflare\.com\/\S+\/workers\/onboarding/)?.[0];
     if (!process.stdin.isTTY)
-      return fail(`这个 Cloudflare 账号还没有 workers.dev 子域名（账号第一次部署 Worker 都要先注册一个）。\n注册入口：${link ?? "Cloudflare 控制台 → Workers & Pages"}\n或在 cloud/ 目录交互式运行一次 bunx wrangler deploy，按提示注册。\n然后重新运行：hub cloud deploy`);
-    console.log("账号还没有 workers.dev 子域名：按 wrangler 接下来的提示注册一个（一次性，之后这个账号的 Worker 都用它做前缀）…");
+      return fail(L(`This Cloudflare account has no workers.dev subdomain yet (every account registers one before its first Worker deploy).\nRegister at: ${link ?? "Cloudflare dashboard → Workers & Pages"}\nor run bunx wrangler deploy once interactively in cloud/ and follow the prompts.\nThen run again: hub cloud deploy`, `这个 Cloudflare 账号还没有 workers.dev 子域名（账号第一次部署 Worker 都要先注册一个）。\n注册入口：${link ?? "Cloudflare 控制台 → Workers & Pages"}\n或在 cloud/ 目录交互式运行一次 bunx wrangler deploy，按提示注册。\n然后重新运行：hub cloud deploy`));
+    console.log(L("This account has no workers.dev subdomain yet: register one at wrangler's next prompt (one time; every Worker on this account uses it as its prefix)…", "账号还没有 workers.dev 子域名：按 wrangler 接下来的提示注册一个（一次性，之后这个账号的 Worker 都用它做前缀）…"));
     const ask = Bun.spawn([...wr, "deploy", "--name", name], { cwd: dir, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-    if ((await ask.exited) !== 0) return fail("workers.dev 子域名没有注册成；注册好之后重新运行：hub cloud deploy");
+    if ((await ask.exited) !== 0) return fail(L("The workers.dev subdomain was not registered. Register it, then run again: hub cloud deploy", "workers.dev 子域名没有注册成；注册好之后重新运行：hub cloud deploy"));
     dep = await deploy();
     out = dep.stdout.toString() + dep.stderr.toString();
   }
@@ -236,14 +236,15 @@ export async function cloudDeploy(cfg: Cfg) {
   } else if (e.to && e.from) { // Cloudflare Email Routing: no SMTP, `from` is an address on a domain with Email Routing on
     secrets.HUB_OWNER_EMAIL = String(e.to);
     secrets.HUB_MAIL_FROM = String(e.from).match(/<([^>]+)>/)?.[1] ?? String(e.from);
-  } else console.log("还没配置邮箱：登录验证码发不出去，在共享的 config.toml 里填 [email] 后重新运行 noop cloud deploy");
+  } else console.log(L("Email is not configured, login codes cannot be sent: fill in [email] in the shared config.toml and run noop cloud deploy again", "还没配置邮箱：登录验证码发不出去，在共享的 config.toml 里填 [email] 后重新运行 noop cloud deploy"));
+  if (cfg.owner?.language) secrets.HUB_LANG = String(cfg.owner.language);
   const vapid = await vapidKeys();
   secrets.HUB_VAPID_PUBLIC = vapid.publicKey;
   secrets.HUB_VAPID_PRIVATE = JSON.stringify(vapid.privateJwk);
   // `secret bulk` reads JSON from stdin — values never touch argv or the console.
   const sec = Bun.spawn([...wr, "secret", "bulk", "--name", name], { cwd: dir, env, stdin: new Blob([JSON.stringify(secrets)]), stdout: "pipe", stderr: "pipe" });
-  if ((await sec.exited) !== 0) return fail("设置 Worker 密钥失败：\n" + (await new Response(sec.stderr).text()).slice(-800));
-  if (!url) return fail("部署成功，但没识别到地址；请把 workers.dev 地址写进 config.toml 的 [cloud] url");
+  if ((await sec.exited) !== 0) return fail(L("Setting the Worker secrets failed:\n", "设置 Worker 密钥失败：\n") + (await new Response(sec.stderr).text()).slice(-800));
+  if (!url) return fail(L("Deployed, but the address was not detected: put the workers.dev address in [cloud] url in config.toml", "部署成功，但没识别到地址；请把 workers.dev 地址写进 config.toml 的 [cloud] url"));
   // ---- record the URL (machine-local noop.toml first: the data sync itself goes through this Worker)
   writeHubToml({ cloud: { url, name, ...(account ? { account } : {}), ...(domain ? { domain } : {}) } });
   await locked(async () => {
@@ -254,11 +255,11 @@ export async function cloudDeploy(cfg: Cfg) {
     const block = `[cloud]\nurl = "${url}"\nname = "${name}"\n${account ? `account = "${account}"\n` : ""}${domain ? `domain = "${domain}"\n` : ""}${allow !== undefined ? `allow_ips = "${allow}"\n` : ""}`;
     s = /^\[cloud\]/m.test(s) ? s.replace(/^\[cloud\][^\[]*/m, `${block}\n`) : `${s.trimEnd()}\n\n${block}`;
     writeFileSync(f, s);
-    writeFileSync(P("README.md"), `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`);
+    writeFileSync(P("README.md"), L(`# noop data\n\nPrivate data (kept in your own Cloudflare Worker): tasks, decisions, memory, logs.\n\n## Client\n\nAddress: **${url}**\n\nOpen it and paste the token to connect (or log in with an email code; the machine token is in ~/.noop/noop.toml on the host). This address is deployed in your own Cloudflare account and does not change.\n`, `# noop data\n\n私有数据（保存在你自己的 Cloudflare Worker 里）：任务、决策、记忆、日志。\n\n## 客户端\n\n地址：**${url}**\n\n打开后粘贴 token 连接（或用邮箱验证码登录；机器 token 在主机的 ~/.noop/noop.toml 里）。这个地址部署在你自己的 Cloudflare 账号里，固定不变。\n`));
     journal(hostName(cfg), `☁️ cloud hub deployed: ${url}`);
     await _commitPush(`cloud hub ${url}`);
   });
-  console.log(`✓ 已部署：${url}`);
+  console.log(L(`✓ Deployed: ${url}`, `✓ 已部署：${url}`));
   return url;
 }
 

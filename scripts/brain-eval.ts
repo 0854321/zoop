@@ -7,7 +7,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { ClaudeModel, SYSTEM, localStore, think, type BrainOut } from "../src/brain";
+import { ClaudeModel, systemPrompt, localStore, think, type BrainOut } from "../src/brain";
 import type { WriteOp } from "../cloud/src/tools";
 
 const arg = (k: string, d = "") => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
@@ -71,7 +71,7 @@ const cases: Case[] = [
 ];
 
 const model = new ClaudeModel(MODEL);
-model.warm(SYSTEM);
+model.warm(systemPrompt());
 await Bun.sleep(4000); // the daemon spawns the next process ahead of time; let this one be ready like it would be
 const rows: any[] = [];
 for (const c of cases) {

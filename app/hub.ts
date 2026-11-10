@@ -110,9 +110,9 @@ export function choicesOf(e: HubEvent): string[] {
   return [...new Set(o.map((x) => (x.match(/^\s*([A-Z])\s*[:：.]/) ?? [])[1]).filter((x): x is string => !!x))];
 }
 
-/** The option the team recommends ("建议：B" in the text), if any. */
+/** The option the team recommends ("Recommended: B" or "建议：B" in the text), if any. */
 export function recommended(e: HubEvent): string | null {
-  const m = (e.text ?? "").match(/建议：\*?([^*\s　]+)/);
+  const m = (e.text ?? "").match(/(?:建议：|Recommended: )\*?([^*\s　]+)/);
   return m ? m[1].split(/[,，]/)[0] : null;
 }
 

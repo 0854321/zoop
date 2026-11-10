@@ -19,6 +19,7 @@
 //   GET|POST /oauth/authorize (email-code sign-in page) · POST /oauth/token (authorization_code, refresh_token)
 // Never exposed: merge, release, settings, machine credentials.
 
+import { L } from "./i18n";
 import { type Ev, type FileRow, type ToolStore, type WriteOp, DECISION_ID, TASK_ID, feedView, getTask, listDecisions, listTasks, runTool, statusView, toolsFor } from "./tools";
 export { parseDoc, listTasks, getTask, listDecisions } from "./tools";
 
@@ -494,9 +495,9 @@ export class Mcp {
     const f: Record<string, string> = Object.fromEntries(url.searchParams);
     if (req.method === "POST") Object.assign(f, Object.fromEntries([...(await req.formData()).entries()].map(([k, v]) => [k, String(v)])));
     const client = this.client(f.client_id ?? "");
-    if (!client) return page("无法授权", `<p>未知的应用（client_id）。请在客户端里重新添加 Noop。</p>`, 400);
-    if (!client.redirect_uris.includes(f.redirect_uri)) return page("无法授权", `<p>回调地址和注册的不一致。</p>`, 400);
-    if (!okRedirect(f.redirect_uri)) return page("无法授权", `<p>这个回调地址不在允许范围内。</p>`, 400); // clients registered before the host allow-list
+    if (!client) return page(L("Cannot authorize", "无法授权"), L(`<p>Unknown app (client_id). Add Noop again in the client.</p>`, `<p>未知的应用（client_id）。请在客户端里重新添加 Noop。</p>`), 400);
+    if (!client.redirect_uris.includes(f.redirect_uri)) return page(L("Cannot authorize", "无法授权"), L(`<p>The callback address does not match the registered one.</p>`, `<p>回调地址和注册的不一致。</p>`), 400);
+    if (!okRedirect(f.redirect_uri)) return page(L("Cannot authorize", "无法授权"), L(`<p>This callback address is not allowed.</p>`, `<p>这个回调地址不在允许范围内。</p>`), 400); // clients registered before the host allow-list
     const back = (q: Record<string, string>) => {
       const u = new URL(f.redirect_uri);
       for (const [k, v] of Object.entries({ ...q, ...(f.state ? { state: f.state } : {}) })) u.searchParams.set(k, v);
@@ -508,32 +509,33 @@ export class Mcp {
 
     const keep = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "scope", "resource"]
       .filter((k) => f[k]).map((k) => `<input type="hidden" name="${k}" value="${esc(f[k])}">`).join("");
-    const who = `<p><b>${esc(client.client_name)}</b> 想访问你的 Noop：查看任务、决策和动态，以你的名义给团队发消息、回答决策。</p>
-      <p class="muted">授权后会跳回 <code>${esc(new URL(f.redirect_uri).host)}</code>。不是你本人发起的请直接关闭页面。</p>`;
-    const emailForm = (msg = "") => page("授权 Noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="send">
-      <label>邮箱<input name="email" type="email" required autofocus value="${esc(f.email)}"></label>
-      <div class="row"><button>发送验证码</button><button name="step" value="deny" class="ghost" formnovalidate>拒绝</button></div></form>`);
-    const codeForm = (msg = "") => page("授权 Noop", `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="verify">
+    const who = L(`<p><b>${esc(client.client_name)}</b> wants to access your Noop: view tasks, decisions and activity, and message the team and answer decisions on your behalf.</p>
+      <p class="muted">You will return to <code>${esc(new URL(f.redirect_uri).host)}</code>. If you did not start this, close this page.</p>`, `<p><b>${esc(client.client_name)}</b> 想访问你的 Noop：查看任务、决策和动态，以你的名义给团队发消息、回答决策。</p>
+      <p class="muted">授权后会跳回 <code>${esc(new URL(f.redirect_uri).host)}</code>。不是你本人发起的请直接关闭页面。</p>`);
+    const emailForm = (msg = "") => page(L("Authorize Noop", "授权 Noop"), `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="send">
+      <label>${L("Email", "邮箱")}<input name="email" type="email" required autofocus value="${esc(f.email)}"></label>
+      <div class="row"><button>${L("Send code", "发送验证码")}</button><button name="step" value="deny" class="ghost" formnovalidate>${L("Deny", "拒绝")}</button></div></form>`);
+    const codeForm = (msg = "") => page(L("Authorize Noop", "授权 Noop"), `${who}${msg}<form method="post">${keep}<input type="hidden" name="step" value="verify">
       <input type="hidden" name="email" value="${esc(f.email)}">
-      <label>验证码（已发到 ${esc(f.email)}${f.delivery === "cli" ? "；邮件未配置，请在你的电脑上运行 <code>noop login</code> 查看" : ""}）
+      <label>${L(`Code (sent to ${esc(f.email)}${f.delivery === "cli" ? "; email is not configured, run <code>noop login</code> on your computer to see it" : ""})`, `验证码（已发到 ${esc(f.email)}${f.delivery === "cli" ? "；邮件未配置，请在你的电脑上运行 <code>noop login</code> 查看" : ""}）`)}
       <input name="code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="12" required autofocus autocomplete="one-time-code" style="text-transform:uppercase;letter-spacing:.15em"></label>
-      <label>两步验证码（验证器 App 上的 6 位数字）
+      <label>${L("2FA code (6 digits from your authenticator app)", "两步验证码（验证器 App 上的 6 位数字）")}
       <input name="totp" inputmode="numeric" pattern="\\d{6}" maxlength="6" required autocomplete="off"></label>
       <input type="hidden" name="delivery" value="${esc(f.delivery)}">
-      <div class="row"><button>授权</button><button name="step" value="deny" class="ghost" formnovalidate>拒绝</button></div></form>`);
+      <div class="row"><button>${L("Authorize", "授权")}</button><button name="step" value="deny" class="ghost" formnovalidate>${L("Deny", "拒绝")}</button></div></form>`);
     const note = (s: string) => `<p class="err">${esc(s)}</p>`;
 
     if (req.method !== "POST") return emailForm();
     if (f.step === "send") {
       const r = await this.h.startCode(String(f.email ?? ""));
-      if (r.status !== 200) return emailForm(note(r.body?.message ?? r.body?.error ?? "发送失败"));
+      if (r.status !== 200) return emailForm(note(r.body?.message ?? r.body?.error ?? L("Sending failed", "发送失败")));
       f.delivery = r.body?.delivery ?? "";
       return codeForm();
     }
     if (f.step === "verify") {
       const r = await this.h.checkCode(String(f.email ?? ""), String(f.code ?? ""), String(f.totp ?? ""),
-        { req, via: `MCP 连接器授权：${String(client.client_name).slice(0, 60)}（回调 ${new URL(f.redirect_uri).host}）` });
-      if (!r.email) return codeForm(note(r.error ?? "验证码不对"));
+        { req, via: L(`MCP connector authorization: ${String(client.client_name).slice(0, 60)} (callback ${new URL(f.redirect_uri).host})`, `MCP 连接器授权：${String(client.client_name).slice(0, 60)}（回调 ${new URL(f.redirect_uri).host}）`) });
+      if (!r.email) return codeForm(note(r.error ?? L("Wrong code", "验证码不对")));
       const code = rand(32);
       this.h.sql.exec("DELETE FROM oauth_codes WHERE expires < ?", Date.now());
       this.h.sql.exec("INSERT INTO oauth_codes (hash, client_id, redirect_uri, challenge, email, expires) VALUES (?, ?, ?, ?, ?, ?)",

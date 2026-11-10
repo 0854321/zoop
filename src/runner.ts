@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realp
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-  type Cfg, P, ROOT, agentActivity, agentName, precedents, readAll, readIf, recentJournal, signature,
+  type Cfg, L, P, ROOT, agentActivity, agentName, precedents, readAll, readIf, recentJournal, signature,
 } from "./core";
 import { claudeDisallowed } from "./gates";
 import { channelPrompt } from "./channels";
@@ -24,7 +24,7 @@ export type Result = {
   followups?: { title: string; body?: string; agent?: string; priority?: string; repo?: string; requires?: string; host?: string }[];
 };
 
-const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one fenced \`\`\`json block:
+const RESULT_SPEC = () => `Finish the work, then end your final reply with EXACTLY one fenced \`\`\`json block:
 {
   "status": "done" | "needs_decision" | "failed" | "delegated" | "waiting",   // delegated = you split the work into followups and want to be woken up to consolidate when they finish; waiting = see below
   "waiting_on": "waiting only: what you wait for and how to check it, e.g. CI run https://github.com/o/r/actions/runs/123 (gh run view 123)",
@@ -32,7 +32,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "wait_minutes": 15,   // waiting only: latest time to wake you to check again (5-120)
   "wait_check": "waiting only: a quick read-only shell command whose exit code changes when the wait is over, e.g. gh pr checks 123 -R o/r (exits 8 while pending); the daemon runs it every few minutes and wakes you as soon as it changes",
   "summary": "1-3 sentences: what you did / found (links to PRs, commits, files). For needs_decision this is all the owner reads before choosing: say what the PR / change does and what is at stake, the facts they need to choose (not why it needs them, they know)",
-  "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. 现在合并 gpui-fast #97 吗？; name PRs/issues with their full URL in summary and options",
+  "question": "needs_decision only: one short sentence (under 30 characters) naming what to decide, e.g. Merge gpui-fast #97 now?; name PRs/issues with their full URL in summary and options",
   "options": ["A: <recommended> — consequence", "B: ... — consequence"],
   "recommendation": "A",
   "lessons": ["durable lesson for your own memory (optional)"],
@@ -40,7 +40,7 @@ const RESULT_SPEC = `Finish the work, then end your final reply with EXACTLY one
   "channels": ["existing-slug", {"name": "New topic", "goal": "what it is for"}],   // see # Channels; [] when none fits
   "followups": [{"title": "...", "body": "...", "agent": "<agent id>", "priority": "normal", "difficulty": "hard if it needs deep engineering/design work", "requires": "os:macos when it needs macOS/iOS/Xcode (os:windows for Windows); omit otherwise"}]
 }
-Write summary, question and options in the owner's language (Simplified Chinese unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
+Write summary, question and options in the owner's language (${L("English", "Simplified Chinese")} unless the owner writes otherwise), plain text, no emoji; keep identifiers, links and code as they are.
 Only use needs_decision after doing all preparation that does not depend on the answer.
 Never sit idle waiting on something slow (GitHub Actions/CI, a release, a review, a deploy): if the next step needs it, return "waiting" with waiting_on, wait_minutes and wait_check.
 Before returning "waiting", do every part of the task that does not depend on the condition (other platforms, docs, tests, screenshots, the next PR): implement and let CI verify rather than wait for a host. Waiting on another PR to merge is not a reason to stop: build on its branch or merge it locally, and note the dependency.
@@ -91,7 +91,7 @@ Priority: ${meta.priority}   Source: ${meta.source}
 
 ${body}
 
-${RESULT_SPEC}`;
+${RESULT_SPEC()}`;
 }
 
 function rosterLine(): string {

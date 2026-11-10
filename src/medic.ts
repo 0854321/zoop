@@ -6,7 +6,7 @@ import { $ } from "bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, homedir, platform, release } from "node:os";
 import { join } from "node:path";
-import { type Cfg, CODE, DATA, hostName, HOME_DIR } from "./core";
+import { type Cfg, CODE, L, DATA, hostName, HOME_DIR } from "./core";
 
 const STATE = join(HOME_DIR, "medic.json");
 const LOGDIR = join(HOME_DIR, "medic");
@@ -75,14 +75,14 @@ export async function medic(problem: string, cfg: Cfg, opts: { auto?: boolean; k
   writeFileSync(log, `${problem}\n\n${out}`);
   const m = [...out.matchAll(/```json\s*(\{[\s\S]*?\})\s*```/g)].pop();
   let res: any = null; try { res = m ? JSON.parse(m[1]) : null; } catch {}
-  const line = res ? `${res.fixed ? "✅ fixed" : "❌ not fixed"}: ${res.summary}${res.owner_action ? `\n👉 你需要执行: ${res.owner_action}` : ""}${res.pr ? `\nPR: ${res.pr}` : ""}`
+  const line = res ? `${res.fixed ? "✅ fixed" : "❌ not fixed"}: ${res.summary}${res.owner_action ? L(`\n👉 You need to run: ${res.owner_action}`, `\n👉 你需要执行: ${res.owner_action}`) : ""}${res.pr ? `\nPR: ${res.pr}` : ""}`
     : `medic finished without a result; log: ${log}`;
   console.error(`🩺 ${line}`);
   // CEO only hears about it when he must act (run a command / merge a PR). Silent fixes go to the journal only.
   if (res?.owner_action || res?.pr) try {
     const { notify } = await import("./notify");
-    const ask = res.owner_action ? `需要你在 ${hostName(cfg)} 上执行：${res.owner_action}` : `已自动修好，修复 PR 待你合并：${res.pr}`;
-    await notify(`${hostName(cfg)} 出了点问题（${String(res.summary ?? "").slice(0, 80)}）。${ask}`, cfg, { kind: "notice", from: `medic@${hostName(cfg)}` });
+    const ask = res.owner_action ? L(`You need to run this on ${hostName(cfg)}: ${res.owner_action}`, `需要你在 ${hostName(cfg)} 上执行：${res.owner_action}`) : L(`Fixed automatically, the fix PR is waiting for your merge: ${res.pr}`, `已自动修好，修复 PR 待你合并：${res.pr}`);
+    await notify(L(`${hostName(cfg)} had a problem (${String(res.summary ?? "").slice(0, 80)}). ${ask}`, `${hostName(cfg)} 出了点问题（${String(res.summary ?? "").slice(0, 80)}）。${ask}`), cfg, { kind: "notice", from: `medic@${hostName(cfg)}` });
   } catch {}
   return res;
 }

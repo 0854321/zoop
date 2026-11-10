@@ -1,6 +1,8 @@
 // Wait tiers, routine silence and merge cards: pure rules the daemon applies (kept here so they are unit-tested).
 
 /** A wait on a person (owner clicks merge, answers a card, publishes by hand) vs. a wait on a machine (CI, a deploy). */
+import { L } from "./core";
+
 export type WaitKind = "human" | "ci";
 
 const HUMAN = /owner|老板|CEO|你(来|手动|点|合并|确认|发布)|手动|人工|manual|by hand|decision|决策|决定|approv|批准|确认后|answer|回复卡/i;
@@ -34,7 +36,7 @@ export function isMergeCard(meta: { question?: string; options?: string; kind?: 
 /** First line of a merge card: the PR link and what the owner has to do. */
 export function mergeHeadline(text: string): string {
   const url = text.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/)?.[0];
-  return url ? `${url} 需要你点合并` : "需要你点合并";
+  return url ? L(`${url} needs you to merge`, `${url} 需要你点合并`) : L("needs you to merge", "需要你点合并");
 }
 
 /** A routine run that changed nothing: journal it, do not send it to the owner's channel. */

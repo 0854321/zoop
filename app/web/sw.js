@@ -42,7 +42,7 @@ async function show(p) {
   const options = Array.isArray(p.options) ? p.options : [];
   // Decisions get one-tap answers (the platforms show at most two actions), then "打开".
   const actions = ask && p.ref ? options.slice(0, 2).map((o) => ({ action: `answer:${o}`, title: label(o) })) : [];
-  actions.push({ action: "open", title: "打开" });
+  actions.push({ action: "open", title: ZH ? "打开" : "Open" });
   const scope = self.registration.scope;
   if (typeof p.badge === "number" && self.navigator.setAppBadge) {
     try {
@@ -62,10 +62,12 @@ async function show(p) {
   });
 }
 
+const ZH = /^zh/i.test(self.navigator?.language ?? "");
+
 function label(o) {
   const s = String(o);
-  if (/^all$/i.test(s)) return "全部批准";
-  if (/^none$/i.test(s)) return "都不要";
+  if (/^all$/i.test(s)) return ZH ? "全部批准" : "Approve all";
+  if (/^none$/i.test(s)) return ZH ? "都不要" : "None";
   return s.length > 24 ? `${s.slice(0, 23)}…` : s;
 }
 /** "B: 升级" → "B"; "1 写测试" → "1". */
@@ -97,8 +99,8 @@ async function answer(ref, value) {
     });
     ok = r.ok;
   } catch {}
-  await self.registration.showNotification(ok ? `已回复 ${ref}` : `回复 ${ref} 失败`, {
-    body: ok ? `你选了 ${value}` : "点这里打开 Noop 再试一次",
+  await self.registration.showNotification(ok ? (ZH ? `已回复 ${ref}` : `Replied to ${ref}`) : (ZH ? `回复 ${ref} 失败` : `Reply to ${ref} failed`), {
+    body: ok ? (ZH ? `你选了 ${value}` : `You chose ${value}`) : (ZH ? "点这里打开 Noop 再试一次" : "Tap to open Noop and try again"),
     tag: `answered:${ref}`,
     silent: true,
     icon: `${self.registration.scope}icons/192.png`,

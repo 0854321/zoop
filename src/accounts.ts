@@ -5,7 +5,7 @@
 import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Cfg, hostName, journal, HOME_DIR } from "./core";
+import { type Cfg, L, hostName, journal, HOME_DIR } from "./core";
 import { notify } from "./notify";
 
 const HOME = join(HOME_DIR, "accounts");
@@ -118,10 +118,10 @@ export async function reportFailure(a: Account, kind: Failure, output: string, c
     if (st.told !== st.cooldown_until) {
       st.told = st.cooldown_until;
       const others = (cfg.clis?.preference ?? ["claude", "codex"]).filter((c: string) => c !== a.cli && Bun.which(c) && accounts(cfg, c).some(usable));
-      const at = new Date(st.cooldown_until).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-      void notify([`${a.cli === "claude" ? "Claude" : "Codex"}（${host}）额度用完了，约 ${at} 恢复。`,
-        others.length ? `这期间任务先交给 ${others.join("、")} 做。` : "这期间没有可用的 AI，任务会排队等着。",
-        `想马上恢复：在这台机器上运行 ${a.cli === "claude" ? "claude /login" : "codex login"} 换个账号，登录后会自动接着用，不用等。`].join("\n"),
+      const at = new Date(st.cooldown_until).toLocaleTimeString(L("en-US", "zh-CN"), { hour: "2-digit", minute: "2-digit" });
+      void notify([L(`${a.cli === "claude" ? "Claude" : "Codex"} (${host}) is out of quota, back around ${at}.`, `${a.cli === "claude" ? "Claude" : "Codex"}（${host}）额度用完了，约 ${at} 恢复。`),
+        others.length ? L(`Until then tasks go to ${others.join(", ")}.`, `这期间任务先交给 ${others.join("、")} 做。`) : L("No AI is available until then, tasks will queue.", "这期间没有可用的 AI，任务会排队等着。"),
+        L(`To recover now: run ${a.cli === "claude" ? "claude /login" : "codex login"} on this machine to switch account; it is picked up automatically.`, `想马上恢复：在这台机器上运行 ${a.cli === "claude" ? "claude /login" : "codex login"} 换个账号，登录后会自动接着用，不用等。`)].join("\n"),
         cfg, { kind: "notice" });
     }
   } else {
@@ -144,10 +144,10 @@ async function alertIfAllExhausted(cfg: Cfg) {
   save(s);
   const lines = installed.flatMap((c) => accounts(cfg, c)).map((a) => {
     const st = load().accounts[key(a)] ?? {};
-    return `• ${key(a)}：${st.needs_login ? "需要登录" : st.cooldown_until ? `额度用尽，约 ${new Date(st.cooldown_until).toLocaleTimeString()} 恢复` : "?"}`;
+    return L(`• ${key(a)}: ${st.needs_login ? "needs login" : st.cooldown_until ? `out of quota, back around ${new Date(st.cooldown_until).toLocaleTimeString()}` : "?"}`, `• ${key(a)}：${st.needs_login ? "需要登录" : st.cooldown_until ? `额度用尽，约 ${new Date(st.cooldown_until).toLocaleTimeString()} 恢复` : "?"}`);
   });
-  await notify([`${hostName(cfg)} 上所有 AI 账户都不可用，fleet 暂停中：`, ...lines,
-    `可以：回复登录码完成待登录账户，或在 config.local.toml 的 [[accounts]] 加一个账户。`].join("\n"), cfg);
+  await notify([L(`All AI accounts on ${hostName(cfg)} are unavailable, the fleet is paused:`, `${hostName(cfg)} 上所有 AI 账户都不可用，fleet 暂停中：`), ...lines,
+    L(`Options: reply with a login code to finish a pending login, or add an account under [[accounts]] in config.local.toml.`, `可以：回复登录码完成待登录账户，或在 config.local.toml 的 [[accounts]] 加一个账户。`)].join("\n"), cfg);
 }
 
 // ------------------------------------------------------------------ remote-assisted login
@@ -192,9 +192,9 @@ export async function startLogin(a: Account, cfg: Cfg) {
     if (url && !sent && (needsCode || code || buf.length > 2000 || /enter|code/i.test(buf))) {
       sent = true;
       await notify([
-        `🔑 *${id}* · ${host} 上的 ${a.cli} 账户「${a.name}」需要重新登录`,
-        `1. 打开：${url}`,
-        code ? `2. 输入设备码：\`${code}\`（完成后会自动生效，无需回复）` : `2. 登录后把页面给出的授权码回复：\`${id} <code>\``,
+        L(`🔑 *${id}* · the ${a.cli} account "${a.name}" on ${host} needs to log in again`, `🔑 *${id}* · ${host} 上的 ${a.cli} 账户「${a.name}」需要重新登录`),
+        L(`1. Open: ${url}`, `1. 打开：${url}`),
+        code ? L(`2. Enter the device code: \`${code}\` (takes effect automatically, no reply needed)`, `2. 输入设备码：\`${code}\`（完成后会自动生效，无需回复）`) : L(`2. After logging in, reply with the code the page gives you: \`${id} <code>\``, `2. 登录后把页面给出的授权码回复：\`${id} <code>\``),
       ].join("\n"), cfg);
       journal(host, `🔑 ${id} login link sent for ${k}`);
     }
@@ -213,7 +213,7 @@ export async function startLogin(a: Account, cfg: Cfg) {
     st.accounts[k] = { ...st.accounts[k], needs_login: !ok, login_id: undefined, cooldown_until: undefined };
     save(st);
     journal(host, ok ? `${k} logged in (${id})` : `${k} login ${id} failed (exit ${code})`);
-    await notify(ok ? `${k} 登录成功，fleet 继续运转` : `${id} 登录未完成（exit ${code}），稍后会再发新链接`, cfg);
+    await notify(ok ? L(`${k} logged in, the fleet continues`, `${k} 登录成功，fleet 继续运转`) : L(`${id} login did not finish (exit ${code}), a new link will follow`, `${id} 登录未完成（exit ${code}），稍后会再发新链接`), cfg);
   });
   setTimeout(() => { if (pending.has(id)) proc.kill(); }, 30 * 60_000); // link expiry
 }
