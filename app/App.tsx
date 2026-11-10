@@ -35,7 +35,7 @@ import {
   untracked,
   Video,
   View,
-  windowSize, token, openUrl, keyboardFrame, Picker, Speech, Clipboard, Notifications } from "nsh";
+  windowSize, token, openUrl, keyboardFrame, Keyboard, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ScrollRef, SpeechSession, ViewStyle } from "nsh";
 import { AlertDialog, Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, Toast, ToastStack, Button as BaseButton, ContextMenu, Dialog, Menu, MenuItem, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
@@ -2171,6 +2171,8 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
   return (
     <Menu
       align="start"
+      // Opening the account menu (settings, theme, language) on a phone hides the keyboard first.
+      onOpenChange={(open) => { if (open) Keyboard.dismiss(); }}
       offset={6}
       margin={8}
       // On a desktop the surface rides on a `PopIn` inside the bare popup, so it comes in with a short pop each opening.
@@ -3678,7 +3680,8 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
     if (wide()) return;
     const open = drawer();
     clearTimeout(drawerHideTimer);
-    if (open) drawerVisible.set(true);
+    // Opening the sidebar is leaving the composer: hide the keyboard, as native apps do.
+    if (open) { Keyboard.dismiss(); drawerVisible.set(true); }
     else drawerHideTimer = setTimeout(() => drawerVisible.set(false), reduceMotion() ? 0 : 200);
     animateDrawer(open);
   });
@@ -3699,6 +3702,9 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   // The pages: the channel at the bottom, what the sidebar, a link or settings opened above it.
   const nav = createNavStack<Route>([CHANNEL]);
   const top = () => { const r = nav.routes(); return r[r.length - 1]; };
+  // Any page change (settings, a task, back) takes the keyboard down with the input it served.
+  let lastTop: Route | undefined;
+  effect(() => { const t = top(); if (lastTop !== undefined && t !== lastTop) Keyboard.dismiss(); lastTop = t; });
   const onChannel = () => nav.routes().length === 1;
   /** The channel the conversation is narrowed to (a Slack-like topic), or null for the main chat. Same view, same composer. */
   const scope = signal<string | null>(null);
@@ -4415,7 +4421,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const channelPage = () => (
     <View style={{ flex: 1, flexDirection: "row", minWidth: 0 }}>
       <View testID="channel-swipe" pan={swipeDrawer() ? { x: drawerX } : undefined}
-        onPanStart={swipeDrawer() ? () => drawerDragging.set(true) : undefined}
+        onPanStart={swipeDrawer() ? () => { Keyboard.dismiss(); drawerDragging.set(true); } : undefined}
         onPanEnd={swipeDrawer() ? finishDrawerPan : undefined}
         style={{ flex: 1, backgroundColor: colors.background, paddingBottom: keyboardFrame().height }}>
           <View
@@ -4932,7 +4938,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         <View onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }} style={{ width: size.sidebar, paddingTop: sidebarInset }}>{sidebar(false)}</View>
       </If>
       <If when={!wide()}>
-        <View testID="drawer" pan={drawer() ? { x: drawerX } : undefined} onPanStart={() => drawerDragging.set(true)} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: drawerWidth(), paddingTop: touch ? safeArea().top : 0, visibility: drawerVisible() || drawerDragging() ? "visible" : "hidden", pointerEvents: drawer() ? "auto" : "none" }}>{sidebar(true)}</View>
+        <View testID="drawer" pan={drawer() ? { x: drawerX } : undefined} onPanStart={() => { Keyboard.dismiss(); drawerDragging.set(true); }} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: drawerWidth(), paddingTop: touch ? safeArea().top : 0, visibility: drawerVisible() || drawerDragging() ? "visible" : "hidden", pointerEvents: drawer() ? "auto" : "none" }}>{sidebar(true)}</View>
       </If>
       <View style={{ flex: 1, minWidth: 0, backgroundColor: colors.background, borderTopLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderBottomLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderCurve: "continuous", borderLeftWidth: !wide() && (drawer() || drawerDragging()) ? 1 : 0, borderLeftColor: colors.line, overflow: "hidden", translate: [wide() ? 0 : drawerTranslate(), 0], boxShadow: wide() && sidebarOpen() ? "-3px 0 18px rgba(0,0,0,0.08)" : undefined }}>
       <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
@@ -4961,7 +4967,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         <View testID="doc-side" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: readerWidth(), borderLeftWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.background }}>{readerPane()}</View>
       </If>
       <If when={!wide() && drawer()}>
-        <View testID="drawer-dismiss" role="button" accessibilityLabel={L("Close sidebar", "关闭侧栏")} onPress={() => drawer.set(false)} pan={{ x: drawerX }} onPanStart={() => drawerDragging.set(true)} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.08)" }} />
+        <View testID="drawer-dismiss" role="button" accessibilityLabel={L("Close sidebar", "关闭侧栏")} onPress={() => drawer.set(false)} pan={{ x: drawerX }} onPanStart={() => { Keyboard.dismiss(); drawerDragging.set(true); }} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.08)" }} />
       </If>
       </View>
 
