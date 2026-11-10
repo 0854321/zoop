@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { due } from "../src/cli";
 import { matches, signature, type Cfg } from "../src/core";
-import { parseResult, runAgent } from "../src/runner";
+import { cliCommand, parseResult, runAgent } from "../src/runner";
 
 test("routine schedule", () => {
   const t = new Date("2026-11-02T19:05:00"); // Monday
@@ -386,4 +386,17 @@ test("checkWaits: a wait that finished while the daemon was down still wakes aft
   await Bun.write(flag, "1"); // finished during the restart
   expect([...(await checkWaits(Date.now() + 999_999_999, 1000))]).toContain("T-9102");
   rmSync(flag, { force: true });
+});
+
+test("gate_override relaxes only the approvable gates", () => {
+  const cfg = { gates: { extra: ["Bash(kubectl delete:*)"] } } as unknown as Cfg;
+  const full = cliCommand("claude", cfg);
+  for (const g of ["Bash(gh pr merge:*)", "Bash(gh repo delete:*)", "Bash(gh secret:*)", "Bash(rm -rf ~:*)", "Bash(gh api repos/:*)", "Bash(kubectl delete:*)"])
+    expect(full).toContain(g);
+  const relaxed = cliCommand("claude", cfg, true);
+  expect(relaxed).not.toContain("Bash(gh pr merge:*)");
+  expect(relaxed).not.toContain("Bash(gh release create:*)");
+  expect(relaxed).not.toContain("Bash(gh api repos/:*)");
+  for (const g of ["--disallowedTools", "Bash(rm -rf /:*)", "Bash(rm -rf ~:*)", "Bash(gh repo delete:*)", "Bash(gh secret:*)", "Bash(kubectl delete:*)"])
+    expect(relaxed).toContain(g);
 });

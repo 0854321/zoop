@@ -101,7 +101,7 @@ on_failure = true
 # discord_owner_user_id = "1234"
 
 [gates]
-extra = []                            # more Claude Code tool patterns to hard-block, e.g. "Bash(kubectl delete:*)"
+extra = []                            # more Claude Code tool patterns to hard-block, e.g. "Bash(kubectl delete:*)"; an owner decision does not unlock these
 
 # ------------------------------------------------------------------ routines (signal → task generators)
 # every: "15m" | "hourly" | "daily HH:MM" | "weekdays HH:MM" | "weekly MON HH:MM"
