@@ -40,6 +40,18 @@ export function routineQueued(name: string, host?: string): string {
   return "";
 }
 
+/** A routine skipped behind a copy no online host can run (parked in the inbox) for 30+ minutes: tell the owner once per copy.
+ *  The skips only reach the journal and the stall supervisor only sees waiting/blocked tasks, so such a copy silences the routine. */
+export function noteStuckRoutine(cfg: Cfg, name: string, id: string, state: Record<string, string>) {
+  const key = `${name}#stuck`, f = P("tasks", "inbox", `${id}.md`);
+  if (state[key] === id || !existsSync(f)) return; // running, waiting and card tasks are progress, not a stuck copy
+  const m = readDoc(f).meta;
+  const mins = Math.floor((Date.now() - Date.parse(m.parked ?? "")) / 60_000);
+  if (!(mins >= 30)) return; // not parked (NaN), or parked only briefly
+  state[key] = id;
+  void notify(`例行任务 ${name} 已经 ${mins} 分钟没有新的一轮：上一次的 ${id} 在等一台满足 ${m.requires} 的在线主机，之后每轮都被跳过。`, cfg, { kind: "notice", ref: id });
+}
+
 /** A newer run of a routine replaces its older unapproved copies: move them to rejected with a note. */
 export function supersedeProposed(name: string, newId: string, host?: string): string[] {
   const out: string[] = [];

@@ -29,7 +29,7 @@ import { addFollowUp, followUpTarget, reopenTask, type BrainOut, ClaudeModel, SY
 import { runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { adoptCloudUrl, readHubToml } from "./sync";
-import { judgeAccuracy, level, needsApproval, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
+import { judgeAccuracy, level, needsApproval, noteStuckRoutine, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
 import { CODE, UPDATE_REQUEST, type UpdateState, setUpdateState, updateState, allowedClis, capOk, idTagFor, isPrimary, runningRev, setApprovalGate, setIdTag } from "./core";
 import { accountEnv, accountsStatus, classify, failoverAccount, pendingLoginIds, pickAccount, reportFailure, retryLogins, submitLoginCode } from "./accounts";
 import { channelPrompt, channels, resolveChannels, updateChannel } from "./channels";
@@ -97,7 +97,12 @@ function runRoutines(cfg: Cfg, host: string, primary: boolean) {
     // scheduler "each": every machine runs its own copy, pinned to it (e.g. the weekly security check of this computer)
     const pin = owner === "each" ? host : undefined;
     const queued = routineQueued(r.name, pin); // a copy queued or running → this run is redundant
-    if (queued) { state[r.name] = new Date().toISOString(); journal(host, `⏰ routine \`${r.name}\` skipped: ${queued} still queued/running`); continue; }
+    if (queued) {
+      state[r.name] = new Date().toISOString();
+      journal(host, `⏰ routine \`${r.name}\` skipped: ${queued} still queued/running`);
+      noteStuckRoutine(cfg, r.name, queued, state);
+      continue;
+    }
     if (r.signal && !signalChanged(r, state)) { state[r.name] = new Date().toISOString(); continue; } // nothing new → no AI run
     if (r.agent === "architect") computeMetrics(r.name === "evolve-deep" ? 30 : 7);
     const prompt = r.readonly ? `${r.prompt}\n\nRead-only routine: observe and report only. Do not change code, PRs, issues or settings; propose any change as a follow-up.` : r.prompt;
