@@ -90,6 +90,7 @@ import {
   menuRowHover,
   SidebarRow,
   SettingsGroup,
+  cardEdge,
   SettingsItem,
   SettingsChoices,
   NumberField,
@@ -2531,7 +2532,7 @@ function Steps(props: { steps: string[] }) {
 function NotifySettings(props: { push: Push; view: SettingsView | null; save: (patch: Record<string, unknown>) => void; wide: boolean }) {
   const push = props.push;
   const { prefs, setPrefs, state } = notifyModel(push, () => props.view, props.save);
-  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: surfaceEdge() });
+  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: cardEdge() });
   return (
     <Group title={L("Notifications", "通知")} hint={systemNotifications() ? L("While Noop is running, decisions that need you appear as system notifications. Click one to jump to it.", "Noop 运行时，需要你拍板的事会发系统通知，点开直接到这一条。") : L("Decisions that need you are pushed to your phone. You can pick an option right from the notification.", "需要你拍板的事推送到手机；通知上可以直接选择选项。")}>
       <View style={{ gap: 12, paddingHorizontal: 16, paddingVertical: 14 }}>
@@ -2693,7 +2694,7 @@ function TeamSettings(props: { hub: Hub; push: Push; settings: Settings; wide: b
   const { view, error, save } = props.settings;
   props.settings.load();
   const eff = () => view()?.effective;
-  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: surfaceEdge() });
+  const row = (): ViewStyle => ({ gap: 12, paddingHorizontal: 16, paddingVertical: 14, borderTopWidth: 0.5, borderTopColor: cardEdge() });
   const chips: ViewStyle = { flexDirection: "row", flexWrap: "wrap", gap: 6 };
 
   const tab = props.settings.tab;
