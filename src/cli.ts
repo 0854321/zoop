@@ -26,7 +26,7 @@ import { githubStarved } from "./github";
 import { doctor, visual } from "./visual";
 import { answerFromChat, appendEvent, cancelTask, drainInbound, feed, handleOwnerMessage, mediaDays, pruneMedia, recentChat, setApplyOp, setCancelTask, setUpdateFleet, onSettingsSaved, startServer, status as hubStatus } from "./server";
 import { addFollowUp, followUpTarget, reopenTask, type BrainOut, ClaudeModel, systemPrompt, dataActs, localStore, logBrain, think } from "./brain";
-import { runTool } from "../cloud/src/tools";
+import { isWrite, runTool } from "../cloud/src/tools";
 import { cloudDeploy, startCloudBridge } from "./cloud";
 import { adoptCloudUrl, readHubToml } from "./sync";
 import { judgeAccuracy, level, needsApproval, noteStuckRoutine, proposeBatch, resolveProposals, routineQueued, supersedeProposed } from "./autonomy";
@@ -839,7 +839,8 @@ async function daemon(cfg: Cfg) {
     let out: BrainOut;
     try {
       out = await think(m, store, model, post);
-      if (!out.calls.length && !out.reply && out.rounds >= 4) throw new Error("no answer");
+      // out of rounds with no reply and nothing done (only lookups): the message would vanish, so it becomes work
+      if (!out.reply && out.rounds >= 4 && !out.calls.some((c) => isWrite(c.tool) && c.ok)) throw new Error("no answer");
     } catch (err) {
       // no model (CLI missing, logged out, timeout): the message still becomes work, silently — never lost, never canned
       console.error(`chat brain: ${err}`);
