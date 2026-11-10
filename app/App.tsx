@@ -48,6 +48,7 @@ import { createSettingsToast, SettingsToast } from "./settings-toast";
 import { agentDisplayName, avatarOf } from "./avatars";
 import { CheckMark } from "./ui/icons";
 import { attachmentName, isDoc } from "./files";
+import { hubMarkdown } from "./markdown";
 import { type Channel, channelDigest, sortChannels } from "./channels";
 import { isRead, markRead, unreadEvents, toggleMessageRead, type MessageReadState as ReadState } from "./read";
 import { setupTray, type TrayChat } from "./tray";
@@ -567,18 +568,6 @@ function linkRepoRefs(text: string, context = ""): string {
       return `${pre}${name ? name + sp : ""}[#${n}](${url(repo, n)})`;
     },
   ); }).join("");
-}
-
-/** Hub text keeps its line breaks: single newlines become hard breaks, outside code fences. */
-function hubMarkdown(text: string): string {
-  return text
-    .split(/(^```[\s\S]*?^```)/m)
-    .map((part, i) => (i % 2 ? part : part
-      // single newlines are hard breaks, except around list items (a "\\" there shows up literally)
-      .replace(/([^\n])\n(?!\n|\s*(?:[-*+]|\d+[.)])\s)/g, (m0, c, off, all) => /^\s*(?:[-*+]|\d+[.)])\s/.test(all.slice(all.lastIndexOf("\n", off) + 1, off + 1)) ? `${c}\n` : `${c}\\\n`)
-      // Bare URLs stop at CJK / full-width punctuation and spaces ("pull/1：让" links pull/1 only).
-      .replace(/(?<![(<\[`])\bhttps?:\/\/[^\s<>()\[\]`\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]+[^\s<>()\[\]`.,;:!?'"\u3000-\u303f\uff00-\uffef\u2018-\u201f\u4e00-\u9fff]/g, "<$&>")))
-    .join("");
 }
 
 /** Texts inside a pressable chip: a pointer, not the I-beam selectable texts force (per view on Linux). */
