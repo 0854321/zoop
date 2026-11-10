@@ -32,6 +32,9 @@ describe("ensureWebClient", () => {
     assets = {};
     requests = [];
     server = Bun.serve({
+      // Bind the address the client fetches: a wildcard port-0 bind can be handed a port another local app
+      // already listens on at 127.0.0.1, and the test's downloads then reach that app instead of this server.
+      hostname: "127.0.0.1",
       port: 0,
       fetch(req) {
         const name = new URL(req.url).pathname.slice(1);
