@@ -1,5 +1,5 @@
 // Builds the prompt for an agent, runs Claude Code / Codex headless, parses the structured result.
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -152,6 +152,24 @@ function toolStep(name: string, input: any): string {
   return `${name}${v ? ` · ${String(v).split("\n")[0].slice(0, 120)}` : ""}`;
 }
 
+/** One stream-json line as it goes into the run log: base64 images (a Read of a screenshot carries each one twice,
+ * in `source.data` and `tool_use_result.file.base64`) become a short placeholder. Any other line is returned as is. */
+export function stripImages(line: string): string {
+  if (!line.includes('"base64"')) return line;
+  let e: any;
+  try { e = JSON.parse(line); } catch { return line; }
+  let hit = false;
+  const note = (b64: string, type: unknown) => { hit = true; return `[${type ?? "image"}, ${Math.floor(b64.length * 3 / 4)} bytes omitted]`; };
+  const walk = (o: any) => {
+    if (!o || typeof o !== "object") return;
+    if (o.type === "base64" && typeof o.data === "string") o.data = note(o.data, o.media_type);
+    if (typeof o.base64 === "string") o.base64 = note(o.base64, o.type);
+    for (const v of Object.values(o)) walk(v);
+  };
+  walk(e);
+  return hit ? JSON.stringify(e) : line;
+}
+
 /** Marker runAgent appends when it stopped a run that went quiet (see stall_minutes). */
 export const STALLED = "\n[stalled]";
 
@@ -162,6 +180,8 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
   const timeoutMs = (cfg.clis?.timeout_minutes ?? 60) * 60_000;
   const stallMs = (cfg.clis?.stall_minutes ?? 20) * 60_000;
   const dir = cwd.replace(/^~/, homedir());
+  // before the spawn: a throw after it would leave the agent running with no timeout, stall watch or drained pipes
+  mkdirSync(P("logs", "runs"), { recursive: true });
   const proc = Bun.spawn(cmd, {
     cwd: existsSync(dir) ? dir : ROOT, stdin: new Blob([prompt]), stdout: "pipe", stderr: "pipe",
     // Claude -p stops background subagents 10 min after the last turn; our own run limit bounds the run instead
@@ -200,7 +220,13 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
       resultText = resultText === undefined ? text : `${resultText}\n\n${text}`;
     }
   };
-  const read = async (stream: ReadableStream<Uint8Array>, lines: boolean) => {
+  // the log exists from the start and grows with stdout, so a long or killed run still leaves its transcript;
+  // a failed write only loses that early copy, the full log is written again at exit
+  const logPart = (s: string, append = true) => {
+    try { (append ? appendFileSync : writeFileSync)(logFile, s); } catch {}
+  };
+  logPart(`$ ${cmd.join(" ")}\n\n`, false);
+  const read = async (stream: ReadableStream<Uint8Array>, lines: boolean, log = false) => {
     const dec = new TextDecoder();
     let all = "", buf = "";
     for await (const chunk of stream) {
@@ -211,7 +237,8 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
         const parts = buf.split("\n");
         buf = parts.pop()!;
         parts.forEach(onLine);
-      }
+        if (log && parts.length) logPart(parts.map(stripImages).join("\n") + "\n");
+      } else if (log) logPart(t);
       touch();
     }
     if (lines && buf) onLine(buf);
@@ -226,13 +253,13 @@ export async function runAgent(cli: string, prompt: string, cwd: string, cfg: Cf
     const slow = [...inFlight.values()].some((n) => /^(Task|Agent)$/.test(n));
     if (!slow && Date.now() - act.at > stallMs) { stalled = true; proc.kill(); }
   }, 30_000);
-  const [raw, err] = await Promise.all([read(proc.stdout, json), read(proc.stderr, false)]);
+  const [raw, err] = await Promise.all([read(proc.stdout, json, true), read(proc.stderr, false)]);
   const code = await proc.exited;
   clearTimeout(timer);
   clearInterval(watch);
   if (tid) agentActivity.delete(tid);
-  mkdirSync(P("logs", "runs"), { recursive: true });
-  writeFileSync(logFile, `$ ${cmd.join(" ")}\n(exit ${code})\n\n${raw}\n\n[stderr]\n${err}`);
+  const logged = json ? raw.split("\n").map(stripImages).join("\n") : raw;
+  writeFileSync(logFile, `$ ${cmd.join(" ")}\n(exit ${code})\n\n${logged}\n\n[stderr]\n${err}`);
   const out = json ? (resultText ?? assistantText) : raw;
   if (timedOut) return `${out}${STALLED} hit the ${Math.round(timeoutMs / 60_000)}-minute run limit (clis.timeout_minutes)${act.step ? `; last step: ${act.step}` : ""}; run long builds in the background and return "waiting"`;
   if (stalled) return `${out}${STALLED} no output for ${Math.round(stallMs / 60_000)} minutes${act.step ? `; last step: ${act.step}` : ""}`;
