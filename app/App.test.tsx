@@ -681,6 +681,12 @@ describe("channel", () => {
     await app.press("id:side-channels-archived");
     await app.waitFor("id:side-channel-old-ops");
     await app.press("id:side-channels-archived");
+    // the Channels heading folds the list; channels with unread stay visible
+    await app.press("id:side-channels");
+    await app.waitUntil(() => !app.shows("id:side-channel-omasend"));
+    expect(app.shows("id:side-channels-archived")).toBe(false);
+    await app.press("id:side-channels");
+    await app.waitFor("id:side-channel-omasend");
     await app.press("id:side-channel-omamail");
     await app.waitFor("omamail 的 PR 与 issue");
     await app.press("id:channel-edit-goal");
