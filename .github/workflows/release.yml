@@ -10,6 +10,7 @@ on:
       - .github/workflows/release.yml
       - .github/actions/setup-nsh/**
       - scripts/check-ios-sdk.sh
+      - scripts/setup-linux-deps.sh
       - install-client.sh
       - install-client.ps1
       - app/build-web.sh
@@ -170,12 +171,14 @@ jobs:
           name: noop-macos-x86_64.zip
           path: assets-intel/
           if-no-files-found: error
+          compression-level: 0
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: assets/
           if-no-files-found: error
+          compression-level: 0
 
   publish:
     if: github.ref_type == 'tag'
