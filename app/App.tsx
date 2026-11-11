@@ -814,6 +814,13 @@ function DocAttachment(props: { src: string; name: string }) {
   );
 }
 
+/**
+ * macOS sends Copy to the input that has the keyboard, so with a box still focused, text selected on the page above it
+ * cannot be copied (NSH before #1410). A press on a page with no input of its own (a task's conversation, the reader)
+ * gives the keyboard back to the window, as the main timeline does for its composer.
+ */
+const releaseKeyboard = () => { if (platform.os === "macos") Keyboard.dismiss(); };
+
 const DOC_SCALES = [0.875, 1, 1.125, 1.25, 1.4];
 /** The reader beside the chat (a full sheet on a phone): the open report rendered with TextView, with text zoom and a wider pane. */
 /**
@@ -844,7 +851,7 @@ function DocPane(props: { doc: DocRef; wide: boolean; expanded: boolean; onExpan
         </If>
         {btn({ id: "doc-close", icon: "close", label: L("Close reader", "关闭阅读栏"), onPress: props.onClose })}
       </View>
-      <Scroll style={{ flex: 1 }}>
+      <Scroll style={{ flex: 1 }} onTouchStartCapture={releaseKeyboard}>
         <View selectable style={{ width: "100%", maxWidth: 760, alignSelf: "center", gap: 12, paddingHorizontal: props.wide ? 28 : 20, paddingTop: 28, paddingBottom: 48 }}>
           <If when={body().text !== null} else={
             <View style={{ gap: 10, alignItems: "flex-start" }}>
@@ -1654,6 +1661,7 @@ function TaskDetail(props: { hub: Hub; id: string; wide: boolean; onFold?: (fold
       ref={(r) => { page = r; }}
       scrollEventThrottle={100}
       onScroll={(ev) => { const passed = ev.offset.y > TASK_HEAD; if (passed !== untracked(headPassed)) headPassed.set(passed); }}
+      onTouchStartCapture={releaseKeyboard}
       style={{ flex: 1 }}
       contentStyle={pageContent}
     >

@@ -407,6 +407,62 @@ describe("channel", () => {
     await app.waitFor("text:再看下 iPad");
   });
 
+  // macOS sends Copy to the input that has the keyboard: a press on what a page shows takes it back, as the main timeline does
+  test("on macOS a press on a task page's messages or its report takes the keyboard from the task's box", async () => {
+    const said = [
+      { id: "e11", ts: ts(11), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "手机上也正常，截图附上" },
+      { id: "r1", ts: ts(12), from: "dev@linux-box", kind: "notice", ref: "T-0005", text: "验收报告", attachments: ["/media/1762650000000-acceptance.md"] },
+    ];
+    const app = await open("./App.tsx", { storage: STORAGE, width: 1200, height: 800, platform: "macos", network: {
+      ...hub([], said),
+      [`GET ${URL}/media/*`]: { body: "# Acceptance\n\nCopy works on every page." },
+      [`GET ${URL}/api/tasks/get?*`]: { body: { id: "T-0005", title: "修复登录页", agent: "dev", state: "done", created: ts(1), runs: [] } },
+    } });
+    await app.waitFor("id:task-chip-T-0005 >> nth=0");
+    await app.press("id:task-chip-T-0005 >> nth=0");
+    await app.waitFor("id:task-talk");
+    await app.type("id:task-composer", "草稿");
+    await app.keyboard.press("a");
+    await app.waitUntil(() => app.value("id:task-composer") === "草稿a");
+    await app.drag("text:手机上也正常，截图附上", { x: 40, y: 0 });
+    await app.keyboard.press("b");
+    expect(app.value("id:task-composer")).toBe("草稿a");
+    await app.press("id:doc-attachment");
+    await app.waitUntil(() => app.shows("text:Copy works on every page."));
+    await app.type("id:task-composer", "草稿");
+    const draft = app.value("id:task-composer");
+    await app.drag("text:Copy works on every page.", { x: 40, y: 0 });
+    await app.keyboard.press("c");
+    expect(app.value("id:task-composer")).toBe(draft);
+  });
+
+  test("on macOS a press on a channel's messages or its report takes the keyboard from the composer", async () => {
+    const chans = [{ slug: "nsh-i18n", name: "NSH i18n", goal: "NSH 多语言", status: "active", created: ts(-900), last_activity: ts(5), stale: false, count: 0, refs: [], items: [] }];
+    const talk = [
+      { id: "c2", ts: ts(4), from: "lead@primary", kind: "notice", text: "日文已完成 80%，剩下 API 文档", channel: "nsh-i18n" },
+      { id: "c3", ts: ts(5), from: "lead@primary", kind: "notice", text: "日文报告", channel: "nsh-i18n", attachments: ["/media/1762650000000-ja.md"] },
+    ];
+    const app = await open("./App.tsx", {
+      storage: STORAGE, width: 1400, height: 800, platform: "macos",
+      network: { ...hub([], talk), [`GET ${URL}/api/channels`]: { body: { channels: chans } }, [`GET ${URL}/api/channels/feed?*`]: { body: { events: talk } },
+        [`GET ${URL}/media/*`]: { body: "# Japanese\n\nAll strings are translated." } },
+    });
+    await app.waitFor("id:side-channel-nsh-i18n");
+    await app.press("id:side-channel-nsh-i18n");
+    await app.waitFor("text:日文已完成 80%，剩下 API 文档");
+    await app.type("id:composer", "草稿");
+    const draft = app.value("id:composer");
+    await app.drag("text:日文已完成 80%，剩下 API 文档", { x: 40, y: 0 });
+    await app.keyboard.press("x");
+    expect(app.value("id:composer")).toBe(draft);
+    await app.waitUntil(() => app.shows("text:All strings are translated."));
+    await app.type("id:composer", "草稿");
+    const again = app.value("id:composer");
+    await app.drag("text:All strings are translated.", { x: 40, y: 0 });
+    await app.keyboard.press("y");
+    expect(app.value("id:composer")).toBe(again);
+  });
+
   test("a task's conversation stays on its page: the main channel skips it, old messages load, and its cards can be answered there", async () => {
     const posts: { text: string; reply_to?: string }[] = [];
     const said = [
