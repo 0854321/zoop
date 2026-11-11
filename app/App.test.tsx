@@ -174,6 +174,9 @@ describe("login", () => {
       const app = await open("./App.tsx", { storage: STORAGE, network: hub([]), width: platform === "android" ? 1200 : 390, height: 844, platform });
       if (platform === "ios") await app.press("label:Menu");
       await app.press("id:user-menu");
+      await app.waitFor("id:theme-dark");
+      // iOS shows an ordinary menu: plain rows on the glass, no account card
+      expect(app.shows("id:user-menu-avatar")).toBe(platform !== "ios");
       await app.press("id:theme-dark");
       expect(app.storage()["hub.theme"]).toBe("dark");
       await app.press("id:theme-light");
@@ -455,6 +458,8 @@ describe("channel", () => {
     await app.drag("text:日文已完成 80%，剩下 API 文档", { x: 40, y: 0 });
     await app.keyboard.press("x");
     expect(app.value("id:composer")).toBe(draft);
+    // the report stays closed until the user opens it
+    await app.press("id:doc-attachment");
     await app.waitUntil(() => app.shows("text:All strings are translated."));
     await app.type("id:composer", "草稿");
     const again = app.value("id:composer");
@@ -901,7 +906,7 @@ describe("images", () => {
     await app.waitFor("text:1 / 2");
   });
 
-  test("the newest Markdown report opens in the reader pane, which zooms, closes and reopens", async () => {
+  test("a report in the reader pane zooms, closes and reopens; entering the chat leaves it closed", async () => {
     const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "推送通知梳理完成", attachments: ["/media/1762650000000-push-notifications.md"] };
     const app = await open("./App.tsx", {
       ...desk,
@@ -909,7 +914,10 @@ describe("images", () => {
     });
     await app.waitFor("id:doc-attachment");
     expect(app.shows("text:push-notifications")).toBe(true);
-    // opened by itself, beside the chat on a wide window
+    // a report already in the conversation stays closed until the user opens it
+    await app.wait(300);
+    expect(app.shows("id:doc-reader")).toBe(false);
+    await app.press("id:doc-attachment");
     await app.waitFor("id:doc-side");
     await app.waitUntil(() => app.shows("text:T-9170 Push notifications"));
     expect(app.shows("id:task-chip-T-9170")).toBe(false);
@@ -961,6 +969,7 @@ describe("images", () => {
       ...desk,
       network: { ...hub([], [report]), [`GET ${URL}/media/*`]: () => (++calls === 1 ? { status: 500, body: "" } : { body: "# Second try" }) },
     });
+    await app.press("id:doc-attachment");
     await app.waitFor("id:doc-retry");
     expect(app.shows("text:Couldn’t load (500)")).toBe(true);
     await app.press("id:doc-retry");
@@ -968,12 +977,33 @@ describe("images", () => {
     expect(calls).toBe(2);
   });
 
-  test("on a phone the report reader covers the chat as a sheet", async () => {
+  test("on a wide desktop a report that arrives while the chat is open opens beside it", async () => {
+    const later: unknown[] = [];
+    const app = await open("./App.tsx", {
+      ...desk,
+      network: { ...hub([]), [`GET ${URL}/api/feed?*`]: () => ({ body: { events: later.splice(0) } }), [`GET ${URL}/media/*`]: { body: "# Fresh report" } },
+    });
+    await app.waitFor("id:composer");
+    later.push({ id: "r2", ts: new Date().toISOString(), from: "lead@mac", kind: "notice", text: "新报告", attachments: ["/media/1762650000001-fresh.md"] });
+    await app.waitFor("id:doc-side", { timeout: 10000 });
+    await app.waitUntil(() => app.shows("text:Fresh report"));
+  });
+
+  for (const platform of ["ios", "android"] as const) test(`on a phone the report reader is a sheet the user opens (${platform})`, async () => {
+    const later: unknown[] = [];
     const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "报告", attachments: ["/media/1762650000000-report.md"] };
     const app = await open("./App.tsx", {
-      ...desk, width: 390, height: 844,
-      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: { body: "# Report" } },
+      storage: { ...STORAGE, "hub.notifyAsked": "1" }, width: 390, height: 844, platform,
+      network: { ...hub([], [report]), [`GET ${URL}/api/feed?*`]: () => ({ body: { events: later.splice(0) } }), [`GET ${URL}/media/*`]: { body: "# Report" } },
     });
+    await app.waitFor("id:doc-attachment");
+    // neither entering the chat nor a new report opens it on a phone
+    later.push({ id: "r2", ts: new Date().toISOString(), from: "lead@mac", kind: "notice", text: "新报告", attachments: ["/media/1762650000001-new.md"] });
+    await app.waitFor("新报告", { timeout: 10000 });
+    await app.wait(300);
+    expect(app.shows("id:doc-sheet")).toBe(false);
+    expect(app.shows("id:drawer")).toBe(false);
+    await app.press("id:doc-attachment >> nth=0");
     await app.waitFor("id:doc-sheet");
     expect(app.shows("id:doc-expand")).toBe(false);
     await app.press("id:doc-close");

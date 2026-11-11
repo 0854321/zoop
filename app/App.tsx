@@ -38,7 +38,7 @@ import {
   windowSize, token, openUrl, keyboardFrame, Keyboard, Picker, Speech, Clipboard, Notifications } from "nsh";
 import fs from "fs/promises";
 import type { InputRef, JSX, ScrollRef, SpeechSession, ViewStyle } from "nsh";
-import { AlertDialog, Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, Toast, ToastStack, Button as BaseButton, ContextMenu, Dialog, Menu, MenuItem, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
+import { AlertDialog, Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, Toast, ToastStack, Button as BaseButton, ContextMenu, Dialog, Menu, MenuItem, Submenu, Input, NavPage, NavStack, NumberInput, Radio, RadioGroup, Scrollbar, Sheet, TextView, createNavStack, type MarkdownExtension, type TextViewBlock, type TextViewCustomNode, type TextViewInline } from "nsh/base";
 import { isAvailable as hasWindow, titleBar, currentWindow } from "nsh/desktop";
 import { checkForPackage, checkForUpdate, downloadPackage, downloadUpdate, installAndRestart, restartToPackage, runningPackage } from "nsh/updater";
 // shellInfo through the namespace: runtimes older than it lack the export, and a missing named import would fail to link
@@ -59,7 +59,6 @@ import {
   avatarIdentity,
   avatarInitials,
   colors,
-  fill,
   focusRing,
   iosGlass,
   menuGlass,
@@ -2160,6 +2159,11 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
   const account = () => email().split("@")[0] ?? "";
   // A pointer gets a compact popup at the trigger; a finger gets the sheet at the bottom with rows it can hit.
   const touch = platform.os === "ios" || platform.os === "android";
+  /**
+   * iOS drops the custom account card and grouped fills: plain rows and separators on the bare glass. It is still NSH's
+   * drawn Menu: NSH shows a system menu (`Menu.popup`) only on the desktops, and has no UIMenu for a view on iOS.
+   */
+  const ios = platform.os === "ios";
   const m = touch
     ? { row: 52, padX: 16, gap: 12, icon: 20, label: 16, value: 14, avatar: 44, name: 20, mail: 14, seg: 44, segH: 44, sepX: 12 }
     : { row: 30, padX: 8, gap: 10, icon: 15, label: 13.5, value: 13, avatar: 30, name: 13.5, mail: 12, seg: 28, segH: 22, sepX: 8 };
@@ -2176,8 +2180,8 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
   const label = (text: string) => <Text style={{ flex: 1, minWidth: 0, fontSize: m.label, color: colors.text, ...(touch ? {} : { numberOfLines: 1 }) }}>{text}</Text>;
   const lead = (name: IconName) => <Icon name={name} size={m.icon} tint={colors.muted} />;
   const sep = () => <MenuSep />;
-  /** A group of rows on the sheet: a quiet fill on glass, which an opaque one would cover; the surface elsewhere. */
-  const group = () => (iosGlass ? alpha(colors.text, fill.rest) : colors.surface);
+  /** A group of rows on the sheet: none on iOS, whose rows sit on the glass as a menu's do; the surface on Android. */
+  const group = () => (ios ? "transparent" : colors.surface);
   const initials = () => avatarInitials(account());
   /** The account's identity: its initials on a soft tint of its own stable hue, with a hairline of the same hue. */
   const avatar = (box: number, testID?: string) => (
@@ -2186,6 +2190,14 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
       <Text style={{ fontSize: Math.round(box * (initials().length > 1 ? 0.38 : 0.44)), fontWeight: "600", color: avatarIdentity(account() || "?").foreground }}>{initials()}</Text>
     </View>
   );
+  /**
+   * The current appearance's segment: on iOS 26 the system's Liquid Glass material (no fill, which iOS draws over the
+   * glass, and no shadow: the glass has its own edge); a raised field elsewhere. NSH has no UISegmentedControl, so the
+   * control itself is drawn rows; only its thumb is the native material.
+   */
+  const selectedSegment = (): ViewStyle => iosGlass
+    ? { backgroundColor: "transparent", glassEffect: "regular", backdropFilter: "blur(20px)" }
+    : { backgroundColor: colors.field, boxShadow: "0 1px 2px rgba(0,0,0,0.14)" };
   /** One of the two appearances, as a segment whose raised thumb marks the current one. */
   const appearance = (dark: boolean, title: string, icon: IconName) => (
     <MenuItem testID={dark ? "theme-dark" : "theme-light"} accessibilityLabel={title}
@@ -2193,7 +2205,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
       onSelect={() => { if (isDark() !== dark) toggleTheme(); }}
       activeStyle={hovered()}
       style={{ ...(touch ? { flex: 1, minHeight: m.segH, flexDirection: "row", gap: 8, padding: 8 } : { width: m.seg, height: m.segH }), alignItems: "center", justifyContent: "center", borderRadius: touch ? 8 : 6, borderCurve: "continuous",
-        ...(isDark() === dark ? { backgroundColor: colors.field, boxShadow: "0 1px 2px rgba(0,0,0,0.14)" } : {}) }}>
+        ...(isDark() === dark ? selectedSegment() : {}) }}>
       <Icon name={icon} size={touch ? 20 : 14} tint={isDark() === dark ? colors.text : colors.muted} />
       <If when={touch}><Text style={{ fontSize: 16, color: isDark() === dark ? colors.text : colors.muted }}>{title}</Text></If>
     </MenuItem>
@@ -2234,8 +2246,8 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
       }
     >
       <View>
-      <View style={{ ...(touch ? {} : { minWidth: 254 }), flexDirection: "row", alignItems: "center", gap: touch ? 12 : 10, paddingHorizontal: m.padX, paddingTop: touch ? 12 : 6, paddingBottom: touch ? 24 : 7 }}>
-        {avatar(m.avatar, "user-menu-avatar")}
+      <View style={{ ...(touch ? {} : { minWidth: 254 }), flexDirection: "row", alignItems: "center", gap: touch ? 12 : 10, paddingHorizontal: m.padX, paddingTop: touch ? 12 : 6, paddingBottom: ios ? 12 : touch ? 24 : 7 }}>
+        <If when={!ios}>{avatar(m.avatar, "user-menu-avatar")}</If>
         <View style={{ flex: 1, minWidth: 0, gap: touch ? 4 : 1 }}>
           <Text style={{ fontSize: m.name, fontWeight: "600", color: colors.text, numberOfLines: 1 }}>{account() || L("Account", "账户")}</Text>
           <If when={email()}>
@@ -2243,7 +2255,7 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
           </If>
         </View>
       </View>
-      <If when={!touch}>{sep()}</If>
+      <If when={!touch || ios}>{sep()}</If>
       <View style={touch ? { backgroundColor: group(), borderRadius: 12, borderCurve: "continuous" } : {}}>
         <MenuItem testID="mark-all-read" disabled={!props.reads.main().length} onSelect={props.reads.all} hoverStyle={menuRowHover()} activeStyle={menuRowHover()} disabledStyle={{ opacity: 0.4 }} style={row()}>
           {lead("check")}{label(L("Mark all as read", "全部已读"))}
@@ -2266,7 +2278,8 @@ function UserMenu(props: { hub: Hub; onSettings: () => void; reads: MessageReads
           </PopIn>
         </Submenu>
       </View>
-      <View style={touch ? { gap: 8, paddingTop: 16, paddingHorizontal: 4 } : { ...row(), height: 34 }}>
+      <If when={ios}>{sep()}</If>
+      <View style={touch ? { gap: 8, paddingTop: ios ? 8 : 16, paddingHorizontal: 4 } : { ...row(), height: 34 }}>
         <If when={!touch}>{lead(isDark() ? "moon" : "sun")}</If>
         <Text style={{ ...(touch ? { paddingHorizontal: 12 } : { flex: 1 }), fontSize: touch ? 14 : m.label, color: touch ? colors.muted : colors.text }}>{L("Appearance", "外观")}</Text>
         <View style={{ flexDirection: "row", gap: touch ? 4 : 2, padding: touch ? 4 : 2, borderRadius: touch ? 12 : 8, borderCurve: "continuous", backgroundColor: alpha(colors.text, 0.07) }}>
@@ -3720,12 +3733,17 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   effect(() => {
     if (wide()) return;
     const open = drawer();
-    clearTimeout(drawerHideTimer);
     // Opening the sidebar is leaving the composer: hide the keyboard, as native apps do.
-    if (open) { Keyboard.dismiss(); drawerVisible.set(true); }
+    if (open) Keyboard.dismiss();
+    // A touch screen shows the sidebar as a sheet, which slides itself; the swipe that opened it starts over.
+    if (touch) { if (!open) drawerX.set(0); return; }
+    clearTimeout(drawerHideTimer);
+    if (open) drawerVisible.set(true);
     else drawerHideTimer = setTimeout(() => drawerVisible.set(false), reduceMotion() ? 0 : 200);
     animateDrawer(open);
   });
+  /** A swipe toward the edge on the phone sidebar's sheet closes it. */
+  const sheetPanX = createAnimatedValue(0);
   const finishDrawerPan = (e: { cancelled: boolean; translation: { x: number } }) => {
     const wasOpen = untracked(drawer);
     const next = e.cancelled ? wasOpen : wasOpen ? e.translation.x > -45 : e.translation.x > 45;
@@ -3817,21 +3835,14 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   });
   // one answer state for every view: the owner may answer a card in the main chat that a channel also shows
   const answered = computed(() => answeredIds(merge(hub.events(), shown())));
-  /** The newest Markdown report in this conversation: the reader opens it by itself when it arrives. */
-  const latestDoc = computed((): DocRef | null => {
+  /** The newest Markdown report in this conversation, and when its message was sent. */
+  const latestDoc = computed((): (DocRef & { ts: string }) | null => {
     const list = shown();
     for (let i = list.length - 1; i >= 0; i--) {
       const path = [...(list[i].attachments ?? [])].reverse().find(isDoc);
-      if (path) return { src: mediaUrl(hub.cfg.url, hub.cfg.token, path), name: attachmentName(path) };
+      if (path) return { src: mediaUrl(hub.cfg.url, hub.cfg.token, path), name: attachmentName(path), ts: list[i].ts };
     }
     return null;
-  });
-  let autoDoc: string | undefined;
-  effect(() => {
-    const d = latestDoc();
-    if (d?.src === autoDoc) return;
-    autoDoc = d?.src;
-    untracked(() => reading.set(d && { ...d, at: `channel:${scope() ?? ""}` }));
   });
   // a different hub or a sign-out starts with no reports kept from the last one
   cleanup(clearDocCache);
@@ -3843,6 +3854,21 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
   const shownDoc = () => { const d = reading(); return d && d.at === readerAt() ? d : null; };
   /** The reader beside a page that has one (the channel, a task), from the window's top edge. */
   const docSide = () => !!shownDoc() && readerSide() && (top().name === "channel" || top().name === "task");
+  /**
+   * When the conversation was entered: reports already there stay closed (their cards and the header's button open
+   * them). On a desktop a report that arrives later, while the reader has room beside the chat, opens by itself; on a
+   * phone, where the reader is a sheet over the chat, only the user opens it.
+   */
+  let enteredAt = "";
+  effect(() => { scope(); enteredAt = new Date().toISOString(); });
+  let autoDoc: string | undefined;
+  effect(() => {
+    const d = latestDoc();
+    if (d?.src === autoDoc) return;
+    autoDoc = d?.src;
+    if (!d || d.ts <= enteredAt || touch || !untracked(readerSide)) return;
+    untracked(() => reading.set({ src: d.src, name: d.name, at: `channel:${scope() ?? ""}` }));
+  });
   const readerPane = () => {
     const d = shownDoc();
     if (!d) return null;
@@ -4844,7 +4870,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       <If when={shownDoc() && readerSide()}>
         <View style={{ width: readerWidth() }} />
       </If>
-      <If when={shownDoc() && !readerSide()}>
+      <If when={shownDoc() && !readerSide() && !touch}>
         <View testID="doc-sheet" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, paddingBottom: safeArea().bottom, backgroundColor: colors.background }}>{readerPane()}</View>
       </If>
     </View>
@@ -4929,7 +4955,7 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
         </If>
       </View>
       <If when={p.route === CHANNEL && !shownDoc() && latestDoc()}>
-        <IconButton icon="document" label={L("Open latest report", "打开最新报告")} onPress={() => { const d = latestDoc(); reading.set(d && { ...d, at: readerAt() }); }} testID="doc-reopen" />
+        <IconButton icon="document" label={L("Open latest report", "打开最新报告")} onPress={() => { const d = latestDoc(); reading.set(d && { src: d.src, name: d.name, at: readerAt() }); }} testID="doc-reopen" />
       </If>
       <If when={!wide() && p.route === CHANNEL}>
         <IconButton icon="sliders" label={L("Settings", "设置")} onPress={openTeam} testID="settings-top" />
@@ -4978,10 +5004,10 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       <If when={wide() && sidebarOpen()}>
         <View onTouchStartCapture={() => { if (platform.os === "macos" && focused()) composer?.blur(); }} style={{ width: size.sidebar, paddingTop: sidebarInset }}>{sidebar(false)}</View>
       </If>
-      <If when={!wide()}>
+      <If when={!wide() && !touch}>
         <View testID="drawer" pan={drawer() ? { x: drawerX } : undefined} onPanStart={() => { Keyboard.dismiss(); drawerDragging.set(true); }} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: drawerWidth(), paddingTop: touch ? safeArea().top : 0, visibility: drawerVisible() || drawerDragging() ? "visible" : "hidden", pointerEvents: drawer() ? "auto" : "none" }}>{sidebar(true)}</View>
       </If>
-      <View style={{ flex: 1, minWidth: 0, backgroundColor: colors.background, borderTopLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderBottomLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderCurve: "continuous", borderLeftWidth: !wide() && (drawer() || drawerDragging()) ? 1 : 0, borderLeftColor: colors.line, overflow: "hidden", translate: [wide() ? 0 : drawerTranslate(), 0], boxShadow: wide() && sidebarOpen() ? "-3px 0 18px rgba(0,0,0,0.08)" : undefined }}>
+      <View style={{ flex: 1, minWidth: 0, backgroundColor: colors.background, borderTopLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderBottomLeftRadius: wide() && sidebarOpen() ? 20 : 0, borderCurve: "continuous", borderLeftWidth: !wide() && !touch && (drawer() || drawerDragging()) ? 1 : 0, borderLeftColor: colors.line, overflow: "hidden", translate: [wide() || touch ? 0 : drawerTranslate(), 0], boxShadow: wide() && sidebarOpen() ? "-3px 0 18px rgba(0,0,0,0.08)" : undefined }}>
       <NavStack state={nav} testID="pages" style={{ flex: 1, minWidth: 0 }}>
         {(route, index) => (
           <NavPage
@@ -5007,10 +5033,38 @@ function Chat(props: { hub: Hub; openRef?: string | null; onConnection: () => vo
       <If when={docSide()}>
         <View testID="doc-side" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: readerWidth(), borderLeftWidth: 0.5, borderColor: surfaceEdge(), backgroundColor: colors.background }}>{readerPane()}</View>
       </If>
-      <If when={!wide() && drawer()}>
+      <If when={!wide() && !touch && drawer()}>
         <View testID="drawer-dismiss" role="button" accessibilityLabel={L("Close sidebar", "关闭侧栏")} onPress={() => drawer.set(false)} pan={{ x: drawerX }} onPanStart={() => { Keyboard.dismiss(); drawerDragging.set(true); }} onPanEnd={finishDrawerPan} style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.08)" }} />
       </If>
       </View>
+
+      {/* A touch screen: the sidebar is a sheet from the left edge, the report reader one from the bottom over the chat. */}
+      <If when={touch}>
+        <Sheet
+          side="left"
+          open={drawer() && !wide()}
+          onOpenChange={({ open }) => { if (!open) drawer.set(false); }}
+          backdropClass="bg-scrim"
+          popupStyle={{ width: drawerWidth(), paddingTop: safeArea().top, backgroundColor: colors.sidebar }}
+        >
+          <View testID="drawer" pan={{ x: sheetPanX }} onPanEnd={(e) => { sheetPanX.set(0); if (!e.cancelled && e.translation.x < -45) drawer.set(false); }} style={{ flex: 1 }}>
+            {sidebar(true)}
+          </View>
+        </Sheet>
+        <Sheet
+          side="bottom"
+          open={!!shownDoc() && !readerSide()}
+          onOpenChange={({ open }) => { if (!open) reading.set(null); }}
+          closeOnSwipe
+          backdropClass="bg-scrim"
+          popupStyle={{
+            height: windowSize().height - safeArea().top - 8, paddingBottom: safeArea().bottom, overflow: "hidden",
+            borderTopLeftRadius: corner.sheet, borderTopRightRadius: corner.sheet, borderCurve: "continuous", backgroundColor: colors.background,
+          }}
+        >
+          <View testID="doc-sheet" style={{ flex: 1 }}>{readerPane()}</View>
+        </Sheet>
+      </If>
 
       <SettingsToast state={settings.toast} />
       <If when={toast()}>
