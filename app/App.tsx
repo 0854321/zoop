@@ -603,13 +603,14 @@ function Custom(props: { node: TextViewCustomNode; small: boolean }) {
 }
 
 /** Selectable message Markdown. */
-function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string; scale?: number }) {
+function Rich(props: { text: string; muted?: boolean; quiet?: boolean; context?: string; scale?: number; report?: boolean }) {
   const small = !!(props.muted || props.quiet);
   const k = () => props.scale ?? 1;
   const fontSize = () => (props.quiet ? 13 : props.muted ? size.small : size.text) * k();
   const lineHeight = () => (props.quiet ? 19 : small ? 21 : size.line) * k();
   const doc = () => {
-    const d = TextView.parse(hubMarkdown(linkRepoRefs(props.text, props.context)), { math: false, html: false }, EXTENSIONS);
+    // Reports preserve identifiers as text; chat-only chips can replace a heading prefix with an invisible attachment.
+    const d = TextView.parse(hubMarkdown(linkRepoRefs(props.text, props.context)), { math: false, html: false }, props.report ? [] : EXTENSIONS);
     return { ...d, blocks: ghBlocks(d.blocks) };
   };
   return (
@@ -791,7 +792,7 @@ function DocAttachment(props: { src: string; name: string }) {
       onPress={() => reading.set(active() ? null : { src: props.src, name: props.name, at: readerAt() })}
       hoverStyle={active() ? undefined : { borderColor: colors.fieldBorder, backgroundColor: alpha(colors.text, 0.03) }}
       style={{
-        flexDirection: "row", alignItems: "center", gap: 12, width: 344, maxWidth: "100%", padding: 14,
+        flexDirection: "row", alignItems: "center", gap: 10, width: 344, maxWidth: "100%", padding: 12,
         borderRadius: radius.inset, borderCurve: "continuous", borderWidth: 1, cursor: "pointer",
         borderColor: active() ? alpha(colors.info, 0.35) : colors.border,
         backgroundColor: active() ? alpha(colors.info, 0.04) : colors.background,
@@ -803,7 +804,7 @@ function DocAttachment(props: { src: string; name: string }) {
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
         <Text style={{ fontSize: 14, lineHeight: 19, fontWeight: "600", color: colors.text, numberOfLines: 2 }}>{stem()}</Text>
-        <Text style={{ fontSize: 12, lineHeight: 16, color: active() ? colors.info : colors.faint, numberOfLines: 1 }}>
+        <Text style={{ fontSize: 12, lineHeight: 16, color: active() ? colors.info : colors.faint }}>
           {active() ? L("Markdown · Reading", "Markdown · 正在阅读") : L("Markdown · Report", "Markdown · 报告")}
         </Text>
       </View>
@@ -852,7 +853,7 @@ function DocPane(props: { doc: DocRef; wide: boolean; expanded: boolean; onExpan
               </If>
             </View>
           }>
-            <Rich text={body().text ?? ""} scale={DOC_SCALES[step()]} />
+            <Rich text={body().text ?? ""} scale={DOC_SCALES[step()]} report />
           </If>
         </View>
       </Scroll>

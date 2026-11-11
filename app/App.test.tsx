@@ -849,13 +849,14 @@ describe("images", () => {
     const report = { id: "r1", ts: ts(8), from: "lead@mac", kind: "notice", text: "推送通知梳理完成", attachments: ["/media/1762650000000-push-notifications.md"] };
     const app = await open("./App.tsx", {
       ...desk,
-      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: { body: "# Push notifications\n\nAPNs and **FCM** support." } },
+      network: { ...hub([], [report]), [`GET ${URL}/media/*`]: { body: "# T-9170 Push notifications\n\nAPNs and **FCM** support. D-O0011 remains readable." } },
     });
     await app.waitFor("id:doc-attachment");
     expect(app.shows("text:push-notifications")).toBe(true);
     // opened by itself, beside the chat on a wide window
     await app.waitFor("id:doc-side");
-    await app.waitUntil(() => app.shows("text:Push notifications"));
+    await app.waitUntil(() => app.shows("text:T-9170 Push notifications"));
+    expect(app.shows("id:task-chip-T-9170")).toBe(false);
     expect(app.shows("text:Markdown · Reading")).toBe(true);
     expect(app.shows("text:100%")).toBe(true);
     await app.press("id:doc-zoom-in");
